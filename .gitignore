@@ -1,0 +1,8 @@
+.forgeguard/
+.mcp.json
+.agents/mcp_config.json
+
+
+# Added by cargo
+
+/target

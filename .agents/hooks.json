@@ -1,0 +1,30 @@
+{
+  "forgeguard-quality-gate": {
+    "PreInvocation": [
+      {
+        "command": "forgeguard hook context --agent antigravity",
+        "timeout": 5,
+        "type": "command"
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "command": "forgeguard hook scope --agent antigravity",
+            "timeout": 5,
+            "type": "command"
+          }
+        ],
+        "matcher": "write_to_file|replace_file_content|multi_replace_file_content"
+      }
+    ],
+    "Stop": [
+      {
+        "command": "forgeguard hook stop --agent antigravity",
+        "timeout": 600,
+        "type": "command"
+      }
+    ]
+  }
+}

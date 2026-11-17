@@ -1,0 +1,485 @@
+//! Rendering. Every function here takes `&AppState` and never mutates it.
+
+pub mod overlay;
+pub mod pane;
+
+use std::collections::HashMap;
+
+use ratatui::Frame;
+use ratatui::layout::Rect;
+use ratatui::style::{Modifier, Style};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::Paragraph;
+
+use crate::state::{AppState, InputMode, PaneId};
+
+#[derive(Debug, Clone)]
+pub struct TabHit {
+    pub label: String,
+    pub start: u16,
+    pub end: u16,
+    pub active: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct TabBar {
+    pub path: Vec<usize>,
+    pub rect: Rect,
+    pub tabs: Vec<TabHit>,
+}
+
+#[derive(Debug, Default)]
+pub struct UiState {
+    pub pane_rects: HashMap<PaneId, Rect>,
+    pub workspace_bar: Rect,
+    pub explorer: Rect,
+    pub panes: Rect,
+    pub status: Rect,
+    pub message: String,
+    pub tab_bars: Vec<TabBar>,
+}
+
+/// Pane rectangles for the current layout. A fullscreen pane replaces the whole
+/// area, so rendering, mouse hits, and scrolling all agree on what is visible.
+pub fn layout_rects(state: &AppState, area: Rect) -> HashMap<PaneId, Rect> {
+    if let Some(id) = state.fullscreen
+        && state.workspaces.active().layout.contains(id)
+    {
+        return HashMap::from([(id, area)]);
+    }
+    let mut rects = HashMap::new();
+    state.workspaces.active().layout.layout(area, &mut rects);
+    rects
+}
+
+fn tab_bars(state: &AppState, area: Rect) -> Vec<TabBar> {
+    let mut strips = Vec::new();
+    state
+        .workspaces
+        .active()
+        .layout
+        .tab_strips(area, &mut Vec::new(), &mut strips);
+    let mut out = Vec::with_capacity(strips.len());
+    for strip in strips {
+        if strip.rect.width == 0 || strip.rect.height == 0 {
+            continue;
+        }
+        let right = strip.rect.x.saturating_add(strip.rect.width);
+        let mut start = strip.rect.x;
+        let mut tabs = Vec::with_capacity(strip.leaves.len());
+        for (index, leaf) in strip.leaves.iter().enumerate() {
+            if start >= right {
+                break;
+            }
+            let leaves = strip.counts.get(index).copied().unwrap_or(1);
+            let label = tab_label(state, *leaf, leaves);
+            let width = crate::editor::text::cells(&label, 4, 0).saturating_add(4);
+            let end = start.saturating_add(width).min(right);
+            tabs.push(TabHit {
+                label,
+                start,
+                end,
+                active: index == strip.active,
+            });
+            start = end;
+        }
+        out.push(TabBar {
+            path: strip.path,
+            rect: strip.rect,
+            tabs,
+        });
+    }
+    out
+}
+
+fn tab_label(state: &AppState, leaf: PaneId, leaves: usize) -> String {
+    let name = state
+        .panes
+        .get(&leaf)
+        .and_then(|pane| pane.active)
+        .and_then(|id| state.documents.get(&id))
+        .map(|document| {
+            format!(
+                "{}{}",
+                document.display_name(),
+                if document.dirty { "*" } else { "" }
+            )
+        })
+        .unwrap_or_else(|| format!("pane {leaf}"));
+    if leaves > 1 {
+        format!("{name} +{}", leaves - 1)
+    } else {
+        name
+    }
+}
+
+/// Recompute everything that depends on the pane area: rectangles and tab strips.
+pub fn refresh_panes(state: &mut AppState) {
+    let area = state.ui.panes;
+    let rects = layout_rects(state, area);
+    let bars = if state.fullscreen.is_some() {
+        Vec::new()
+    } else {
+        tab_bars(state, area)
+    };
+    state.ui.pane_rects = rects;
+    state.ui.tab_bars = bars;
+}
+
+/// Recompute the region map once per frame, before drawing.
+pub fn compute_layout(state: &mut AppState, area: Rect) {
+    let workspace_height = if state.config.appearance.show_workspace_tabs && area.height > 3 {
+        1
+    } else {
+        0
+    };
+    let status_height = if state.config.appearance.show_status_bar && area.height > 2 {
+        1
+    } else {
+        0
+    };
+    let main_height = area.height.saturating_sub(workspace_height + status_height);
+
+    let workspace_bar = Rect::new(area.x, area.y, area.width, workspace_height);
+    let main = Rect::new(
+        area.x,
+        area.y.saturating_add(workspace_height),
+        area.width,
+        main_height,
+    );
+    let status = Rect::new(
+        area.x,
+        area.y.saturating_add(workspace_height + main_height),
+        area.width,
+        status_height,
+    );
+
+    let explorer_width = if state.explorer.visible {
+        (u32::from(area.width) * u32::from(state.config.explorer.width) / 100) as u16
+    } else {
+        0
+    };
+    let explorer = Rect::new(main.x, main.y, explorer_width.min(main.width), main.height);
+    let panes = Rect::new(
+        main.x.saturating_add(explorer.width),
+        main.y,
+        main.width.saturating_sub(explorer.width),
+        main.height,
+    );
+
+    state.ui.panes = panes;
+    refresh_panes(state);
+    state.ui.workspace_bar = workspace_bar;
+    state.ui.explorer = explorer;
+    state.ui.status = status;
+}
+
+pub fn render(frame: &mut Frame, state: &AppState) {
+    if state.ui.workspace_bar.height > 0 {
+        render_workspace_bar(frame, state);
+    }
+
+    if state.explorer.visible && state.ui.explorer.width > 0 {
+        overlay::render_explorer(frame, state);
+    }
+
+    let mut panes: Vec<(PaneId, Rect)> = state
+        .ui
+        .pane_rects
+        .iter()
+        .map(|(id, rect)| (*id, *rect))
+        .collect();
+    panes.sort_by_key(|(id, rect)| (rect.y, rect.x, id.0));
+    for (pane_id, rect) in panes {
+        let Some(pane) = state.panes.get(&pane_id) else {
+            continue;
+        };
+        let document = pane.active.and_then(|id| state.documents.get(&id));
+        pane::render(frame, state, pane, document, rect);
+    }
+
+    render_tab_bars(frame, state);
+
+    if state.ui.status.height > 0 {
+        render_status(frame, state);
+    }
+    if let InputMode::Prompt(prompt) = &state.mode {
+        overlay::render_prompt(frame, state, prompt);
+    }
+}
+
+fn render_tab_bars(frame: &mut Frame, state: &AppState) {
+    for bar in &state.ui.tab_bars {
+        for tab in &bar.tabs {
+            if tab.end <= tab.start {
+                continue;
+            }
+            let width = tab.end - tab.start;
+            let style = if tab.active {
+                Style::default().add_modifier(Modifier::REVERSED)
+            } else {
+                Style::default().add_modifier(Modifier::DIM)
+            };
+            let avail = width.saturating_sub(2);
+            let body = crate::editor::text::clip(&tab.label, 0, avail, 4);
+            let buffer = frame.buffer_mut();
+            buffer.set_stringn(
+                tab.start,
+                bar.rect.y,
+                format!(" {body} "),
+                width as usize,
+                style,
+            );
+        }
+    }
+}
+
+fn render_workspace_bar(frame: &mut Frame, state: &AppState) {
+    let mut spans = Vec::new();
+    for (index, workspace) in state.workspaces.workspaces.iter().enumerate() {
+        let style = if index == state.workspaces.active {
+            Style::default().add_modifier(Modifier::REVERSED)
+        } else {
+            Style::default()
+        };
+        spans.push(Span::styled(
+            format!(" {}:{} ", index + 1, workspace.name),
+            style,
+        ));
+    }
+    spans.push(Span::styled(
+        format!(
+            "  F7 new  F8 close  ({} panes)",
+            state.workspaces.active().layout.leaves().len()
+        ),
+        Style::default().add_modifier(Modifier::DIM),
+    ));
+    frame.render_widget(Paragraph::new(Line::from(spans)), state.ui.workspace_bar);
+}
+
+fn render_status(frame: &mut Frame, state: &AppState) {
+    let document = state.active_document();
+    let pane = state.focused_pane();
+
+    let name = match document {
+        Some(document) => format!(
+            "{}{}",
+            document.display_name(),
+            if document.dirty { " [+]" } else { "" }
+        ),
+        None => "-".to_string(),
+    };
+
+    let (line, column, total) = match (pane, document) {
+        (Some(pane), Some(document)) => {
+            let line = document.line_of_char(pane.cursor) + 1;
+            let line_start = document.char_of_line(line - 1);
+            let column = pane.cursor.saturating_sub(line_start) + 1;
+            (line, column, document.line_count())
+        }
+        _ => (0, 0, 0),
+    };
+
+    let focus = match state.focus {
+        crate::state::Focus::Explorer => "EXPLORER".to_string(),
+        crate::state::Focus::Pane(id) => format!("PANE {id}"),
+    };
+    let encoding = document
+        .map(|document| document.eol.as_str())
+        .unwrap_or("-");
+
+    let left = format!(" {name} | {line}:{column} | {total} lines | UTF-8 {encoding} | {focus} ");
+    let left = if state.moving {
+        format!("{left} | MOVE: arrows move the pane, Esc exits ")
+    } else {
+        left
+    };
+
+    let message = if state.ui.message.is_empty() {
+        String::new()
+    } else {
+        format!("  {}", state.ui.message)
+    };
+
+    let line = Line::from(vec![
+        Span::styled(left, Style::default().add_modifier(Modifier::REVERSED)),
+        Span::raw(message),
+    ]);
+    frame.render_widget(Paragraph::new(line), state.ui.status);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::AppConfig;
+    use crate::editor::document::{Document, Eol};
+    use crate::editor::history::History;
+    use crate::explorer::ExplorerState;
+    use crate::input::{KeyMap, PromptKind, PromptState};
+    use crate::state::{DocumentId, Focus, Ids, InputMode, Pane, WorkspaceId};
+    use crate::workspace::{SplitAxis, Workspace, WorkspaceManager};
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    fn state(text: &str) -> (AppState, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!(
+            "i3-render-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let pane_id = PaneId(1);
+        let document_id = DocumentId(1);
+        let mut panes = HashMap::new();
+        let mut pane = Pane::new(pane_id);
+        pane.tabs.push(document_id);
+        pane.active = Some(document_id);
+        panes.insert(pane_id, pane);
+
+        let mut documents = HashMap::new();
+        documents.insert(
+            document_id,
+            Document {
+                id: document_id,
+                path: Some(dir.join("main.rs")),
+                rope: ropey::Rope::from_str(text),
+                dirty: false,
+                eol: Eol::Lf,
+                history: History::default(),
+            },
+        );
+
+        let mut workspaces = WorkspaceManager::default();
+        workspaces.push(Workspace::new(WorkspaceId(1), "test", pane_id));
+
+        let state = AppState {
+            should_quit: false,
+            explorer: ExplorerState::new(dir.clone(), false).expect("explorer"),
+            documents,
+            panes,
+            workspaces,
+            focus: Focus::Pane(pane_id),
+            mode: InputMode::Normal,
+            keymap: KeyMap::default(),
+            ui: UiState::default(),
+            config: AppConfig::default(),
+            ids: Ids::default(),
+            warnings: Vec::new(),
+            clipboard: String::new(),
+            search: None,
+            fullscreen: None,
+            moving: false,
+        };
+        (state, dir)
+    }
+
+    fn draw(state: &mut AppState, width: u16, height: u16) -> String {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("terminal");
+        terminal
+            .draw(|frame| {
+                compute_layout(state, frame.area());
+                render(frame, state);
+            })
+            .expect("draw");
+        let buffer = terminal.backend().buffer();
+        let mut out = String::new();
+        for y in 0..height {
+            for x in 0..width {
+                out.push_str(buffer[(x, y)].symbol());
+            }
+            out.push('\n');
+        }
+        out
+    }
+
+    #[test]
+    fn renders_status_bar_and_document() {
+        let (mut state, dir) = state("hello\nworld\n");
+        let screen = draw(&mut state, 80, 24);
+        assert!(screen.contains("main.rs"), "{screen}");
+        assert!(screen.contains("1:1"), "{screen}");
+        assert!(screen.contains("3 lines"), "{screen}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn renders_every_pane_in_a_nested_split() {
+        let (mut state, dir) = state("alpha\nbeta\n");
+        let second = PaneId(2);
+        let mut pane = Pane::new(second);
+        pane.tabs.push(DocumentId(1));
+        pane.active = Some(DocumentId(1));
+        state.panes.insert(second, pane);
+        state.workspaces.active_mut().layout.split_pane(
+            PaneId(1),
+            crate::workspace::SplitAxis::LeftRight,
+            second,
+        );
+
+        let screen = draw(&mut state, 80, 24);
+        assert_eq!(state.ui.pane_rects.len(), 2);
+        for rect in state.ui.pane_rects.values() {
+            assert!(rect.width >= crate::workspace::MIN_PANE_COLS);
+            assert!(rect.height >= crate::workspace::MIN_PANE_ROWS);
+        }
+        assert!(screen.matches("main.rs").count() >= 2);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn stays_inside_a_tiny_terminal() {
+        let (mut state, dir) = state("x\n");
+        let _screen = draw(&mut state, 20, 6);
+        for rect in state.ui.pane_rects.values() {
+            assert!(rect.x + rect.width <= 20);
+            assert!(rect.y + rect.height <= 6);
+        }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn renders_container_tab_strip() {
+        let (mut state, dir) = state("abc\n");
+        let second = PaneId(2);
+        let mut pane = Pane::new(second);
+        pane.tabs.push(DocumentId(1));
+        pane.active = Some(DocumentId(1));
+        state.panes.insert(second, pane);
+        state
+            .workspaces
+            .active_mut()
+            .layout
+            .split_pane(PaneId(1), SplitAxis::LeftRight, second);
+        assert!(
+            state
+                .workspaces
+                .active_mut()
+                .layout
+                .toggle_tabbed(PaneId(1))
+        );
+
+        let screen = draw(&mut state, 80, 24);
+        assert_eq!(state.ui.tab_bars.len(), 1);
+        assert_eq!(state.ui.tab_bars[0].tabs.len(), 2);
+        assert!(screen.contains("main.rs"), "{screen}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn renders_move_mode_hint() {
+        let (mut state, dir) = state("abc\n");
+        state.moving = true;
+        let screen = draw(&mut state, 100, 24);
+        assert!(screen.contains("MOVE"), "{screen}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn renders_prompt_overlay() {
+        let (mut state, dir) = state("abc\n");
+        state.mode = InputMode::Prompt(PromptState::new(PromptKind::Find));
+        let screen = draw(&mut state, 80, 24);
+        assert!(screen.contains("Find"), "{screen}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+}
