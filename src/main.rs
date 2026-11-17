@@ -8,8 +8,11 @@ mod editor;
 mod error;
 mod explorer;
 mod input;
+mod shell;
 mod state;
+mod syntax;
 mod terminal;
+mod theme;
 mod ui;
 mod workspace;
 
@@ -38,11 +41,21 @@ fn run() -> error::Result<()> {
 
     let (config, warnings) = config::load();
     if dump_keymap {
+        use std::io::Write;
+
         let (keymap, key_warnings) = input::KeyMap::from_config(&config.keys);
+        let themes_dir = config::themes_dir().unwrap_or_default();
+        let (theme, theme_warnings) = theme::Theme::from_config(&config.appearance, &themes_dir);
+        let mut out = std::io::stdout();
+        let _ = writeln!(out, "theme: {}", theme.name());
         for line in keymap.labels() {
-            println!("{line}");
+            let _ = writeln!(out, "{line}");
         }
-        for warning in warnings.iter().chain(key_warnings.iter()) {
+        for warning in warnings
+            .iter()
+            .chain(key_warnings.iter())
+            .chain(theme_warnings.iter())
+        {
             eprintln!("warning: {warning}");
         }
         return Ok(());

@@ -22,7 +22,7 @@ impl App {
     pub(crate) fn move_cursor(&mut self, movement: Move, extend: bool) -> Result<()> {
         let pane_id = match self.state.focus {
             Focus::Pane(id) => id,
-            Focus::Explorer => return Ok(()),
+            Focus::Explorer | Focus::Shell => return Ok(()),
         };
         let page = self.page_size(pane_id);
         {
@@ -97,7 +97,7 @@ impl App {
     pub(crate) fn duplicate_line(&mut self) -> Result<()> {
         let pane_id = match self.state.focus {
             Focus::Pane(id) => id,
-            Focus::Explorer => return Ok(()),
+            Focus::Explorer | Focus::Shell => return Ok(()),
         };
         {
             let AppState {

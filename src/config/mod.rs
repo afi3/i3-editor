@@ -16,7 +16,21 @@ pub struct AppConfig {
     pub explorer: ExplorerConfig,
     pub workspace: WorkspaceConfig,
     pub appearance: AppearanceConfig,
+    pub terminal: TerminalConfig,
     pub keys: KeysConfig,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(default)]
+pub struct TerminalConfig {
+    /// Height of the bottom terminal panel in rows.
+    pub height: u16,
+}
+
+impl Default for TerminalConfig {
+    fn default() -> Self {
+        Self { height: 12 }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -105,18 +119,21 @@ pub struct KeysConfig {
     pub explorer: BTreeMap<String, String>,
 }
 
-pub fn default_path() -> Option<PathBuf> {
+pub fn config_dir() -> Option<PathBuf> {
     if let Some(xdg) = std::env::var_os("XDG_CONFIG_HOME")
         && !xdg.is_empty()
     {
-        return Some(PathBuf::from(xdg).join("i3-editor").join("config.toml"));
+        return Some(PathBuf::from(xdg).join("i3-editor"));
     }
-    std::env::var_os("HOME").map(|home| {
-        PathBuf::from(home)
-            .join(".config")
-            .join("i3-editor")
-            .join("config.toml")
-    })
+    std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config").join("i3-editor"))
+}
+
+pub fn themes_dir() -> Option<PathBuf> {
+    config_dir().map(|dir| dir.join("themes"))
+}
+
+pub fn default_path() -> Option<PathBuf> {
+    config_dir().map(|dir| dir.join("config.toml"))
 }
 
 pub fn load() -> (AppConfig, Vec<String>) {
@@ -152,8 +169,10 @@ pub fn load_from(path: &Path) -> (AppConfig, Vec<String>) {
     take_section(&value, "explorer", &mut config.explorer, &mut warnings);
     take_section(&value, "workspace", &mut config.workspace, &mut warnings);
     take_section(&value, "appearance", &mut config.appearance, &mut warnings);
+    take_section(&value, "terminal", &mut config.terminal, &mut warnings);
     take_section(&value, "keys", &mut config.keys, &mut warnings);
     config.explorer.width = config.explorer.width.clamp(5, 50);
+    config.terminal.height = config.terminal.height.clamp(3, 60);
     (config, warnings)
 }
 

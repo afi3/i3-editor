@@ -141,6 +141,22 @@ Display relevant information:
 - Current focus.
 - Application status messages.
 
+### 4.5 Terminal Panel
+
+A real shell runs in a panel docked to the bottom of the window, outside the
+editor panes:
+
+- Opened and closed from the command palette (`toggle_terminal`); closing kills
+  the shell process.
+- Spawns `$SHELL` (fallback `/bin/sh`) in the explorer root with a PTY sized to
+  the panel.
+- While the panel owns focus, keys are forwarded to the shell except the quit
+  binding, the palette binding, and the terminal toggle.
+- Height comes from `[terminal] height`, clamped so panes keep their minimum.
+- Output is parsed by a VT100 screen model and rendered with the active theme;
+  the wheel scrolls scrollback.
+- Clicking the panel focuses it.
+
 ## 5. Critical Architecture Decisions
 
 These decisions are mandatory.
@@ -436,6 +452,11 @@ Preserve the file's original line ending on save, or normalize explicitly and sa
 
 For syntax highlighting, prepare the editor architecture for Tree-sitter integration, but do not make advanced language support a blocker for the initial MVP.
 
+Syntax highlighting is implemented lexically in the meantime: line-local spans for
+comments, strings, numbers, keywords, function calls, type names, constants,
+operators, and punctuation, keyed by file extension, with colors from the active
+theme. Structural, grammar-aware highlighting remains the Tree-sitter work.
+
 ## 8. Default Keyboard Shortcuts
 
 Implement configurable keyboard mappings. Bindings are data, not `match` arms buried in the event loop.
@@ -566,6 +587,15 @@ Test shortcut compatibility with Crossterm and supported terminal emulators.
 
 Do not assume every terminal can distinguish every key combination.
 
+### 8.5 Command Palette Actions
+
+The palette (F1) must expose at least:
+
+- `toggle_terminal`: open or close the bottom terminal panel.
+- `select_theme`: choose a preset or `themes/<name>.toml`, applied immediately.
+- `next_theme` / `prev_theme`: cycle through presets and theme files.
+- Every other command listed by `--dump-keymap`.
+
 ## 9. Configuration
 
 Use TOML.
@@ -594,16 +624,27 @@ default_layout = "vertical"
 auto_save_session = false
 
 [appearance]
-theme = "default"
+theme = "default"          # preset, or a themes/<name>.toml file name
 show_status_bar = true
 show_document_tabs = true
 show_workspace_tabs = true
+
+[terminal]
+height = 12                # bottom terminal panel rows, clamped to 3..=60
 
 [keys]
 preset = "default"
 ```
 
 Key bindings use the format defined in 8.1 and live under `[keys.*]`. The example above shows the preset only; a full binding table is optional.
+
+Theme colors live in `<config>/i3-editor/themes/<name>.toml`, and
+`appearance.theme` names either a built-in preset or one of those files. A theme
+file may set `base` to inherit a preset and then override UI colors plus a
+`[syntax]` table for token colors (keyword, string, comment, number, function,
+type name, constant, operator, punctuation). Colors accept `#rgb`, `#rrggbb`,
+`indexed:N`, or names. Invalid entries are reported and the failing field keeps
+its inherited value.
 
 Support sensible defaults when the configuration file does not exist.
 

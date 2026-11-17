@@ -142,7 +142,7 @@ impl App {
     pub(crate) fn undo(&mut self) -> Result<()> {
         let pane_id = match self.state.focus {
             Focus::Pane(id) => id,
-            Focus::Explorer => return Ok(()),
+            Focus::Explorer | Focus::Shell => return Ok(()),
         };
         let AppState {
             documents, panes, ..
@@ -168,7 +168,7 @@ impl App {
     pub(crate) fn redo(&mut self) -> Result<()> {
         let pane_id = match self.state.focus {
             Focus::Pane(id) => id,
-            Focus::Explorer => return Ok(()),
+            Focus::Explorer | Focus::Shell => return Ok(()),
         };
         let AppState {
             documents, panes, ..
@@ -194,7 +194,7 @@ impl App {
     pub(crate) fn select_all(&mut self) -> Result<()> {
         let pane_id = match self.state.focus {
             Focus::Pane(id) => id,
-            Focus::Explorer => return Ok(()),
+            Focus::Explorer | Focus::Shell => return Ok(()),
         };
         let AppState {
             documents, panes, ..
@@ -232,7 +232,7 @@ impl App {
             } = &mut self.state;
             let pane_id = match focus {
                 Focus::Pane(id) => *id,
-                Focus::Explorer => return Ok(()),
+                Focus::Explorer | Focus::Shell => return Ok(()),
             };
             let Some(pane) = panes.get_mut(&pane_id) else {
                 return Ok(());
@@ -271,7 +271,7 @@ impl App {
             } = &mut self.state;
             let pane_id = match focus {
                 Focus::Pane(id) => *id,
-                Focus::Explorer => return Ok(()),
+                Focus::Explorer | Focus::Shell => return Ok(()),
             };
             let Some(pane) = panes.get_mut(&pane_id) else {
                 return Ok(());
@@ -338,7 +338,7 @@ impl App {
             } = &mut self.state;
             let pane_id = match focus {
                 Focus::Pane(id) => *id,
-                Focus::Explorer => return,
+                Focus::Explorer | Focus::Shell => return,
             };
             let Some(pane) = panes.get_mut(&pane_id) else {
                 return;

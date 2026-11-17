@@ -17,6 +17,7 @@ pub enum PromptKind {
     Delete,
     Discard,
     GoToLine,
+    Theme,
 }
 
 impl PromptKind {
@@ -33,6 +34,7 @@ impl PromptKind {
             PromptKind::Delete => "Delete",
             PromptKind::Discard => "Unsaved changes: Enter discards, Esc cancels",
             PromptKind::GoToLine => "Go to Line",
+            PromptKind::Theme => "Theme",
         }
     }
 
@@ -46,7 +48,10 @@ impl PromptKind {
     }
 
     pub fn lists_candidates(self) -> bool {
-        matches!(self, PromptKind::CommandPalette | PromptKind::QuickOpen)
+        matches!(
+            self,
+            PromptKind::CommandPalette | PromptKind::QuickOpen | PromptKind::Theme
+        )
     }
 }
 
@@ -119,6 +124,18 @@ impl PromptState {
             .collect();
         if self.selected >= self.filtered.len() {
             self.selected = self.filtered.len().saturating_sub(1);
+        }
+    }
+
+    /// Preselect `needle` in the filtered candidate list.
+    pub fn select_candidate(&mut self, needle: &str) {
+        self.refilter();
+        if let Some(index) = self
+            .filtered
+            .iter()
+            .position(|index| self.candidates[*index].eq_ignore_ascii_case(needle))
+        {
+            self.selected = index;
         }
     }
 

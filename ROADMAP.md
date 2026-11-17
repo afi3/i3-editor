@@ -58,22 +58,33 @@ Create/switch/close, workspace tab bar, preserved layout, tabs, cursor, scroll.
 Delivered:
 
 - Config loading with per-section fallback and warnings.
+- Theme presets (`default`, `dark`, `light`, `high-contrast`) and theme files
+  loaded by name from `<config>/i3-editor/themes/`, with `base` inheritance.
+- Lexical syntax highlighting for Rust, Python, JavaScript/TypeScript, Go, C,
+  Shell, TOML, JSON, and Markdown, with token colors from the active theme.
+- Bottom terminal panel running a real shell (`portable-pty` + `vt100`), opened
+  and closed from the palette, with theme-aware rendering and scrollback.
+- Runtime theme switching from the palette (`select_theme`, `next_theme`,
+  `prev_theme`).
 - Keymap presets and capability handling.
 - Unicode width/grapheme handling with tests.
 - Error handling through a single `Error` type; status-bar messages.
-- 56 unit and integration tests, `TestBackend` render tests.
+- 116 unit and integration tests, `TestBackend` render tests.
 - `README.md`, `ARCHITECTURE.md`, `ROADMAP.md`.
 
 Not delivered yet:
 
-- `editor.word_wrap`, `appearance.theme`, `workspace.auto_save_session` are
-  parsed but unused. Either implement them or remove the keys.
+- `editor.word_wrap` and `workspace.auto_save_session` are parsed but unused.
+  Either implement them or remove the keys.
 - Find highlights only the current match; there is no match list UI.
 - Undo does not clear the modified flag when the buffer returns to the saved
   state (needs a save revision counter).
 - No session persistence across restarts.
-- Future-phase features remain out of scope: Tree-sitter highlighting, Nucleo
-  fuzzy scoring, Notify file watching.
+- Terminal panel limits: no mouse reporting into shell programs, one panel only,
+  shell path is `$SHELL` (not configurable), scrollback is fixed at 2000 lines.
+- Syntax highlighting is lexical: multiline block comments and template strings
+  are colored per line, and token kinds come from naming conventions. Structural
+  (Tree-sitter) highlighting remains future work.
 
 ## Verification commands
 
@@ -85,4 +96,4 @@ cargo clippy --all-targets --all-features
 cargo run -- --dump-keymap
 ```
 
-Last recorded run: `cargo test` → 56 passed, `cargo clippy` → 0 warnings.
+Last recorded run: `cargo test` → 116 passed, `cargo clippy` → 0 warnings.

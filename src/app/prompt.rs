@@ -118,6 +118,13 @@ impl App {
                 }
                 Ok(())
             }
+            PromptKind::Theme => {
+                let Some(name) = prompt.selected_candidate().map(str::to_string) else {
+                    return Ok(());
+                };
+                self.apply_theme(&name);
+                Ok(())
+            }
         }
     }
 
@@ -183,6 +190,10 @@ impl App {
                     .map(|row| row.path.clone());
             }
             PromptKind::Discard => {}
+            PromptKind::Theme => {
+                prompt.set_candidates(crate::theme::Theme::names(&self.state.themes_dir));
+                prompt.select_candidate(&self.state.config.appearance.theme);
+            }
             PromptKind::GoToLine => {
                 if let (Some(pane), Some(document)) =
                     (self.state.focused_pane(), self.state.active_document())

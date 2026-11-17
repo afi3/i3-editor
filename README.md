@@ -109,6 +109,111 @@ split weights intact.
 - `F9` fullscreen hides the strip; `F10` grab mode still swaps the pane.
 - Tabs are per container, so nested tabbed containers each get their own strip.
 
+## Themes and syntax colors
+
+`appearance.theme` names either a built-in preset or a file in
+`$XDG_CONFIG_HOME/i3-editor/themes/` (default `~/.config/i3-editor/themes/`).
+A theme file wins over a preset with the same name, so `dark.toml` overrides the
+`dark` preset. Unknown names fall back to `default` and report the available
+names in the status bar.
+
+| Preset | Look |
+|---|---|
+| `default` | Terminal colors; no background override, blue selection |
+| `dark` | Dark background, muted gutter, cyan accent, VS Code-like tokens |
+| `light` | Light background, dark text, classic light token colors |
+| `high-contrast` | Black on white with yellow cursor line, border, and selection |
+
+### Theme files
+
+Drop `<name>.toml` in the themes directory and set `appearance.theme = "<name>"`.
+Every key is optional; `base` inherits from a preset, so a file can override just
+a few colors. Unknown keys are reported instead of being ignored.
+
+```toml
+# ~/.config/i3-editor/themes/mine.toml
+base = "dark"                 # preset to inherit from (default: "default")
+
+background = "#101014"
+foreground = "#e6e6e6"
+current_line = "#18181f"
+selection = "#2b4b8f"
+selection_text = "#ffffff"
+gutter = "#5a5a66"
+gutter_active = "#e6e6e6"
+border_active = "#7aa2f7"
+border_inactive = "#2a2a33"
+tab_active = "#1c1c24"
+tab_inactive = "#5a5a66"
+status_bar = "#1c1c24"
+status_text = "#e6e6e6"
+explorer_dir = "#7aa2f7"
+prompt_border = "#7aa2f7"
+
+[syntax]
+keyword = "#c678dd"
+string = "#98c379"
+comment = "#5c6370"
+number = "#d19a66"
+function = "#61afef"
+type_name = "#e5c07b"
+constant = "#56b6c2"
+operator = "#abb2bf"
+punctuation = "#8b93a1"
+```
+
+Colors accept `#rgb`, `#rrggbb`, `indexed:0..255`, or names such as `reset`,
+`black`, `red`, `…`, `white`, `gray`, `darkgray`.
+
+### Syntax highlighting
+
+Highlighting is lexical and line-local: comments, strings, numbers, keywords,
+function calls, type names, constants, operators, and punctuation are colored per
+line for Rust, Python, JavaScript/TypeScript, Go, C, Shell, TOML, JSON, and
+Markdown. Files with other extensions render in the theme foreground.
+
+Known limits of the lexer: blocks that span lines (Rust `/* */`, Python triple
+quotes, JS template literals) are highlighted line by line rather than as a whole
+block, and identifiers are classified by naming convention (`Thing` → type,
+`THING` → constant, `name(` → function). Structural, grammar-aware highlighting
+is still the Tree-sitter work listed in `ROADMAP.md`.
+
+The terminal backend honors `NO_COLOR`: when that variable is set, color
+sequences are suppressed and the theme has no visible effect. `--dump-keymap`
+prints the resolved theme name, which is the quickest way to confirm a config and
+theme file were read.
+
+## Terminal panel
+
+The editor can host a real shell in a panel at the bottom of the window, outside
+the panes. Open it from the command palette (`F1`, then `toggle_terminal`); the
+same command closes it, which kills the shell process.
+
+- The shell is `$SHELL` (fallback `/bin/sh`), started in the explorer root.
+- While the panel has focus, every key is forwarded to the shell except `Ctrl+Q`,
+  `F1`, and the terminal toggle itself.
+- Click the panel to focus it; the wheel scrolls 2000 lines of scrollback.
+- The panel height comes from `[terminal] height`; panes keep their minimum size,
+  so the panel shrinks instead of squeezing them out.
+- Output is parsed with `vt100` (colors, bold, underline, inverse, cursor) and
+  rendered with the active theme's background.
+
+Frame redraws run at 30 ms while the shell has focus, 60 ms when the panel is
+visible but unfocused, and 250 ms otherwise.
+
+## Switching themes from the palette
+
+`F1` exposes three theme commands:
+
+| Action | Effect |
+|---|---|
+| `select_theme` | Prompt listing every preset and `themes/*.toml` file |
+| `next_theme` | Apply the next theme in that list |
+| `prev_theme` | Apply the previous theme |
+
+The switch is immediate and updates `appearance.theme` in memory, so the panel,
+syntax colors, status bar, and explorer all follow without a restart.
+
 ## Configuration
 
 `$XDG_CONFIG_HOME/i3-editor/config.toml` or `~/.config/i3-editor/config.toml`.
@@ -133,10 +238,13 @@ default_layout = "vertical"
 auto_save_session = false  # accepted, not applied yet
 
 [appearance]
-theme = "default"          # accepted, not applied yet
+theme = "default"          # preset, or a themes/<name>.toml file name
 show_status_bar = true
 show_document_tabs = true
 show_workspace_tabs = true
+
+[terminal]
+height = 12                # rows for the bottom panel, clamped to 3..=60
 
 [keys]
 preset = "default"         # "default" | "safe"
@@ -157,7 +265,8 @@ rename = "r"
 
 Binding values are `ctrl+`/`alt+`/`shift+` plus a key name (`a`, `f2`, `enter`,
 `tab`, `backtab`, `esc`, `space`, `home`, `end`, `pageup`, `pagedown`, `delete`,
-`backspace`, arrows). Actions are the names printed by `--dump-keymap`.
+`backspace`, arrows). `--dump-keymap` prints bound actions; the palette (`F1`)
+also lists unbound actions such as `toggle_terminal` and the theme commands.
 Conflicts and unknown names are reported, never silently dropped.
 
 ## Verify
@@ -165,15 +274,16 @@ Conflicts and unknown names are reported, never silently dropped.
 ```bash
 cargo fmt --check
 cargo check
-cargo test              # 56 unit + integration tests, no terminal required
+cargo test              # 116 unit + integration tests, no terminal required
 cargo clippy --all-targets --all-features
 ```
 
 ## Known limitations
 
-- `word_wrap`, `theme`, and `auto_save_session` are parsed but not applied.
-- Syntax highlighting (Tree-sitter), fuzzy scoring (Nucleo), and filesystem
-  watching (Notify) are not implemented.
+- `word_wrap` and `auto_save_session` are parsed but not applied.
+- Syntax highlighting is lexical, not grammar-aware: multiline block comments and
+  template strings are colored line by line. Tree-sitter remains future work.
+- Fuzzy scoring (Nucleo) and filesystem watching (Notify) are not implemented.
 - Undo restores text, cursor, and scroll, but a document that has been saved
   then undone still reports as modified.
 - Clipboard writes are best effort: the internal clipboard always works, OSC 52
@@ -181,3 +291,5 @@ cargo clippy --all-targets --all-features
 - Startup probes keyboard enhancement support; terminals that never answer the
   query add a short delay to startup.
 - Session persistence across restarts is not implemented.
+- Terminal panel: one shell only, no mouse reporting into shell programs, shell
+  path is `$SHELL`, scrollback fixed at 2000 lines.

@@ -5,7 +5,7 @@ use std::ops::Range;
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 use unicode_width::UnicodeWidthStr;
@@ -67,10 +67,11 @@ pub fn render(
     area: Rect,
 ) {
     let focused = matches!(state.focus, Focus::Pane(id) if id == pane.id);
+    let theme = state.theme;
     let border = Style::default().fg(if focused {
-        Color::Cyan
+        theme.border_active
     } else {
-        Color::DarkGray
+        theme.border_inactive
     });
     let title = match document {
         Some(document) => format!(
@@ -83,6 +84,7 @@ pub fn render(
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(border)
+        .style(theme.base())
         .title(title);
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -115,9 +117,10 @@ pub fn render(
     let digits = line_count.to_string().len() as u16;
     let tab_width = state.config.editor.tab_size.max(1);
     let selection = pane.selection();
-    let base = Style::default();
-    let selected = Style::default().add_modifier(Modifier::REVERSED);
-    let number_style = Style::default().add_modifier(Modifier::DIM);
+    let selected = theme.selection_style();
+    let number_style = Style::default().bg(theme.background).fg(theme.gutter);
+    let cursor_line = document.line_of_char(pane.cursor);
+    let language = crate::syntax::Language::from_path(document.path.as_deref());
 
     let buffer = frame.buffer_mut();
     for row in 0..text_area.height as usize {
@@ -126,12 +129,27 @@ pub fn render(
             break;
         }
         let y = text_area.y.saturating_add(row as u16);
+        let highlighted = focused && line_index == cursor_line;
+        let row_style = if highlighted {
+            theme.current_line()
+        } else {
+            theme.base()
+        };
+        buffer.set_style(Rect::new(text_area.x, y, text_area.width, 1), row_style);
         if show_numbers {
             let label = format!("{:>width$} ", line_index + 1, width = digits as usize);
-            buffer.set_stringn(text_area.x, y, &label, gutter as usize, number_style);
+            let style = if highlighted {
+                Style::default()
+                    .bg(theme.current_line)
+                    .fg(theme.gutter_active)
+            } else {
+                number_style
+            };
+            buffer.set_stringn(text_area.x, y, &label, gutter as usize, style);
         }
         let text = document.line_text(line_index);
         let line_start = document.char_of_line(line_index);
+        let spans = crate::syntax::highlight_line(language, &text);
         draw_text_line(
             buffer,
             text_area.x.saturating_add(gutter),
@@ -142,8 +160,10 @@ pub fn render(
             pane.scroll_left,
             tab_width,
             &selection,
-            base,
+            row_style,
             selected,
+            &spans,
+            &theme,
         );
     }
 
@@ -166,6 +186,8 @@ pub fn render(
 }
 
 fn render_tabs(frame: &mut Frame, state: &AppState, pane: &Pane, area: Rect) {
+    let theme = state.theme;
+    frame.buffer_mut().set_style(area, theme.base());
     let mut spans = Vec::new();
     for id in &pane.tabs {
         let Some(document) = state.documents.get(id) else {
@@ -173,9 +195,9 @@ fn render_tabs(frame: &mut Frame, state: &AppState, pane: &Pane, area: Rect) {
         };
         let active = pane.active == Some(*id);
         let style = if active {
-            Style::default().add_modifier(Modifier::REVERSED)
+            theme.tab_active_style()
         } else {
-            Style::default().add_modifier(Modifier::DIM)
+            theme.tab_inactive_style()
         };
         spans.push(Span::styled(
             format!(
@@ -187,7 +209,7 @@ fn render_tabs(frame: &mut Frame, state: &AppState, pane: &Pane, area: Rect) {
         ));
         spans.push(Span::styled(
             "|",
-            Style::default().add_modifier(Modifier::DIM),
+            Style::default().bg(theme.background).fg(theme.gutter),
         ));
     }
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
@@ -206,6 +228,8 @@ fn draw_text_line(
     selection: &Option<Range<usize>>,
     base: Style,
     selected: Style,
+    spans: &[crate::syntax::Span],
+    theme: &crate::theme::Theme,
 ) {
     if width == 0 {
         return;
@@ -216,8 +240,12 @@ fn draw_text_line(
     let mut cursor_x = x;
     let mut run = String::new();
     let mut run_style = base;
+    let mut span_index = 0usize;
 
     for (offset, ch) in text.chars().enumerate() {
+        while span_index < spans.len() && spans[span_index].end <= offset {
+            span_index += 1;
+        }
         let advance = if ch == '\t' {
             tab - (cell % tab)
         } else {
@@ -225,9 +253,16 @@ fn draw_text_line(
         };
         let next = cell.saturating_add(advance);
         let absolute = line_start_char + offset;
-        let style = match selection {
-            Some(range) if absolute >= range.start && absolute < range.end => selected,
-            _ => base,
+        let selected_char = matches!(
+            selection,
+            Some(range) if absolute >= range.start && absolute < range.end
+        );
+        let style = if selected_char {
+            selected
+        } else if let Some(span) = spans.get(span_index).filter(|span| span.start <= offset) {
+            base.fg(theme.token_color(span.kind))
+        } else {
+            base
         };
 
         if next > skip && cell < limit {

@@ -51,6 +51,10 @@ impl App {
             self.drag = Some(drag);
             return;
         }
+        if self.state.shell.is_some() && contains(self.state.ui.shell, mouse.column, mouse.row) {
+            self.state.focus = Focus::Shell;
+            return;
+        }
         if self.state.explorer.visible && contains(self.state.ui.explorer, mouse.column, mouse.row)
         {
             self.click_explorer(mouse.column, mouse.row);
@@ -89,6 +93,10 @@ impl App {
     }
 
     fn on_wheel(&mut self, column: u16, row: u16, steps: isize) {
+        if self.state.shell.is_some() && contains(self.state.ui.shell, column, row) {
+            self.scroll_shell(-steps * 3);
+            return;
+        }
         if self.state.explorer.visible && contains(self.state.ui.explorer, column, row) {
             self.state.focus = Focus::Explorer;
             self.state.explorer.move_selection(steps * 3);

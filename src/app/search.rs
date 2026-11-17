@@ -94,7 +94,7 @@ impl App {
             } = &mut self.state;
             let pane_id = match focus {
                 Focus::Pane(id) => *id,
-                Focus::Explorer => return Ok(()),
+                Focus::Explorer | Focus::Shell => return Ok(()),
             };
             let Some(pane) = panes.get_mut(&pane_id) else {
                 return Ok(());

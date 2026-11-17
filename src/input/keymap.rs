@@ -172,6 +172,7 @@ impl KeyMap {
                 .get(&combo)
                 .or_else(|| self.global.get(&combo))
                 .cloned(),
+            Focus::Shell => self.global.get(&combo).cloned(),
         }
     }
 

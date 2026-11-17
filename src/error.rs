@@ -33,6 +33,8 @@ pub enum Error {
     InvalidUtf8 { path: PathBuf },
     #[error("terminal error: {0}")]
     Terminal(#[from] std::io::Error),
+    #[error("{0}")]
+    Shell(String),
     #[error("{0} already exists")]
     AlreadyExists(PathBuf),
     #[error("invalid path {0}")]

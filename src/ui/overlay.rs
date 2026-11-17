@@ -2,7 +2,7 @@
 
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 
@@ -48,14 +48,16 @@ pub fn render_explorer(frame: &mut Frame, state: &AppState) {
         return;
     }
     let focused = state.focus == Focus::Explorer;
+    let theme = state.theme;
     let border = Style::default().fg(if focused {
-        Color::Cyan
+        theme.border_active
     } else {
-        Color::DarkGray
+        theme.border_inactive
     });
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(border)
+        .style(theme.base())
         .title(" Explorer ");
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -88,11 +90,11 @@ pub fn render_explorer(frame: &mut Frame, state: &AppState) {
         let indent = "  ".repeat(row.depth);
         let text = format!("{indent}{marker}{}", row.name);
         let style = if index == selected {
-            Style::default().add_modifier(Modifier::REVERSED)
+            theme.selection_style()
         } else if row.is_dir {
-            Style::default().fg(Color::Cyan)
+            Style::default().bg(theme.background).fg(theme.explorer_dir)
         } else {
-            Style::default()
+            theme.base()
         };
         lines.push(Line::from(Span::styled(text, style)));
     }
@@ -116,9 +118,12 @@ pub fn render_prompt(frame: &mut Frame, state: &AppState, prompt: &PromptState) 
     let area = Rect::new(x, y, width, height);
 
     frame.render_widget(Clear, area);
+    let theme = state.theme;
+    frame.buffer_mut().set_style(area, theme.base());
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan))
+        .border_style(Style::default().fg(theme.prompt_border))
+        .style(theme.base())
         .title(format!(" {} ", prompt.kind.title()));
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -142,7 +147,7 @@ pub fn render_prompt(frame: &mut Frame, state: &AppState, prompt: &PromptState) 
             row,
             label,
             label_width as usize,
-            Style::default().add_modifier(Modifier::DIM),
+            Style::default().bg(theme.background).fg(theme.gutter),
         );
         let shown = textutil::clip(value, 0, input_width, tab_width);
         buffer.set_stringn(
@@ -150,7 +155,7 @@ pub fn render_prompt(frame: &mut Frame, state: &AppState, prompt: &PromptState) 
             row,
             &shown,
             input_width as usize,
-            Style::default(),
+            theme.base(),
         );
 
         if index == prompt.active {
@@ -183,9 +188,9 @@ pub fn render_prompt(frame: &mut Frame, state: &AppState, prompt: &PromptState) 
                 break;
             }
             let style = if start + offset == prompt.selected {
-                Style::default().add_modifier(Modifier::REVERSED)
+                theme.selection_style()
             } else {
-                Style::default()
+                theme.base()
             };
             buffer.set_stringn(inner.x, row, candidate, inner.width as usize, style);
             if let (PromptKind::CommandPalette, Some(command)) =

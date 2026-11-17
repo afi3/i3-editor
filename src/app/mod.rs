@@ -6,6 +6,7 @@ pub mod editing;
 pub mod mouse;
 pub mod prompt;
 pub mod search;
+pub mod shell_ops;
 pub mod workspace_ops;
 
 #[cfg(test)]
@@ -85,6 +86,9 @@ impl App {
             active: 0,
         };
         let (keymap, key_warnings) = KeyMap::from_config(&config.keys);
+        let themes_dir = crate::config::themes_dir().unwrap_or_default();
+        let (theme, theme_warnings) =
+            crate::theme::Theme::from_config(&config.appearance, &themes_dir);
 
         let mut state = AppState {
             should_quit: false,
@@ -97,14 +101,18 @@ impl App {
             keymap,
             ui: crate::ui::UiState::default(),
             config,
+            theme,
             ids,
             warnings,
             clipboard: String::new(),
             search: None,
             fullscreen: None,
             moving: false,
+            shell: None,
+            themes_dir,
         };
         state.warnings.extend(key_warnings);
+        state.warnings.extend(theme_warnings);
         state.ui.message = state.warnings.first().cloned().unwrap_or_default();
 
         let mut app = Self {
@@ -121,8 +129,16 @@ impl App {
 
     pub fn run(mut self) -> Result<()> {
         while !self.state.should_quit {
+            self.pump_shell();
             self.draw()?;
-            if !event::poll(Duration::from_millis(250)).map_err(Error::from)? {
+            let timeout = if self.state.shell.is_some() && self.state.focus == Focus::Shell {
+                Duration::from_millis(30)
+            } else if self.state.shell.is_some() {
+                Duration::from_millis(60)
+            } else {
+                Duration::from_millis(250)
+            };
+            if !event::poll(timeout).map_err(Error::from)? {
                 continue;
             }
             match event::read().map_err(Error::from)? {
@@ -146,6 +162,7 @@ impl App {
         let area = ratatui::layout::Rect::new(0, 0, size.width, size.height);
         ui::compute_layout(state, area);
         terminal.draw(|frame| ui::render(frame, state))?;
+        self.resize_shell();
         Ok(())
     }
 
@@ -164,6 +181,23 @@ impl App {
         }
         if self.state.mode.is_prompt() {
             self.handle_prompt_key(key, combo);
+            return;
+        }
+        if matches!(self.state.focus, Focus::Shell) {
+            if let Some(command) = self.state.keymap.global.get(&combo).cloned()
+                && matches!(
+                    command,
+                    Command::Quit
+                        | Command::Palette
+                        | Command::ToggleTerminal
+                        | Command::SelectTheme
+                )
+            {
+                let result = self.dispatch(command);
+                self.finish(result);
+                return;
+            }
+            self.forward_to_shell(key);
             return;
         }
         if self.state.moving {

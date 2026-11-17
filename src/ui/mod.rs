@@ -2,12 +2,13 @@
 
 pub mod overlay;
 pub mod pane;
+pub mod shell;
 
 use std::collections::HashMap;
 
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui::style::{Modifier, Style};
+use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
@@ -30,10 +31,12 @@ pub struct TabBar {
 
 #[derive(Debug, Default)]
 pub struct UiState {
+    pub area: Rect,
     pub pane_rects: HashMap<PaneId, Rect>,
     pub workspace_bar: Rect,
     pub explorer: Rect,
     pub panes: Rect,
+    pub shell: Rect,
     pub status: Rect,
     pub message: String,
     pub tab_bars: Vec<TabBar>,
@@ -139,13 +142,26 @@ pub fn compute_layout(state: &mut AppState, area: Rect) {
         0
     };
     let main_height = area.height.saturating_sub(workspace_height + status_height);
+    let shell_height = if state.shell.is_some() {
+        let maximum = main_height.saturating_sub(crate::workspace::MIN_PANE_ROWS + 1);
+        state.config.terminal.height.min(maximum)
+    } else {
+        0
+    };
+    let body_height = main_height.saturating_sub(shell_height);
 
     let workspace_bar = Rect::new(area.x, area.y, area.width, workspace_height);
     let main = Rect::new(
         area.x,
         area.y.saturating_add(workspace_height),
         area.width,
-        main_height,
+        body_height,
+    );
+    let shell = Rect::new(
+        area.x,
+        area.y.saturating_add(workspace_height + body_height),
+        area.width,
+        shell_height,
     );
     let status = Rect::new(
         area.x,
@@ -167,7 +183,9 @@ pub fn compute_layout(state: &mut AppState, area: Rect) {
         main.height,
     );
 
+    state.ui.area = area;
     state.ui.panes = panes;
+    state.ui.shell = shell;
     refresh_panes(state);
     state.ui.workspace_bar = workspace_bar;
     state.ui.explorer = explorer;
@@ -175,6 +193,9 @@ pub fn compute_layout(state: &mut AppState, area: Rect) {
 }
 
 pub fn render(frame: &mut Frame, state: &AppState) {
+    let area = frame.area();
+    frame.buffer_mut().set_style(area, state.theme.base());
+
     if state.ui.workspace_bar.height > 0 {
         render_workspace_bar(frame, state);
     }
@@ -200,6 +221,10 @@ pub fn render(frame: &mut Frame, state: &AppState) {
 
     render_tab_bars(frame, state);
 
+    if state.ui.shell.height > 0 {
+        shell::render(frame, state);
+    }
+
     if state.ui.status.height > 0 {
         render_status(frame, state);
     }
@@ -210,15 +235,16 @@ pub fn render(frame: &mut Frame, state: &AppState) {
 
 fn render_tab_bars(frame: &mut Frame, state: &AppState) {
     for bar in &state.ui.tab_bars {
+        frame.buffer_mut().set_style(bar.rect, state.theme.base());
         for tab in &bar.tabs {
             if tab.end <= tab.start {
                 continue;
             }
             let width = tab.end - tab.start;
             let style = if tab.active {
-                Style::default().add_modifier(Modifier::REVERSED)
+                state.theme.tab_active_style()
             } else {
-                Style::default().add_modifier(Modifier::DIM)
+                state.theme.tab_inactive_style()
             };
             let avail = width.saturating_sub(2);
             let body = crate::editor::text::clip(&tab.label, 0, avail, 4);
@@ -238,9 +264,9 @@ fn render_workspace_bar(frame: &mut Frame, state: &AppState) {
     let mut spans = Vec::new();
     for (index, workspace) in state.workspaces.workspaces.iter().enumerate() {
         let style = if index == state.workspaces.active {
-            Style::default().add_modifier(Modifier::REVERSED)
+            state.theme.tab_active_style()
         } else {
-            Style::default()
+            state.theme.tab_inactive_style()
         };
         spans.push(Span::styled(
             format!(" {}:{} ", index + 1, workspace.name),
@@ -252,7 +278,9 @@ fn render_workspace_bar(frame: &mut Frame, state: &AppState) {
             "  F7 new  F8 close  ({} panes)",
             state.workspaces.active().layout.leaves().len()
         ),
-        Style::default().add_modifier(Modifier::DIM),
+        Style::default()
+            .bg(state.theme.background)
+            .fg(state.theme.gutter),
     ));
     frame.render_widget(Paragraph::new(Line::from(spans)), state.ui.workspace_bar);
 }
@@ -283,6 +311,7 @@ fn render_status(frame: &mut Frame, state: &AppState) {
     let focus = match state.focus {
         crate::state::Focus::Explorer => "EXPLORER".to_string(),
         crate::state::Focus::Pane(id) => format!("PANE {id}"),
+        crate::state::Focus::Shell => "SHELL".to_string(),
     };
     let encoding = document
         .map(|document| document.eol.as_str())
@@ -302,8 +331,8 @@ fn render_status(frame: &mut Frame, state: &AppState) {
     };
 
     let line = Line::from(vec![
-        Span::styled(left, Style::default().add_modifier(Modifier::REVERSED)),
-        Span::raw(message),
+        Span::styled(left, state.theme.status_style()),
+        Span::styled(message, state.theme.status_style()),
     ]);
     frame.render_widget(Paragraph::new(line), state.ui.status);
 }
@@ -363,12 +392,15 @@ mod tests {
             keymap: KeyMap::default(),
             ui: UiState::default(),
             config: AppConfig::default(),
+            theme: crate::theme::Theme::default(),
             ids: Ids::default(),
             warnings: Vec::new(),
             clipboard: String::new(),
             search: None,
             fullscreen: None,
             moving: false,
+            shell: None,
+            themes_dir: std::path::PathBuf::new(),
         };
         (state, dir)
     }
@@ -434,6 +466,112 @@ mod tests {
             assert!(rect.x + rect.width <= 20);
             assert!(rect.y + rect.height <= 6);
         }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    fn draw_buffer(state: &mut AppState, width: u16, height: u16) -> ratatui::buffer::Buffer {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("terminal");
+        terminal
+            .draw(|frame| {
+                compute_layout(state, frame.area());
+                render(frame, state);
+            })
+            .expect("draw");
+        terminal.backend().buffer().clone()
+    }
+
+    #[test]
+    fn workspace_bar_uses_theme_colors() {
+        use crate::theme::Theme;
+        let (mut state, dir) = state("abc\n");
+        let theme = Theme::preset("dark");
+        state.theme = theme;
+        let buffer = draw_buffer(&mut state, 80, 24);
+        let cell = &buffer[(1, state.ui.workspace_bar.y)];
+        assert_eq!(cell.bg, theme.tab_active, "active workspace tab bg");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn applies_theme_colors_to_text_and_current_line() {
+        use crate::theme::Theme;
+
+        let (mut state, dir) = state("alpha\nbeta\n");
+        let theme = Theme::preset("dark");
+        state.theme = theme;
+        let pane_id = PaneId(1);
+        state.focus = Focus::Pane(pane_id);
+        state.panes.get_mut(&pane_id).expect("pane").cursor = 0;
+
+        let buffer = draw_buffer(&mut state, 80, 24);
+        let rect = state.ui.pane_rects[&pane_id];
+        let geometry = {
+            let pane = state.panes.get(&pane_id).expect("pane");
+            let document = state.documents.get(&DocumentId(1)).expect("document");
+            crate::ui::pane::text_geometry(&state, pane, document, rect).expect("geometry")
+        };
+
+        let current = &buffer[(geometry.area.x + geometry.gutter, geometry.area.y)];
+        assert_eq!(current.bg, theme.current_line, "cursor line background");
+        assert_eq!(current.fg, theme.foreground, "cursor line text");
+
+        let second = &buffer[(geometry.area.x + geometry.gutter, geometry.area.y + 1)];
+        assert_eq!(
+            second.bg, theme.background,
+            "other lines use the theme background"
+        );
+
+        let border = &buffer[(rect.x, rect.y)];
+        assert_eq!(border.fg, theme.border_active, "focused pane border");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn prompt_uses_theme_colors() {
+        use crate::theme::Theme;
+
+        let (mut state, dir) = state("abc\n");
+        let theme = Theme::preset("light");
+        state.theme = theme;
+        state.mode = InputMode::Prompt(PromptState::new(PromptKind::Find));
+
+        let buffer = draw_buffer(&mut state, 80, 24);
+        let found = (0..24)
+            .flat_map(|row| (0..80).map(move |column| (column, row)))
+            .find(|(column, row)| buffer[(*column, *row)].fg == theme.prompt_border);
+        assert!(found.is_some(), "prompt border color not found");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn syntax_colors_tokens_in_the_pane() {
+        use crate::theme::Theme;
+
+        let (mut state, dir) = state("let answer = 42;\n");
+        let theme = Theme::preset("dark");
+        state.theme = theme;
+        state.focus = Focus::Pane(PaneId(1));
+
+        let buffer = draw_buffer(&mut state, 80, 24);
+        let rect = state.ui.pane_rects[&PaneId(1)];
+        let geometry = {
+            let pane = state.panes.get(&PaneId(1)).expect("pane");
+            let document = state.documents.get(&DocumentId(1)).expect("document");
+            crate::ui::pane::text_geometry(&state, pane, document, rect).expect("geometry")
+        };
+        let x = geometry.area.x + geometry.gutter;
+        let y = geometry.area.y;
+
+        assert_eq!(buffer[(x, y)].symbol(), "l");
+        assert_eq!(buffer[(x, y)].fg, theme.syntax.keyword, "keyword");
+        assert_eq!(buffer[(x + 4, y)].fg, theme.foreground, "identifier");
+        assert_eq!(buffer[(x + 13, y)].fg, theme.syntax.number, "number");
+        assert_eq!(
+            buffer[(x + 15, y)].fg,
+            theme.syntax.punctuation,
+            "punctuation"
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 

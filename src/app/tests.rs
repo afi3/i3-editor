@@ -59,12 +59,15 @@ fn fixture(text: &str) -> (App, PathBuf) {
         keymap: KeyMap::default(),
         ui: ui::UiState::default(),
         config: AppConfig::default(),
+        theme: crate::theme::Theme::default(),
         ids,
         warnings: Vec::new(),
         clipboard: String::new(),
         search: None,
         fullscreen: None,
         moving: false,
+        shell: None,
+        themes_dir: dir.join("themes"),
     };
     ui::compute_layout(&mut state, ratatui::layout::Rect::new(0, 0, 80, 24));
     (App::headless(state), dir)
@@ -575,5 +578,100 @@ fn splits_cannot_exceed_the_minimum_area() {
             ..
         }
     ));
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn theme_commands_cycle_and_select_files() {
+    use crate::theme::Theme;
+    use ratatui::style::Color;
+
+    let (mut app, dir) = fixture("x\n");
+    let themes = dir.join("themes");
+    std::fs::create_dir_all(&themes).expect("themes");
+    std::fs::write(
+        themes.join("mine.toml"),
+        "base = \"dark\"\nbackground = \"#010203\"\n",
+    )
+    .expect("write");
+    app.state.themes_dir = themes;
+
+    app.dispatch(Command::NextTheme).expect("next");
+    assert_eq!(app.state.config.appearance.theme, "dark");
+    assert_eq!(app.state.theme, Theme::preset("dark"));
+
+    app.dispatch(Command::SelectTheme).expect("prompt");
+    if let InputMode::Prompt(prompt) = &mut app.state.mode {
+        prompt.fields[0] = "mine".to_string();
+        prompt.refilter();
+    } else {
+        panic!("expected theme prompt");
+    }
+    app.submit_prompt().expect("select");
+    assert_eq!(app.state.config.appearance.theme, "mine");
+    assert_eq!(app.state.theme.background, Color::Rgb(1, 2, 3));
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn terminal_panel_reserves_rows_and_runs_a_shell() {
+    use std::time::Duration;
+
+    let (mut app, dir) = fixture("x\n");
+    app.dispatch(Command::ToggleTerminal).expect("toggle");
+    assert!(app.state.shell.is_some());
+    assert_eq!(app.state.focus, Focus::Shell);
+
+    ui::compute_layout(&mut app.state, ratatui::layout::Rect::new(0, 0, 80, 24));
+    assert_eq!(app.state.ui.shell.height, 12);
+    assert!(app.state.ui.shell.y + app.state.ui.shell.height <= 23);
+    assert!(app.state.ui.panes.height >= crate::workspace::MIN_PANE_ROWS);
+
+    if let Some(shell) = app.state.shell.as_mut() {
+        shell.write(b"printf 'panel-test\\n'\n");
+    }
+    let mut found = false;
+    for _ in 0..150 {
+        app.pump_shell();
+        if let Some(shell) = app.state.shell.as_ref()
+            && shell.screen().contents().contains("panel-test")
+        {
+            found = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(found, "shell output did not reach the screen");
+
+    app.dispatch(Command::ToggleTerminal).expect("close");
+    assert!(app.state.shell.is_none());
+    assert!(matches!(app.state.focus, Focus::Pane(_)));
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn shell_focus_routes_keys_away_from_the_document() {
+    use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    let (mut app, dir) = fixture("x\n");
+    let before = app
+        .state
+        .documents
+        .values()
+        .next()
+        .map(|document| document.rope.to_string())
+        .expect("document");
+    app.dispatch(Command::ToggleTerminal).expect("toggle");
+    app.handle_key(KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE));
+    app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    let after = app
+        .state
+        .documents
+        .values()
+        .next()
+        .map(|document| document.rope.to_string())
+        .expect("document");
+    assert_eq!(after, before);
+    assert!(!app.state.documents.values().any(|document| document.dirty));
     std::fs::remove_dir_all(&dir).ok();
 }

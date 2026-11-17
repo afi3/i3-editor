@@ -6,6 +6,7 @@ use crate::config::AppConfig;
 use crate::editor::document::Document;
 use crate::explorer::ExplorerState;
 use crate::input::{KeyMap, PromptState};
+use crate::theme::Theme;
 use crate::ui::UiState;
 use crate::workspace::WorkspaceManager;
 
@@ -30,6 +31,7 @@ id_type!(WorkspaceId);
 pub enum Focus {
     Explorer,
     Pane(PaneId),
+    Shell,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -131,6 +133,7 @@ pub struct AppState {
     pub keymap: KeyMap,
     pub ui: UiState,
     pub config: AppConfig,
+    pub theme: Theme,
     pub ids: Ids,
     pub warnings: Vec<String>,
     pub clipboard: String,
@@ -139,27 +142,31 @@ pub struct AppState {
     pub fullscreen: Option<PaneId>,
     /// Grab mode: arrow keys move the focused pane.
     pub moving: bool,
+    /// Bottom terminal panel. Dropping it kills the shell.
+    pub shell: Option<crate::shell::ShellPanel>,
+    /// Directory scanned for `<name>.toml` themes.
+    pub themes_dir: std::path::PathBuf,
 }
 
 impl AppState {
     pub fn focused_pane(&self) -> Option<&Pane> {
         match self.focus {
             Focus::Pane(id) => self.panes.get(&id),
-            Focus::Explorer => None,
+            Focus::Explorer | Focus::Shell => None,
         }
     }
 
     pub fn focused_pane_mut(&mut self) -> Option<&mut Pane> {
         match self.focus {
             Focus::Pane(id) => self.panes.get_mut(&id),
-            Focus::Explorer => None,
+            Focus::Explorer | Focus::Shell => None,
         }
     }
 
     pub fn focused_pane_id(&self) -> Option<PaneId> {
         match self.focus {
             Focus::Pane(id) => Some(id),
-            Focus::Explorer => None,
+            Focus::Explorer | Focus::Shell => None,
         }
     }
 
@@ -178,7 +185,7 @@ impl AppState {
         } = self;
         let pane_id = match self.focus {
             Focus::Pane(id) => id,
-            Focus::Explorer => return None,
+            Focus::Explorer | Focus::Shell => return None,
         };
         let pane = panes.get_mut(&pane_id)?;
         let doc_id = pane.active?;

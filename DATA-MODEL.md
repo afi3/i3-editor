@@ -78,17 +78,47 @@ its last workspace.
 | `documents: HashMap<DocumentId, Document>` | Buffers |
 | `panes: HashMap<PaneId, Pane>` | Viewports |
 | `workspaces` | Layouts and active index |
-| `focus: Explorer \| Pane(PaneId)` | Input target |
+| `focus: Explorer \| Pane(PaneId) \| Shell` | Input target |
 | `mode: Normal \| Prompt(PromptState)` | Input routing |
 | `keymap: KeyMap` | Three binding scopes |
 | `ui: UiState` | Rect cache, status message |
 | `config: AppConfig` | Parsed TOML |
+| `theme: Theme` | Resolved color palette |
 | `ids: Ids` | Id counters |
 | `warnings: Vec<String>` | Config and keymap problems |
 | `clipboard: String` | Internal clipboard |
 | `search: Option<Search>` | Query, match positions, current index |
 | `fullscreen: Option<PaneId>` | Pane shown over the whole pane area |
 | `moving: bool` | Grab mode: arrows move the focused pane |
+| `shell: Option<ShellPanel>` | Bottom terminal panel; dropping it kills the shell |
+| `themes_dir: PathBuf` | Directory scanned for `<name>.toml` themes |
+
+## Shell panel — `src/shell/`
+
+`ShellPanel` owns the PTY master, the writer, the child, an `mpsc` receiver fed by
+a reader thread, and a `vt100::Parser`. Invariants: parser size equals the last
+PTY size, `scrollback` equals the model's scrollback offset, and `poll_exit`
+reports a child exit exactly once. `encode_key` maps crossterm key events to the
+bytes a terminal would send; the panel is never rendered while `AppState::shell`
+is `None`, and dropping it kills the child.
+
+## Theme — `src/theme/`
+
+`Theme` holds the UI palette (`background`, `foreground`, `current_line`,
+`selection`, `gutter`, borders, tabs, status bar, explorer, prompt border) plus
+`SyntaxColors` for `keyword`, `string`, `comment`, `number`, `function`,
+`type_name`, `constant`, `operator`, and `punctuation`. Presets are code; files
+are `<config>/i3-editor/themes/<name>.toml` parsed into `ThemeFile`, where every
+field is optional and `base` names a preset to inherit. Unknown keys are errors by
+design, and each bad color value is reported while the inherited value survives.
+
+## Syntax — `src/syntax/`
+
+`Language::from_path` maps a file extension to one of Rust, Python,
+JavaScript/TypeScript, Go, C, Shell, TOML, JSON, Markdown, or `Unknown`.
+`highlight_line(language, line)` returns `Span { start, end, kind }` with char
+offsets inside that line; `TokenKind` is the color key used by `Theme`. There is
+no cross-line state, which is why block comments are highlighted per line.
 
 ## Prompt — `src/input/prompt.rs`
 

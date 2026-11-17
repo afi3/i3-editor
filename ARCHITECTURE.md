@@ -103,6 +103,43 @@ placement.
 explorer row and its `Instant`; a second click on the same row within 400 ms opens
 the entry. This keeps the behavior testable without a real terminal.
 
+**Theme colors come from presets or files, resolved once at startup.**
+`appearance.theme` first looks for `<config>/i3-editor/themes/<name>.toml`, then a
+built-in preset, then falls back to `default` with the available names in the
+message. A theme file may declare `base` to inherit a preset, and every field is
+optional; unknown keys are rejected by `serde(deny_unknown_fields)` so a typo is
+reported rather than ignored. Colors are parsed from `#rgb`, `#rrggbb`,
+`indexed:N`, or names. The resolved palette lives in `AppState::theme`, so
+rendering stays read-only. Text styles always set both foreground and background:
+Ratatui writes the style it is given per cell, so a `Style::default()` span would
+erase a themed background.
+
+**Syntax highlighting is lexical and in-crate.** `syntax::highlight_line` returns
+char-offset spans for one line, keyed by `Language::from_path`; rendering merges
+the token foreground with the row background and lets selection override both.
+This needs no grammar dependencies and costs one pass over the visible lines per
+frame. The tradeoff is explicit: multiline block comments and template strings are
+colored line by line, and identifiers are classified by convention, not by a
+parse tree. Tree-sitter remains the upgrade path for structural fidelity.
+
+**The terminal panel is a real PTY plus a VT100 model.** `shell::ShellPanel`
+spawns `$SHELL` through `portable-pty`, reads the master in a dedicated thread into
+an `mpsc` channel, and drains that channel in the event loop (`pump_shell`) before
+each draw. `vt100::Parser` turns bytes into a screen grid; rendering maps cells
+(colors, bold, underline, inverse) onto the theme and places the terminal cursor
+when the panel has focus. Resizing recomputes both the PTY size and the parser
+grid, and the panel reserves rows before panes are laid out, so the minimum pane
+size still holds. Dropping `ShellPanel` kills the child. Mouse reporting is not
+forwarded into the shell — clicks only focus the panel, and the wheel scrolls the
+model's scrollback.
+
+**Theme switching is a runtime state change, not a restart.** `select_theme`,
+`next_theme`, and `prev_theme` run through the same command path as everything
+else: `Theme::names` merges presets with `themes/*.toml`, `Theme::from_config`
+resolves the chosen name, and `AppState::theme` is replaced. Rendering reads the
+palette from state each frame, so panes, syntax, explorer, status bar, prompts,
+and the terminal panel all switch together.
+
 **Key bindings are data.** `KeyMap` holds three scopes (`global`, `editing`,
 `explorer`). Resolution is prompt, focused scope, global. Startup probes
 keyboard enhancement support, falls back to the `safe` preset, and reports
