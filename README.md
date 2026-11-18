@@ -6,6 +6,39 @@ tabs, panes, and workspaces, all inside the terminal.
 Built with Ratatui + Crossterm, with a Ropey text buffer and a grapheme-aware
 cursor. Configuration lives in TOML.
 
+![i3-editor demo](docs/demo.gif)
+
+## Install
+
+macOS (Intel and Apple Silicon) and Linux (x86_64 and aarch64):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/afi3/i3-editor/main/install.sh | sh
+```
+
+The installer downloads the release asset for your platform, verifies its
+SHA-256 checksum, and puts `i3-editor` in `~/.local/bin` (add that to `PATH` if the
+script asks). Options:
+
+```bash
+# custom location
+curl -fsSL https://raw.githubusercontent.com/afi3/i3-editor/main/install.sh \
+  | sh -s -- --prefix "$HOME/bin"
+
+# pinned version
+curl -fsSL https://raw.githubusercontent.com/afi3/i3-editor/main/install.sh \
+  | sh -s -- --version 0.1.0
+```
+
+`--help` prints all options; `I3_EDITOR_INSTALL_DIR` and `I3_EDITOR_VERSION` work
+too. If no matching release asset exists yet, the script falls back to
+`cargo install --git https://github.com/afi3/i3-editor --locked`, which needs a
+Rust toolchain from <https://rustup.rs>.
+
+Release binaries are produced by `.github/workflows/release.yml` when a `v*` tag
+is pushed. Without Cargo and without a release, install Rust first or build from
+source as shown below.
+
 ## Build and run
 
 ```bash
@@ -14,6 +47,8 @@ cargo run                      # open the current directory
 cargo run -- .                 # same, explicit
 cargo run -- src/main.rs       # open a file directly
 cargo run -- --dump-keymap     # print the resolved bindings and exit
+cargo run -- --version         # print the version
+cargo run -- --help            # usage summary
 ```
 
 Stable Rust 1.85+ (edition 2024). No system dependencies beyond a POSIX

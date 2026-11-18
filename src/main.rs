@@ -31,12 +31,30 @@ fn main() -> std::process::ExitCode {
 fn run() -> error::Result<()> {
     let mut target: Option<PathBuf> = None;
     let mut dump_keymap = false;
+    let mut show_version = false;
+    let mut show_help = false;
     for argument in std::env::args().skip(1) {
-        if argument == "--dump-keymap" {
-            dump_keymap = true;
-        } else if target.is_none() {
-            target = Some(PathBuf::from(argument));
+        match argument.as_str() {
+            "--dump-keymap" => dump_keymap = true,
+            "--version" | "-V" => show_version = true,
+            "--help" | "-h" => show_help = true,
+            other => {
+                if target.is_none() {
+                    target = Some(PathBuf::from(other));
+                }
+            }
         }
+    }
+
+    if show_version {
+        use std::io::Write;
+        let mut out = std::io::stdout();
+        let _ = writeln!(out, "i3-editor {}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
+    if show_help {
+        print_usage();
+        return Ok(());
     }
 
     let (config, warnings) = config::load();
@@ -67,4 +85,22 @@ fn run() -> error::Result<()> {
     let result = app::App::new(setup, config, warnings, target).and_then(app::App::run);
     terminal::restore(keyboard_enhancement);
     result
+}
+
+fn print_usage() {
+    use std::io::Write;
+
+    let mut out = std::io::stdout();
+    let _ = writeln!(
+        out,
+        "i3-editor {}\n\
+         \n\
+         usage: i3-editor [PATH] [--dump-keymap] [--version]\n\
+         \n\
+         PATH            file or directory to open (default: current directory)\n\
+         --dump-keymap   print resolved key bindings and theme, then exit\n\
+         --version, -V   print the version and exit\n\
+         --help, -h      print this help and exit",
+        env!("CARGO_PKG_VERSION")
+    );
 }
