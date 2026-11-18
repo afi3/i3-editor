@@ -28,7 +28,20 @@ curl -fsSL https://raw.githubusercontent.com/afi3/i3-editor/main/install.sh \
 # pinned version
 curl -fsSL https://raw.githubusercontent.com/afi3/i3-editor/main/install.sh \
   | sh -s -- --version 0.1.0
+
+# update an existing install
+curl -fsSL https://raw.githubusercontent.com/afi3/i3-editor/main/install.sh \
+  | sh -s -- --update
+
+# remove the binary (settings and themes are kept)
+curl -fsSL https://raw.githubusercontent.com/afi3/i3-editor/main/install.sh \
+  | sh -s -- --uninstall
 ```
+
+`--update` asks the GitHub API for the latest release, compares it with
+`i3-editor --version`, and exits early with `already up to date` when they match;
+combine it with `--version` to pin. `--uninstall` removes only the binary and
+reports the configuration directory, which stays on disk unless you delete it.
 
 `--help` prints all options; `I3_EDITOR_INSTALL_DIR` and `I3_EDITOR_VERSION` work
 too. If no matching release asset exists yet, the script falls back to
