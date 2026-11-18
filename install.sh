@@ -114,11 +114,14 @@ fi
 if [ -z "$installed" ]; then
     say "no release asset available for $target"
     command -v cargo >/dev/null 2>&1 || die "install Rust from https://rustup.rs, or download a release manually"
-    root=$(dirname "$PREFIX")
+    build_root=$(mktemp -d 2>/dev/null || mktemp -d -t i3-editor-build)
     say "building from source with cargo (this can take a few minutes)"
-    cargo install --git "https://github.com/$REPO" --locked --root "$root" \
+    cargo install --git "https://github.com/$REPO" --locked --root "$build_root" \
         || die "cargo install failed"
-    installed="$root/bin/$BIN"
+    cp "$build_root/bin/$BIN" "$PREFIX/$BIN" || die "cannot write $PREFIX/$BIN"
+    chmod 755 "$PREFIX/$BIN"
+    rm -rf "$build_root"
+    installed="$PREFIX/$BIN"
 fi
 
 say "installed $installed"
