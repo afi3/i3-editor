@@ -325,6 +325,7 @@ cargo fmt --check
 cargo check
 cargo test              # 133 unit + integration tests, no terminal required
 cargo clippy --all-targets --all-features
+python3 scripts/make_demo.py   # regenerate docs/demo.gif (needs pyte + Pillow)
 ```
 
 ## Known limitations

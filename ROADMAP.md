@@ -72,6 +72,9 @@ Delivered:
 - Unicode width/grapheme handling with tests.
 - Error handling through a single `Error` type; status-bar messages.
 - 133 unit and integration tests, `TestBackend` render tests.
+- `install.sh` one-liner (checksum-verified release download, Cargo fallback) and
+  a tag-driven release workflow for macOS/Linux on x86_64 and aarch64.
+- README demo GIF recorded from the real binary (`scripts/make_demo.py`).
 - `README.md`, `ARCHITECTURE.md`, `ROADMAP.md`.
 
 Not delivered yet:
