@@ -56,7 +56,7 @@ fn fixture(text: &str) -> (App, PathBuf) {
         workspaces,
         focus: Focus::Pane(pane_id),
         mode: InputMode::Normal,
-        keymap: KeyMap::default(),
+        keymap: KeyMap::preset(false),
         ui: ui::UiState::default(),
         config: AppConfig::default(),
         theme: crate::theme::Theme::default(),
@@ -68,6 +68,7 @@ fn fixture(text: &str) -> (App, PathBuf) {
         moving: false,
         shell: None,
         themes_dir: dir.join("themes"),
+        config_path: None,
     };
     ui::compute_layout(&mut state, ratatui::layout::Rect::new(0, 0, 80, 24));
     (App::headless(state), dir)
@@ -673,5 +674,132 @@ fn shell_focus_routes_keys_away_from_the_document() {
         .expect("document");
     assert_eq!(after, before);
     assert!(!app.state.documents.values().any(|document| document.dirty));
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn quit_with_clean_documents_exits_immediately() {
+    let (mut app, dir) = fixture("x\n");
+    app.dispatch(Command::Quit).expect("quit");
+    assert!(app.state.should_quit);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn quit_with_modified_documents_asks_first() {
+    let (mut app, dir) = fixture("x\n");
+    app.dispatch(Command::InsertText("y".to_string()))
+        .expect("type");
+    app.dispatch(Command::Quit).expect("quit");
+    assert!(!app.state.should_quit, "must not quit with unsaved changes");
+    assert!(matches!(app.state.mode, InputMode::Prompt(_)));
+
+    if let InputMode::Prompt(prompt) = &mut app.state.mode {
+        prompt.selected = 1; // "Discard all and quit"
+    }
+    app.submit_prompt().expect("discard");
+    assert!(app.state.should_quit);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn quit_can_save_every_document_first() {
+    let (mut app, dir) = fixture("x\n");
+    let path = app
+        .state
+        .active_document()
+        .and_then(|document| document.path.clone())
+        .expect("path");
+    app.dispatch(Command::InsertText("y".to_string()))
+        .expect("type");
+    app.dispatch(Command::Quit).expect("quit");
+
+    if let InputMode::Prompt(prompt) = &mut app.state.mode {
+        assert_eq!(prompt.selected_candidate(), Some("Save all and quit"));
+    }
+    app.submit_prompt().expect("save and quit");
+    assert!(app.state.should_quit);
+    assert_eq!(std::fs::read_to_string(&path).expect("read"), "yx\n");
+    assert!(!app.state.documents.values().any(|document| document.dirty));
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn quit_offers_only_discard_for_untitled_buffers() {
+    let (mut app, dir) = fixture("x\n");
+    app.dispatch(Command::NewPrompt).expect("new buffer");
+    app.dispatch(Command::InsertText("z".to_string()))
+        .expect("type");
+    app.dispatch(Command::Quit).expect("quit");
+
+    if let InputMode::Prompt(prompt) = &mut app.state.mode {
+        assert_eq!(prompt.candidates, vec!["Discard all and quit".to_string()]);
+    } else {
+        panic!("expected quit prompt");
+    }
+    app.state.should_quit = true; // do not actually discard in the fixture
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn closing_a_pane_with_unsaved_changes_is_refused() {
+    let (mut app, dir) = fixture("x\n");
+    app.dispatch(Command::SplitLeftRight).expect("split");
+    app.dispatch(Command::InsertText("y".to_string()))
+        .expect("type");
+    assert_eq!(app.state.panes.len(), 2);
+
+    app.dispatch(Command::ClosePane).expect("close");
+    assert_eq!(app.state.panes.len(), 2, "pane must stay open");
+    assert!(app.state.ui.message.contains("unsaved"));
+
+    app.dispatch(Command::Save).expect("save");
+    app.dispatch(Command::ClosePane).expect("close");
+    assert_eq!(app.state.panes.len(), 1);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn undo_back_to_the_saved_revision_clears_modified() {
+    let (mut app, dir) = fixture("x\n");
+    app.dispatch(Command::InsertText("y".to_string()))
+        .expect("type");
+    assert!(app.state.active_document().expect("doc").dirty);
+
+    app.dispatch(Command::Save).expect("save");
+    assert!(!app.state.active_document().expect("doc").dirty);
+
+    app.dispatch(Command::Undo).expect("undo");
+    assert!(app.state.active_document().expect("doc").dirty);
+
+    app.dispatch(Command::Redo).expect("redo");
+    assert!(!app.state.active_document().expect("doc").dirty);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn theme_choice_is_written_back_to_the_config_file() {
+    let (mut app, dir) = fixture("x\n");
+    let config_path = dir.join("config.toml");
+    std::fs::write(&config_path, "[editor]\ntab_size = 2\n").expect("write");
+    app.state.config_path = Some(config_path.clone());
+
+    app.dispatch(Command::NextTheme).expect("next");
+    let text = std::fs::read_to_string(&config_path).expect("read");
+    assert!(text.contains("theme = \"dark\""), "{text}");
+    assert!(text.contains("tab_size = 2"), "{text}");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn ctrl_q_key_asks_before_quitting() {
+    use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    let (mut app, dir) = fixture("x\n");
+    app.dispatch(Command::InsertText("y".to_string()))
+        .expect("type");
+    app.handle_key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL));
+    assert!(!app.state.should_quit);
+    assert!(matches!(app.state.mode, InputMode::Prompt(_)));
     std::fs::remove_dir_all(&dir).ok();
 }

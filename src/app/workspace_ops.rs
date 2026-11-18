@@ -61,6 +61,24 @@ impl App {
         if self.state.workspaces.active().layout.leaves().len() <= 1 {
             return Err(Error::LastPane);
         }
+        let dirty = self
+            .state
+            .panes
+            .get(&pane_id)
+            .map(|pane| {
+                pane.tabs.iter().any(|id| {
+                    self.state
+                        .documents
+                        .get(id)
+                        .map(|document| document.dirty)
+                        .unwrap_or(false)
+                })
+            })
+            .unwrap_or(false);
+        if dirty {
+            self.notify("pane has unsaved changes; save or close them first");
+            return Ok(());
+        }
         let mut layout = self.state.workspaces.active().layout.clone();
         if !layout.remove_pane(pane_id) {
             return Err(Error::UnknownPane(pane_id));
@@ -78,15 +96,7 @@ impl App {
             .ok_or(Error::UnknownPane(pane_id))?;
         for id in removed.tabs {
             if !self.state.is_document_referenced(id) {
-                let dirty = self
-                    .state
-                    .documents
-                    .get(&id)
-                    .map(|document| document.dirty)
-                    .unwrap_or(false);
-                if !dirty {
-                    self.state.documents.remove(&id);
-                }
+                self.state.documents.remove(&id);
             }
         }
 

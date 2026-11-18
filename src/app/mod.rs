@@ -85,6 +85,7 @@ impl App {
             workspaces: vec![Workspace::new(workspace_id, name, pane_id)],
             active: 0,
         };
+        let config_path = crate::config::default_path();
         let (keymap, key_warnings) = KeyMap::from_config(&config.keys);
         let themes_dir = crate::config::themes_dir().unwrap_or_default();
         let (theme, theme_warnings) =
@@ -110,6 +111,7 @@ impl App {
             moving: false,
             shell: None,
             themes_dir,
+            config_path,
         };
         state.warnings.extend(key_warnings);
         state.warnings.extend(theme_warnings);
@@ -174,9 +176,11 @@ impl App {
     }
 
     fn handle_key_combo(&mut self, key: KeyEvent, combo: KeyCombo) {
-        // Quit is the one binding that always wins, even inside a prompt.
+        // Quit is the one binding that always wins, but modified documents still
+        // have to be saved or discarded explicitly.
         if matches!(self.state.keymap.global.get(&combo), Some(Command::Quit)) {
-            self.state.should_quit = true;
+            let result = self.request_quit();
+            self.finish(result);
             return;
         }
         if self.state.mode.is_prompt() {

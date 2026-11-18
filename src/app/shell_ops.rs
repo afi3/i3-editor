@@ -93,8 +93,14 @@ impl App {
         let (theme, warnings) = Theme::from_config(&appearance, &self.state.themes_dir);
         self.state.theme = theme;
         self.state.config.appearance.theme = name.to_string();
-        match warnings.first() {
-            Some(warning) => self.notify(warning.clone()),
+        let mut message = warnings.first().cloned();
+        if let Some(path) = self.state.config_path.clone()
+            && let Err(error) = crate::config::persist_theme_at(&path, name)
+        {
+            message = Some(format!("theme applied, config not saved: {error}"));
+        }
+        match message {
+            Some(message) => self.notify(message),
             None => self.notify(format!("theme: {name}")),
         }
     }

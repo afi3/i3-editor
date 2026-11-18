@@ -273,6 +273,7 @@ Collapse rules:
 - A `Split` with zero children is removed from its parent.
 - A `Workspace` whose root collapses to nothing is replaced with a single empty `Pane` carrying a fresh `PaneId`.
 - Closing a pane removes its `LayoutNode`; the pane's tabs are reassigned to a sibling pane or closed with the pane, and the `Pane` entry is dropped afterwards.
+- A pane holding modified documents cannot be closed until they are saved or closed explicitly, so no document becomes unreachable.
 - Closing a pane never drops a dirty `Document`. The document stays registered and unreferenced until the user saves, discards, or reopens it in a pane.
 
 Use Ratatui Layout for rendering calculated regions.
@@ -368,6 +369,8 @@ Rules:
 - Each batch restores cursor and scroll to `cursor_before` and `scroll_before` on undo.
 - The redo stack is cleared by the first new edit after an undo.
 - `char_idx` is a Ropey char index. Never a byte offset, never a line/column pair.
+- History keeps at most 1000 batches; the oldest are dropped.
+- Every batch records the revision it produced and its parent revision. A document is modified when the current revision differs from the saved revision, so undoing back to the saved state clears the modified marker and redo restores it.
 
 ## 6. Project Structure
 
@@ -647,6 +650,10 @@ type name, constant, operator, punctuation). Colors accept `#rgb`, `#rrggbb`,
 its inherited value.
 
 Support sensible defaults when the configuration file does not exist.
+
+Changing the theme from the palette writes the new `theme` value back to the
+configuration file. Only that key is rewritten; other sections, comments, and key
+bindings must be preserved.
 
 Invalid configuration must not brick startup. A malformed entry produces a warning that names the file, line, and entry, falls back to the built-in default for that entry alone, and keeps the rest of the user configuration.
 

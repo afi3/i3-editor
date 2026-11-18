@@ -125,7 +125,7 @@ impl Document {
         self.rope.insert(char_idx, text);
         self.history
             .record_insert(char_idx, text, cursor_before, scroll_before);
-        self.dirty = true;
+        self.dirty = self.history.is_modified();
     }
 
     pub fn remove(
@@ -143,20 +143,20 @@ impl Document {
         self.rope.remove(start..end);
         self.history
             .record_remove(start, &text, cursor_before, scroll_before);
-        self.dirty = true;
+        self.dirty = self.history.is_modified();
         text
     }
 
     /// Returns `(cursor, scroll)` to restore on the pane that issued the edit.
     pub fn undo(&mut self) -> Option<(usize, (usize, u16))> {
         let restore = self.history.undo(&mut self.rope)?;
-        self.dirty = true;
+        self.dirty = self.history.is_modified();
         Some(restore)
     }
 
     pub fn redo(&mut self) -> Option<(usize, (usize, u16))> {
         let restore = self.history.redo(&mut self.rope)?;
-        self.dirty = true;
+        self.dirty = self.history.is_modified();
         Some(restore)
     }
 
@@ -173,6 +173,7 @@ impl Document {
         let text = self.eol.normalize(&self.rope.to_string());
         std::fs::write(&path, text).map_err(|error| Error::io("write", &path, error))?;
         self.path = Some(path);
+        self.history.mark_saved();
         self.dirty = false;
         Ok(())
     }

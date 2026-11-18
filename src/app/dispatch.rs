@@ -10,7 +10,7 @@ use super::App;
 impl App {
     pub fn dispatch(&mut self, command: Command) -> Result<()> {
         match command {
-            Command::Quit => self.state.should_quit = true,
+            Command::Quit => self.request_quit()?,
             Command::Save => self.save()?,
             Command::SavePrompt => self.open_prompt(PromptKind::SaveAs),
             Command::OpenPrompt | Command::QuickOpen => self.open_prompt(PromptKind::QuickOpen),

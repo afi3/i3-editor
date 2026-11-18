@@ -11,6 +11,57 @@ use crate::state::{AppState, DocumentId, Focus};
 use super::App;
 
 impl App {
+    /// Quit through a confirmation while any document is modified.
+    pub(crate) fn request_quit(&mut self) -> Result<()> {
+        let dirty: Vec<DocumentId> = self
+            .state
+            .documents
+            .iter()
+            .filter(|(_, document)| document.dirty)
+            .map(|(id, _)| *id)
+            .collect();
+        if dirty.is_empty() {
+            self.state.should_quit = true;
+            return Ok(());
+        }
+        let all_saved = dirty
+            .iter()
+            .all(|id| self.state.documents[id].path.is_some());
+        let mut candidates = Vec::new();
+        if all_saved {
+            candidates.push("Save all and quit".to_string());
+        }
+        candidates.push("Discard all and quit".to_string());
+        let mut prompt = crate::input::PromptState::new(PromptKind::QuitDirty);
+        prompt.set_candidates(candidates);
+        self.state.mode = crate::state::InputMode::Prompt(prompt);
+        self.notify(format!(
+            "{} modified document(s): save all or discard all",
+            dirty.len()
+        ));
+        Ok(())
+    }
+
+    /// Save every modified document that has a path.
+    pub(crate) fn save_all(&mut self) -> Result<()> {
+        let ids: Vec<DocumentId> = self
+            .state
+            .documents
+            .iter()
+            .filter(|(_, document)| document.dirty)
+            .map(|(id, _)| *id)
+            .collect();
+        for id in ids {
+            let document = self
+                .state
+                .documents
+                .get_mut(&id)
+                .ok_or(Error::UnknownDocument(id))?;
+            document.save()?;
+        }
+        Ok(())
+    }
+
     pub(crate) fn save(&mut self) -> Result<()> {
         let Some(document) = self.state.active_document() else {
             return Err(Error::NoActiveDocument);

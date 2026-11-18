@@ -133,6 +133,13 @@ size still holds. Dropping `ShellPanel` kills the child. Mouse reporting is not
 forwarded into the shell — clicks only focus the panel, and the wheel scrolls the
 model's scrollback.
 
+**Nothing modified is discarded without an explicit choice.** `Ctrl+Q` with
+modified documents opens a prompt offering save-all/discard-all (discard only for
+untitled buffers, which cannot be saved blindly); `F6` refuses to close a pane
+whose tabs include modified documents, so no document becomes unreachable. Both
+paths reuse the existing command/prompt machinery, so the guard is testable
+without a terminal.
+
 **Theme switching is a runtime state change, not a restart.** `select_theme`,
 `next_theme`, and `prev_theme` run through the same command path as everything
 else: `Theme::names` merges presets with `themes/*.toml`, `Theme::from_config`
@@ -145,10 +152,12 @@ and the terminal panel all switch together.
 keyboard enhancement support, falls back to the `safe` preset, and reports
 conflicts instead of silently dropping a binding.
 
-**Undo is an operation log.** Ropey has no history. Each `Edit` records the
-char index and the text it inserted or removed; `Batch` adds cursor and scroll
-to restore and coalesces typing within 300 ms, breaking the run on a newline,
-cursor move, or non-insert operation.
+**Undo is an operation log with revisions.** Ropey has no history. Each `Edit`
+records the char index and the text it inserted or removed; each `Batch` carries
+cursor/scroll restoration plus `id`/`parent` revisions. `History` tracks `current`
+and `saved`, so `Document::dirty` is derived from the revision position rather than
+set blindly: undo back to the saved state clears the marker, redo restores it.
+Depth is capped at 1000 batches, dropping the oldest so long sessions stay bounded.
 
 **Cursor positions are char indices.** Byte offsets and display columns are
 derived at the boundary by `editor::text`, which uses `unicode-segmentation` for

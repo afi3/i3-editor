@@ -146,6 +146,8 @@ pub struct AppState {
     pub shell: Option<crate::shell::ShellPanel>,
     /// Directory scanned for `<name>.toml` themes.
     pub themes_dir: std::path::PathBuf,
+    /// User config file, when one can be resolved; theme choices are written here.
+    pub config_path: Option<std::path::PathBuf>,
 }
 
 impl AppState {

@@ -65,11 +65,13 @@ Delivered:
 - Bottom terminal panel running a real shell (`portable-pty` + `vt100`), opened
   and closed from the palette, with theme-aware rendering and scrollback.
 - Runtime theme switching from the palette (`select_theme`, `next_theme`,
-  `prev_theme`).
+  `prev_theme`), persisted back into `config.toml` without disturbing other keys.
+- Quit confirmation with save-all/discard-all, pane-close guard for modified
+  documents, and bounded undo (1000 batches) that tracks the saved revision.
 - Keymap presets and capability handling.
 - Unicode width/grapheme handling with tests.
 - Error handling through a single `Error` type; status-bar messages.
-- 116 unit and integration tests, `TestBackend` render tests.
+- 133 unit and integration tests, `TestBackend` render tests.
 - `README.md`, `ARCHITECTURE.md`, `ROADMAP.md`.
 
 Not delivered yet:
@@ -77,8 +79,6 @@ Not delivered yet:
 - `editor.word_wrap` and `workspace.auto_save_session` are parsed but unused.
   Either implement them or remove the keys.
 - Find highlights only the current match; there is no match list UI.
-- Undo does not clear the modified flag when the buffer returns to the saved
-  state (needs a save revision counter).
 - No session persistence across restarts.
 - Terminal panel limits: no mouse reporting into shell programs, one panel only,
   shell path is `$SHELL` (not configurable), scrollback is fixed at 2000 lines.
@@ -96,4 +96,4 @@ cargo clippy --all-targets --all-features
 cargo run -- --dump-keymap
 ```
 
-Last recorded run: `cargo test` → 116 passed, `cargo clippy` → 0 warnings.
+Last recorded run: `cargo test` → 133 passed, `cargo clippy` → 0 warnings.

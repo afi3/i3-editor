@@ -16,6 +16,7 @@ pub enum PromptKind {
     Rename,
     Delete,
     Discard,
+    QuitDirty,
     GoToLine,
     Theme,
 }
@@ -33,6 +34,7 @@ impl PromptKind {
             PromptKind::Rename => "Rename",
             PromptKind::Delete => "Delete",
             PromptKind::Discard => "Unsaved changes: Enter discards, Esc cancels",
+            PromptKind::QuitDirty => "Unsaved changes",
             PromptKind::GoToLine => "Go to Line",
             PromptKind::Theme => "Theme",
         }
@@ -42,7 +44,7 @@ impl PromptKind {
     pub fn fields(self) -> usize {
         match self {
             PromptKind::Replace => 2,
-            PromptKind::Delete | PromptKind::Discard => 0,
+            PromptKind::Delete | PromptKind::Discard | PromptKind::QuitDirty => 0,
             _ => 1,
         }
     }
@@ -50,7 +52,10 @@ impl PromptKind {
     pub fn lists_candidates(self) -> bool {
         matches!(
             self,
-            PromptKind::CommandPalette | PromptKind::QuickOpen | PromptKind::Theme
+            PromptKind::CommandPalette
+                | PromptKind::QuickOpen
+                | PromptKind::Theme
+                | PromptKind::QuitDirty
         )
     }
 }

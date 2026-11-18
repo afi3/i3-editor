@@ -183,6 +183,17 @@ sequences are suppressed and the theme has no visible effect. `--dump-keymap`
 prints the resolved theme name, which is the quickest way to confirm a config and
 theme file were read.
 
+### Saving and quitting
+
+- `Ctrl+Q` with modified documents opens a prompt with `Save all and quit` and
+  `Discard all and quit`; arrow keys choose, `Enter` confirms, `Esc` cancels.
+  Untitled buffers must be saved first (they only offer discard).
+- `Ctrl+W` on a modified document asks before discarding.
+- `F6` is refused while the pane still holds modified documents; save or close
+  them first, so no document becomes unreachable.
+- Undo keeps the last 1000 batches. Undoing back to the saved revision clears the
+  modified marker, and redo restores it.
+
 ## Terminal panel
 
 The editor can host a real shell in a panel at the bottom of the window, outside
@@ -211,8 +222,11 @@ visible but unfocused, and 250 ms otherwise.
 | `next_theme` | Apply the next theme in that list |
 | `prev_theme` | Apply the previous theme |
 
-The switch is immediate and updates `appearance.theme` in memory, so the panel,
-syntax colors, status bar, and explorer all follow without a restart.
+The switch is immediate and updates `appearance.theme` in memory **and in the
+config file**: the `theme` line is rewritten while other sections, comments, and
+key bindings stay untouched. If the write fails, the theme still applies and the
+status bar reports the error. Presets, syntax colors, status bar, and explorer all
+follow without a restart.
 
 ## Configuration
 
@@ -274,7 +288,7 @@ Conflicts and unknown names are reported, never silently dropped.
 ```bash
 cargo fmt --check
 cargo check
-cargo test              # 116 unit + integration tests, no terminal required
+cargo test              # 133 unit + integration tests, no terminal required
 cargo clippy --all-targets --all-features
 ```
 

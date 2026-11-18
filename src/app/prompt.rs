@@ -125,6 +125,17 @@ impl App {
                 self.apply_theme(&name);
                 Ok(())
             }
+            PromptKind::QuitDirty => {
+                match prompt.selected_candidate() {
+                    Some("Save all and quit") => {
+                        self.save_all()?;
+                        self.state.should_quit = true;
+                    }
+                    Some("Discard all and quit") => self.state.should_quit = true,
+                    _ => {}
+                }
+                Ok(())
+            }
         }
     }
 
@@ -194,6 +205,7 @@ impl App {
                 prompt.set_candidates(crate::theme::Theme::names(&self.state.themes_dir));
                 prompt.select_candidate(&self.state.config.appearance.theme);
             }
+            PromptKind::QuitDirty => {}
             PromptKind::GoToLine => {
                 if let (Some(pane), Some(document)) =
                     (self.state.focused_pane(), self.state.active_document())

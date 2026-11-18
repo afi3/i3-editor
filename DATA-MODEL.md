@@ -26,12 +26,16 @@ stores tabs literally, expansion is a render concern.
 ## History — `src/editor/history.rs`
 
 `Edit::Insert { char_idx, text }` / `Edit::Remove { char_idx, text }` and
-`Batch { edits, cursor_before, cursor_after, scroll_before }`.
+`Batch { edits, cursor_before, cursor_after, scroll_before, id, parent }`.
 
 - `char_idx` is a Rope char index, never a byte offset.
 - Undo applies inverses in reverse order; redo reapplies forward.
 - Insert runs coalesce while consecutive, contiguous, newline-free, and less than
   300 ms apart. Any other operation breaks the run and clears the redo stack.
+- Batches form a chain: pushing a batch records `id`/`parent` and sets
+  `current = id`; undo restores `current = parent`; redo returns to `id`.
+  `mark_saved` stores the current revision, so `is_modified()` answers whether the
+  buffer differs from the last save. `MAX_BATCHES = 1000` bounds memory.
 
 ## Pane — `src/state.rs`
 
@@ -92,6 +96,7 @@ its last workspace.
 | `moving: bool` | Grab mode: arrows move the focused pane |
 | `shell: Option<ShellPanel>` | Bottom terminal panel; dropping it kills the shell |
 | `themes_dir: PathBuf` | Directory scanned for `<name>.toml` themes |
+| `config_path: Option<PathBuf>` | Config file rewritten when the theme changes |
 
 ## Shell panel — `src/shell/`
 

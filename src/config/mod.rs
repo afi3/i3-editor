@@ -251,3 +251,144 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 }
+
+pub fn persist_theme_at(path: &Path, name: &str) -> std::io::Result<()> {
+    let existing = std::fs::read_to_string(path).unwrap_or_default();
+    let updated = set_theme_value(&existing, name);
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent)?;
+    }
+    let temporary = path.with_extension("toml.tmp");
+    std::fs::write(&temporary, updated)?;
+    std::fs::rename(&temporary, path)?;
+    Ok(())
+}
+
+fn set_theme_value(text: &str, name: &str) -> String {
+    let escaped = name.replace('\\', "\\\\").replace('"', "\\\"");
+    let mut lines: Vec<String> = text.lines().map(str::to_string).collect();
+
+    let mut section_start = None;
+    let mut section_end = lines.len();
+    for (index, line) in lines.iter().enumerate() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with('[') {
+            let header = trimmed.split('#').next().unwrap_or("").trim();
+            match section_start {
+                Some(_) => {
+                    section_end = index;
+                    break;
+                }
+                None if header == "[appearance]" => section_start = Some(index),
+                None => {}
+            }
+        }
+    }
+
+    match section_start {
+        Some(start) => {
+            let key = (start + 1..section_end.min(lines.len())).find(|index| {
+                let trimmed = lines[*index].trim_start();
+                trimmed
+                    .split('=')
+                    .next()
+                    .map(|name| name.trim() == "theme")
+                    .unwrap_or(false)
+            });
+            match key {
+                Some(index) => lines[index] = format!("theme = \"{escaped}\""),
+                None => lines.insert(start + 1, format!("theme = \"{escaped}\"")),
+            }
+        }
+        None => {
+            if lines.last().is_some_and(|line| !line.trim().is_empty()) {
+                lines.push(String::new());
+            }
+            lines.push("[appearance]".to_string());
+            lines.push(format!("theme = \"{escaped}\""));
+        }
+    }
+
+    let mut out = lines.join("\n");
+    out.push('\n');
+    out
+}
+
+#[cfg(test)]
+mod theme_persist_tests {
+    use super::*;
+
+    fn temp(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("i3-persist-{}-{name}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        dir.join("config.toml")
+    }
+
+    #[test]
+    fn replaces_theme_and_keeps_other_sections() {
+        let path = temp("replace");
+        std::fs::write(
+            &path,
+            "[editor]\ntab_size = 2\n\n[appearance]\n# look\nshow_status_bar = false\ntheme = \"dark\"\n\n[terminal]\nheight = 8\n",
+        )
+        .expect("write");
+        persist_theme_at(&path, "mine").expect("persist");
+        let text = std::fs::read_to_string(&path).expect("read");
+        assert!(text.contains("theme = \"mine\""), "{text}");
+        assert!(text.contains("tab_size = 2"), "{text}");
+        assert!(text.contains("height = 8"), "{text}");
+        assert!(text.contains("# look"), "{text}");
+        assert_eq!(text.matches("theme =").count(), 1, "{text}");
+        assert!(!text.contains("theme = \"dark\""), "{text}");
+        std::fs::remove_dir_all(path.parent().expect("parent")).ok();
+    }
+
+    #[test]
+    fn appends_the_section_when_missing() {
+        let path = temp("append");
+        std::fs::write(&path, "[editor]\ntab_size = 2\n").expect("write");
+        persist_theme_at(&path, "light").expect("persist");
+        let text = std::fs::read_to_string(&path).expect("read");
+        assert!(text.contains("[appearance]"), "{text}");
+        assert!(text.contains("theme = \"light\""), "{text}");
+        assert!(text.contains("tab_size = 2"), "{text}");
+        std::fs::remove_dir_all(path.parent().expect("parent")).ok();
+    }
+
+    #[test]
+    fn inserts_the_key_into_an_existing_section() {
+        let path = temp("insert");
+        std::fs::write(
+            &path,
+            "[appearance]\nshow_status_bar = true\n[terminal]\nheight = 8\n",
+        )
+        .expect("write");
+        persist_theme_at(&path, "high-contrast").expect("persist");
+        let text = std::fs::read_to_string(&path).expect("read");
+        let appearance = text.find("[appearance]").expect("section");
+        let terminal = text.find("[terminal]").expect("terminal");
+        let theme = text.find("theme = \"high-contrast\"").expect("theme");
+        assert!(appearance < theme && theme < terminal, "{text}");
+        std::fs::remove_dir_all(path.parent().expect("parent")).ok();
+    }
+
+    #[test]
+    fn creates_a_missing_file() {
+        let path = temp("create");
+        persist_theme_at(&path, "dark").expect("persist");
+        let text = std::fs::read_to_string(&path).expect("read");
+        assert_eq!(text, "[appearance]\ntheme = \"dark\"\n");
+        std::fs::remove_dir_all(path.parent().expect("parent")).ok();
+    }
+
+    #[test]
+    fn escapes_quotes_in_the_name() {
+        let path = temp("escape");
+        persist_theme_at(&path, "a\"b").expect("persist");
+        let text = std::fs::read_to_string(&path).expect("read");
+        assert!(text.contains("theme = \"a\\\"b\""), "{text}");
+        std::fs::remove_dir_all(path.parent().expect("parent")).ok();
+    }
+}

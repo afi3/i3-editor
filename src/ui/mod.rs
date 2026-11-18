@@ -401,6 +401,7 @@ mod tests {
             moving: false,
             shell: None,
             themes_dir: std::path::PathBuf::new(),
+            config_path: None,
         };
         (state, dir)
     }
@@ -600,6 +601,21 @@ mod tests {
         assert_eq!(state.ui.tab_bars.len(), 1);
         assert_eq!(state.ui.tab_bars[0].tabs.len(), 2);
         assert!(screen.contains("main.rs"), "{screen}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn renders_quit_prompt_options() {
+        let (mut state, dir) = state("abc\n");
+        let mut prompt = PromptState::new(PromptKind::QuitDirty);
+        prompt.set_candidates(vec![
+            "Save all and quit".to_string(),
+            "Discard all and quit".to_string(),
+        ]);
+        state.mode = InputMode::Prompt(prompt);
+        let screen = draw(&mut state, 80, 24);
+        assert!(screen.contains("Save all and quit"), "{screen}");
+        assert!(screen.contains("Discard all and quit"), "{screen}");
         std::fs::remove_dir_all(&dir).ok();
     }
 
