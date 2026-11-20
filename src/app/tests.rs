@@ -42,6 +42,7 @@ fn fixture(text: &str) -> (App, PathBuf) {
             dirty: false,
             eol: Eol::Lf,
             history: History::default(),
+            syntax: Default::default(),
         },
     );
 
@@ -802,4 +803,216 @@ fn ctrl_q_key_asks_before_quitting() {
     assert!(!app.state.should_quit);
     assert!(matches!(app.state.mode, InputMode::Prompt(_)));
     std::fs::remove_dir_all(&dir).ok();
+}
+
+fn press(app: &mut App, code: ratatui::crossterm::event::KeyCode) {
+    app.handle_key(ratatui::crossterm::event::KeyEvent::new(
+        code,
+        ratatui::crossterm::event::KeyModifiers::NONE,
+    ));
+}
+
+fn type_query(app: &mut App, query: &str) {
+    for ch in query.chars() {
+        press(app, ratatui::crossterm::event::KeyCode::Char(ch));
+    }
+}
+
+#[test]
+fn find_previews_every_match_while_typing() {
+    let (mut app, dir) = fixture("alpha\nbeta alpha\n");
+    app.dispatch(Command::FindPrompt).expect("open find");
+    type_query(&mut app, "alpha");
+
+    let search = app.state.search.as_ref().expect("live search");
+    assert_eq!(search.matches, vec![0, 11]);
+    assert_eq!(search.index, 0);
+    assert_eq!(cursor(&app), 0);
+    assert_eq!(app.state.ui.message, "alpha: match 1/2");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn find_arrow_picks_a_match_and_enter_keeps_it() {
+    let (mut app, dir) = fixture("alpha\nbeta alpha\n");
+    app.dispatch(Command::FindPrompt).expect("open find");
+    type_query(&mut app, "alpha");
+    press(&mut app, ratatui::crossterm::event::KeyCode::Down);
+
+    let search = app.state.search.as_ref().expect("live search");
+    assert_eq!(search.index, 1);
+    assert_eq!(cursor(&app), 11);
+    assert_eq!(
+        app.state.focused_pane().expect("pane").selection(),
+        Some(11..16)
+    );
+
+    press(&mut app, ratatui::crossterm::event::KeyCode::Enter);
+    assert!(!app.state.mode.is_prompt());
+    let search = app.state.search.as_ref().expect("kept search");
+    assert_eq!(search.index, 1);
+    assert_eq!(search.matches.len(), 2);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn find_without_matches_keeps_an_empty_match_list() {
+    let (mut app, dir) = fixture("alpha\n");
+    app.dispatch(Command::FindPrompt).expect("open find");
+    type_query(&mut app, "zzz");
+
+    let search = app.state.search.as_ref().expect("search state");
+    assert!(search.matches.is_empty());
+    assert_eq!(app.state.ui.message, "no match for zzz");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn next_match_advances_and_wraps() {
+    let (mut app, dir) = fixture("alpha\nbeta alpha\n");
+    app.dispatch(Command::FindPrompt).expect("open find");
+    type_query(&mut app, "alpha");
+    press(&mut app, ratatui::crossterm::event::KeyCode::Enter);
+
+    app.dispatch(Command::NextMatch).expect("next");
+    assert_eq!(cursor(&app), 11);
+    app.dispatch(Command::NextMatch).expect("wrap");
+    assert_eq!(cursor(&app), 0);
+    std::fs::remove_dir_all(&dir).ok();
+}
+#[test]
+fn quick_open_uses_fuzzy_ranking() {
+    let (mut app, dir) = fixture("note\n");
+    std::fs::create_dir_all(dir.join("src")).expect("src dir");
+    std::fs::write(dir.join("src").join("main.rs"), "fn main() {}\n").expect("file");
+    std::fs::create_dir_all(dir.join("docs")).expect("docs dir");
+    std::fs::write(dir.join("docs").join("domain_main.md"), "# notes\n").expect("doc");
+
+    app.dispatch(Command::QuickOpen).expect("quick open");
+    type_query(&mut app, "sm");
+
+    let InputMode::Prompt(prompt) = &app.state.mode else {
+        panic!("quick open prompt missing")
+    };
+    assert_eq!(prompt.selected_candidate(), Some("src/main.rs"));
+
+    press(&mut app, ratatui::crossterm::event::KeyCode::Enter);
+    let path = app
+        .state
+        .active_document()
+        .and_then(|document| document.path.clone())
+        .expect("opened document");
+    assert!(path.ends_with("src/main.rs"), "{}", path.display());
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn tab_inserts_spaces_up_to_the_next_stop() {
+    let (mut app, dir) = fixture("x\n");
+    app.state.config.editor.tab_size = 4;
+    app.dispatch(Command::InsertTab).expect("tab");
+    assert_eq!(text(&app), "    x\n");
+    assert_eq!(cursor(&app), 4);
+
+    let (mut app, dir_two) = fixture("x\n");
+    app.state.config.editor.tab_size = 4;
+    app.dispatch(Command::InsertText("abc".to_string()))
+        .expect("type");
+    press(&mut app, ratatui::crossterm::event::KeyCode::Tab);
+    assert_eq!(
+        text(&app),
+        "abc x\n",
+        "one space reaches the stop at column 4"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+    std::fs::remove_dir_all(&dir_two).ok();
+}
+
+#[test]
+fn tab_is_literal_when_insert_spaces_is_off() {
+    let (mut app, dir) = fixture("x\n");
+    app.state.config.editor.insert_spaces = false;
+    app.dispatch(Command::InsertTab).expect("tab");
+    assert_eq!(text(&app), "\tx\n");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn save_as_existing_path_asks_before_overwriting() {
+    let (mut app, dir) = fixture("one\n");
+    let other = dir.join("other.txt");
+    std::fs::write(&other, "keep\n").expect("seed");
+
+    app.dispatch(Command::SavePrompt).expect("save as");
+    let InputMode::Prompt(prompt) = &mut app.state.mode else {
+        panic!("save-as prompt missing")
+    };
+    prompt.fields[0] = other.to_string_lossy().into_owned();
+    app.submit_prompt().expect("submit");
+
+    let InputMode::Prompt(prompt) = &app.state.mode else {
+        panic!("overwrite confirmation missing")
+    };
+    assert_eq!(prompt.kind, crate::input::PromptKind::Overwrite);
+    assert_eq!(prompt.target.as_deref(), Some(other.as_path()));
+    assert_eq!(std::fs::read_to_string(&other).expect("read"), "keep\n");
+
+    press(&mut app, ratatui::crossterm::event::KeyCode::Enter);
+    assert!(!app.state.mode.is_prompt());
+    assert_eq!(std::fs::read_to_string(&other).expect("read"), "one\n");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn save_as_new_path_writes_without_confirmation() {
+    let (mut app, dir) = fixture("one\n");
+    let new = dir.join("new.txt");
+
+    app.dispatch(Command::SavePrompt).expect("save as");
+    let InputMode::Prompt(prompt) = &mut app.state.mode else {
+        panic!("save-as prompt missing")
+    };
+    prompt.fields[0] = new.to_string_lossy().into_owned();
+    app.submit_prompt().expect("submit");
+
+    assert!(!app.state.mode.is_prompt());
+    assert_eq!(std::fs::read_to_string(&new).expect("read"), "one\n");
+    assert_eq!(
+        app.state
+            .active_document()
+            .and_then(|document| document.path.clone()),
+        Some(new)
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn config_visibility_is_applied_at_startup() {
+    use crate::terminal::Setup;
+    use ratatui::Terminal;
+    use ratatui::backend::CrosstermBackend;
+    use ratatui::layout::Rect;
+
+    let backend = CrosstermBackend::new(std::io::stdout());
+    let terminal = Terminal::with_options(
+        backend,
+        ratatui::TerminalOptions {
+            viewport: ratatui::Viewport::Fixed(Rect::new(0, 0, 80, 24)),
+        },
+    )
+    .expect("terminal");
+
+    let mut config = AppConfig::default();
+    config.explorer.visible = false;
+    let app = App::new(
+        Setup {
+            terminal,
+            keyboard_enhancement: false,
+        },
+        config,
+        Vec::new(),
+        None,
+    )
+    .expect("app");
+    assert!(!app.state.explorer.visible);
 }

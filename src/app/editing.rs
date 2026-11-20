@@ -350,6 +350,28 @@ impl App {
         Ok(())
     }
 
+    /// `Tab` inserts spaces up to the next tab stop, or a literal tab when
+    /// `editor.insert_spaces` is off.
+    pub(crate) fn insert_tab(&mut self) -> Result<()> {
+        if !self.state.config.editor.insert_spaces {
+            return self.insert_text("\t");
+        }
+        let tab_size = self.state.config.editor.tab_size.max(1);
+        let spaces = {
+            let Some((pane, document)) = self.state.pane_and_document() else {
+                return Ok(());
+            };
+            let line = document.line_of_char(pane.cursor);
+            let line_start = document.char_of_line(line);
+            let text = document.line_text(line);
+            let column =
+                textutil::cells_prefix(&text, pane.cursor.saturating_sub(line_start), tab_size);
+            let tab = u16::try_from(tab_size).unwrap_or(u16::MAX);
+            (tab - (column % tab)) as usize
+        };
+        self.insert_text(&" ".repeat(spaces))
+    }
+
     pub(crate) fn insert_newline(&mut self) -> Result<()> {
         let auto_indent = self.state.config.editor.auto_indent;
         let indent = {

@@ -115,6 +115,7 @@ no `Alt+<letter>`, no `Ctrl+2`..`Ctrl+8`.
 | `Ctrl+C` / `Ctrl+X` / `Ctrl+V` | Copy / cut / paste |
 | `Ctrl+F` / `Ctrl+R` | Find / replace all |
 | `Ctrl+D` | Duplicate line |
+| `Tab` | Indent: spaces to the next stop, or a literal tab |
 
 Explorer focus keys: `Up`/`Down`, `Enter` (open), `Right`/`Left` (expand or
 collapse), `n` new file, `Shift+N` new directory, `r` rename, `d` delete,
@@ -129,6 +130,37 @@ Mouse: click a pane to focus it, drag a pane border to resize the split.
 - Explorer: click selects a row, double-click opens the file (or toggles a
   directory), wheel moves the selection three rows at a time.
 - Container tab strip: click a tab to activate it.
+
+### Quick open and command palette
+
+`Ctrl+P` / `Ctrl+O` list project files and `F1` lists commands. Both match fuzzy,
+scored by [Nucleo](https://github.com/helix-editor/nucleo): the query is a
+subsequence of the candidate, with bonuses at path separators, underscores, and
+word boundaries, and smart case (an uppercase letter in the query makes matching
+case-sensitive).
+
+| Query | Result |
+|---|---|
+| `sm` | `src/main.rs`, ranked above `docs/domain_main.md` |
+| `tt` | `toggle_terminal` |
+| `SM` | only candidates containing uppercase `S` then `M` |
+
+Enter opens the selected candidate. While typing, the best-ranked candidate is
+selected, so Enter acts on what the list shows. After `Up` / `Down`, the chosen
+candidate is kept across further keystrokes; it falls back to the best match once
+it no longer matches the query.
+
+### Find and replace
+
+`Ctrl+F` opens Find and searches as you type: every match is highlighted in the
+document, the prompt lists matching lines with their line numbers (`Find 2/57` in
+the title), and the cursor jumps to the selected match.
+
+- `Up` / `Down` step through the list and wrap at both ends.
+- `Enter` keeps the selected match, closes the prompt, and leaves the search
+  active; `next_match` from the palette (`F1`) continues from there.
+- The list shows up to eight rows around the selection; the buffer may hold more.
+- `Ctrl+R` replaces every occurrence of the first field with the second.
 
 ### Open two files side by side
 
@@ -215,16 +247,24 @@ Colors accept `#rgb`, `#rrggbb`, `indexed:0..255`, or names such as `reset`,
 
 ### Syntax highlighting
 
-Highlighting is lexical and line-local: comments, strings, numbers, keywords,
-function calls, type names, constants, operators, and punctuation are colored per
-line for Rust, Python, JavaScript/TypeScript, Go, C, Shell, TOML, JSON, and
-Markdown. Files with other extensions render in the theme foreground.
+Highlighting is lexical but stateful across lines: the lexer carries its state
+from one line to the next, so a `/* */` block (nested in Rust), a Python
+`"""` / `'''` block, a JavaScript template literal, and a Go raw string keep
+their comment or string color until the closing delimiter. Markdown fenced blocks
+(backticks or tildes) are tracked as well, and their body is highlighted with the
+named language when it is one of the supported ones.
 
-Known limits of the lexer: blocks that span lines (Rust `/* */`, Python triple
-quotes, JS template literals) are highlighted line by line rather than as a whole
-block, and identifiers are classified by naming convention (`Thing` → type,
-`THING` → constant, `name(` → function). Structural, grammar-aware highlighting
-is still the Tree-sitter work listed in `ROADMAP.md`.
+Keywords, numbers, function calls, type names, constants, operators, and
+punctuation are colored per line for Rust, Python, JavaScript/TypeScript, Go, C,
+Shell, TOML, JSON, and Markdown. Files with other extensions render in the theme
+foreground.
+
+Known limits: identifiers are still classified by naming convention (`Thing` →
+type, `THING` → constant, `name(` → function) instead of a parse tree; Rust raw
+strings (`r#"..."#`) and shell heredocs are not tracked across lines; and code
+inside a Markdown fence is highlighted line by line, without carrying state.
+Structural, grammar-aware highlighting is still the Tree-sitter work listed in
+`ROADMAP.md`.
 
 The terminal backend honors `NO_COLOR`: when that variable is set, color
 sequences are suppressed and the theme has no visible effect. `--dump-keymap`
@@ -241,6 +281,10 @@ theme file were read.
   them first, so no document becomes unreachable.
 - Undo keeps the last 1000 batches. Undoing back to the saved revision clears the
   modified marker, and redo restores it.
+- A save writes a sibling temporary file, flushes it, and renames it over the
+  target: a crash or full disk during the write cannot truncate the original.
+  Existing permissions are preserved and symlinks are resolved, so the link stays.
+- `F2` Save As asks for confirmation before replacing a different existing file.
 
 ## Terminal panel
 
@@ -280,24 +324,21 @@ follow without a restart.
 
 `$XDG_CONFIG_HOME/i3-editor/config.toml` or `~/.config/i3-editor/config.toml`.
 Every section and key is optional; a broken section is reported and replaced by
-its default instead of blocking startup.
+its default instead of blocking startup. Unknown sections and unknown keys are
+reported too, and an unknown key keeps the rest of its section intact, so a typo
+never looks like a working key and never discards valid settings.
 
 ```toml
 [editor]
 tab_size = 4
 insert_spaces = true
 line_numbers = true
-word_wrap = false          # accepted, not applied yet
 auto_indent = true
 
 [explorer]
 visible = true
 width = 20                 # percent, clamped to 5..=50
 show_hidden = false
-
-[workspace]
-default_layout = "vertical"
-auto_save_session = false  # accepted, not applied yet
 
 [appearance]
 theme = "default"          # preset, or a themes/<name>.toml file name
@@ -331,24 +372,29 @@ Binding values are `ctrl+`/`alt+`/`shift+` plus a key name (`a`, `f2`, `enter`,
 also lists unbound actions such as `toggle_terminal` and the theme commands.
 Conflicts and unknown names are reported, never silently dropped.
 
+`insert_spaces = true` makes `Tab` insert spaces up to the next `tab_size` stop
+(measured in display cells, so it aligns after existing tabs and wide characters);
+`insert_spaces = false` inserts a literal tab byte.
+
 ## Verify
 
 ```bash
 cargo fmt --check
 cargo check
-cargo test              # 133 unit + integration tests, no terminal required
+cargo test              # 166 unit + integration tests, no terminal required
 cargo clippy --all-targets --all-features
 python3 scripts/make_demo.py   # regenerate docs/demo.gif (needs pyte + Pillow)
 ```
 
 ## Known limitations
 
-- `word_wrap` and `auto_save_session` are parsed but not applied.
-- Syntax highlighting is lexical, not grammar-aware: multiline block comments and
-  template strings are colored line by line. Tree-sitter remains future work.
-- Fuzzy scoring (Nucleo) and filesystem watching (Notify) are not implemented.
-- Undo restores text, cursor, and scroll, but a document that has been saved
-  then undone still reports as modified.
+- Syntax highlighting is lexical, not grammar-aware: token kinds come from naming
+  conventions, and Rust raw strings, shell heredocs, and state inside Markdown
+  fences are not tracked across lines. Tree-sitter remains future work.
+- Filesystem watching (Notify) is not implemented; quick open rescans the project
+  on every invocation and caps the list at 5000 files.
+- Saving replaces the file by rename, so an extra hard link keeps pointing at the
+  old inode. Symlinked files are updated through the link.
 - Clipboard writes are best effort: the internal clipboard always works, OSC 52
   depends on the terminal.
 - Startup probes keyboard enhancement support; terminals that never answer the

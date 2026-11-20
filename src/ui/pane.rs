@@ -5,7 +5,7 @@ use std::ops::Range;
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::Style;
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 use unicode_width::UnicodeWidthStr;
@@ -118,9 +118,17 @@ pub fn render(
     let tab_width = state.config.editor.tab_size.max(1);
     let selection = pane.selection();
     let selected = theme.selection_style();
+    let search = state
+        .search
+        .as_ref()
+        .filter(|search| search.document == document.id);
+    let match_starts = search.map(|search| search.matches.as_slice());
+    let match_len = search
+        .map(|search| search.query.chars().count())
+        .unwrap_or(0);
+    let matched = selected.add_modifier(Modifier::UNDERLINED);
     let number_style = Style::default().bg(theme.background).fg(theme.gutter);
     let cursor_line = document.line_of_char(pane.cursor);
-    let language = crate::syntax::Language::from_path(document.path.as_deref());
 
     let buffer = frame.buffer_mut();
     for row in 0..text_area.height as usize {
@@ -149,7 +157,7 @@ pub fn render(
         }
         let text = document.line_text(line_index);
         let line_start = document.char_of_line(line_index);
-        let spans = crate::syntax::highlight_line(language, &text);
+        let spans = document.syntax_spans(line_index, &text);
         draw_text_line(
             buffer,
             text_area.x.saturating_add(gutter),
@@ -164,6 +172,9 @@ pub fn render(
             selected,
             &spans,
             &theme,
+            match_starts,
+            match_len,
+            matched,
         );
     }
 
@@ -230,6 +241,9 @@ fn draw_text_line(
     selected: Style,
     spans: &[crate::syntax::Span],
     theme: &crate::theme::Theme,
+    match_starts: Option<&[usize]>,
+    match_len: usize,
+    matched: Style,
 ) {
     if width == 0 {
         return;
@@ -241,6 +255,9 @@ fn draw_text_line(
     let mut run = String::new();
     let mut run_style = base;
     let mut span_index = 0usize;
+    let mut match_index = match_starts.map_or(0, |starts| {
+        starts.partition_point(|start| start.saturating_add(match_len) <= line_start_char)
+    });
 
     for (offset, ch) in text.chars().enumerate() {
         while span_index < spans.len() && spans[span_index].end <= offset {
@@ -253,12 +270,27 @@ fn draw_text_line(
         };
         let next = cell.saturating_add(advance);
         let absolute = line_start_char + offset;
+        let in_match = match match_starts {
+            Some(starts) => {
+                while match_index < starts.len()
+                    && starts[match_index].saturating_add(match_len) <= absolute
+                {
+                    match_index += 1;
+                }
+                starts
+                    .get(match_index)
+                    .is_some_and(|start| *start <= absolute)
+            }
+            None => false,
+        };
         let selected_char = matches!(
             selection,
             Some(range) if absolute >= range.start && absolute < range.end
         );
         let style = if selected_char {
             selected
+        } else if in_match {
+            matched
         } else if let Some(span) = spans.get(span_index).filter(|span| span.start <= offset) {
             base.fg(theme.token_color(span.kind))
         } else {

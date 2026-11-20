@@ -45,7 +45,7 @@ Use the following technologies:
 | Configuration | Serde + TOML |
 | Error Handling | Anyhow + Thiserror |
 | File Ignore | Ignore |
-| Fuzzy Finder | Nucleo (future phase) |
+| Fuzzy Finder | Nucleo |
 | File Watching | Notify (future phase) |
 | Unicode Width | Unicode-width |
 | Grapheme Segmentation | Unicode-segmentation |
@@ -314,7 +314,7 @@ enum InputMode {
 
 Adapt the actual implementation when necessary, but preserve the architectural responsibilities.
 
-`PromptState` is the single implementation behind every dialog: quick open, find, replace, save as, new file, new directory, rename, delete confirmation, and discard confirmation. A prompt carries its kind, its input text and cursor, its candidate list, and its submitted result. "Non-modal editing" describes the default editing experience; it does not permit a dialog to be improvised inside a rendering widget.
+`PromptState` is the single implementation behind every dialog: quick open, find, replace, save as, new file, new directory, rename, delete confirmation, and discard confirmation. A prompt carries its kind, its input text and cursor, its candidate list, and its submitted result. Candidate prompts are matched with Nucleo: fuzzy subsequence scoring with smart case and word-boundary bonuses. The best-ranked candidate is selected while typing; an arrow-key selection follows its candidate until it stops matching. "Non-modal editing" describes the default editing experience; it does not permit a dialog to be improvised inside a rendering widget.
 
 Key routing is fixed and applies to every `KeyEvent`:
 
@@ -455,10 +455,13 @@ Preserve the file's original line ending on save, or normalize explicitly and sa
 
 For syntax highlighting, prepare the editor architecture for Tree-sitter integration, but do not make advanced language support a blocker for the initial MVP.
 
-Syntax highlighting is implemented lexically in the meantime: line-local spans for
-comments, strings, numbers, keywords, function calls, type names, constants,
-operators, and punctuation, keyed by file extension, with colors from the active
-theme. Structural, grammar-aware highlighting remains the Tree-sitter work.
+Syntax highlighting is implemented lexically in the meantime, with a lexer state
+that carries across lines: block comments (nested in Rust), Python triple-quoted
+strings, JavaScript template literals, Go raw strings, and Markdown fences are
+recognized as a whole, and per-line spans cover comments, strings, numbers,
+keywords, function calls, type names, constants, operators, and punctuation,
+keyed by file extension, with colors from the active theme. Structural,
+grammar-aware highlighting remains the Tree-sitter work.
 
 ## 8. Default Keyboard Shortcuts
 
@@ -614,17 +617,12 @@ Example:
 tab_size = 4
 insert_spaces = true
 line_numbers = true
-word_wrap = false
 auto_indent = true
 
 [explorer]
 visible = true
 width = 20
 show_hidden = false
-
-[workspace]
-default_layout = "vertical"
-auto_save_session = false
 
 [appearance]
 theme = "default"          # preset, or a themes/<name>.toml file name

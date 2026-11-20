@@ -19,6 +19,7 @@ a new object.
 | `dirty: bool` | Modified since load/save |
 | `eol: Eol` | `Lf` or `Crlf`, applied on write only |
 | `history: History` | Undo/redo log |
+| `syntax: RefCell<SyntaxCache>` | Derived lexer state per line; invalidated from the edited line |
 
 Invariants: line endings are normalized on load and restored on save; the rope
 stores tabs literally, expansion is a render concern.
@@ -120,16 +121,23 @@ design, and each bad color value is reported while the inherited value survives.
 ## Syntax — `src/syntax/`
 
 `Language::from_path` maps a file extension to one of Rust, Python,
-JavaScript/TypeScript, Go, C, Shell, TOML, JSON, Markdown, or `Unknown`.
-`highlight_line(language, line)` returns `Span { start, end, kind }` with char
-offsets inside that line; `TokenKind` is the color key used by `Theme`. There is
-no cross-line state, which is why block comments are highlighted per line.
+JavaScript/TypeScript, Go, C, Shell, TOML, JSON, Markdown, or `Unknown`;
+`Language::from_tag` does the same for a Markdown fence info string.
+
+`line_spans(language, line, state)` returns `Span { start, end, kind }` with char
+offsets inside the line plus the `LexState` for the next line. `LexState` is
+`Normal`, `BlockComment { depth }`, `String(Quote)`, or
+`Fence { marker, len, language }`. `TokenKind` is the color key used by `Theme`.
+`Document::syntax_spans` fills a memo of per-line start states, so state is
+preserved across edits with work proportional to the lines requested.
 
 ## Prompt — `src/input/prompt.rs`
 
 `kind: PromptKind`, `fields: Vec<String>` (0, 1, or 2), `active`,
 `cursor` (char index), `candidates` + `filtered` + `selected`, `target` path, and
-`document` id for the discard prompt. Field count is a property of the kind, so a
+`document` id for the discard prompt. `filtered` holds candidate indices ranked by
+Nucleo for the current input; `keep_selection` marks an arrow-key choice so typing
+keeps it while it still matches. Field count is a property of the kind, so a
 confirmation prompt has no text input.
 
 ## Keymap — `src/input/keymap.rs`

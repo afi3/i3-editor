@@ -33,27 +33,61 @@ impl App {
             _ => {}
         }
 
-        let InputMode::Prompt(prompt) = &mut self.state.mode else {
-            return;
-        };
-        let lists = prompt.kind.lists_candidates();
-        match combo.code {
-            KeyCode::Up if lists => prompt.move_selection(-1),
-            KeyCode::Down if lists => prompt.move_selection(1),
-            KeyCode::Left => prompt.cursor_left(),
-            KeyCode::Right => prompt.cursor_right(),
-            KeyCode::Home => prompt.cursor = 0,
-            KeyCode::End => prompt.cursor = prompt.input().chars().count(),
-            KeyCode::Backspace => prompt.backspace(),
-            KeyCode::Delete => prompt.delete(),
-            KeyCode::Char(ch)
-                if !combo
-                    .mods
-                    .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
-            {
-                prompt.insert_char(ch)
+        if let InputMode::Prompt(prompt) = &self.state.mode
+            && prompt.kind == PromptKind::Find
+        {
+            match combo.code {
+                KeyCode::Up => {
+                    self.move_search_selection(-1);
+                    return;
+                }
+                KeyCode::Down => {
+                    self.move_search_selection(1);
+                    return;
+                }
+                _ => {}
             }
-            _ => {}
+        }
+
+        let mut edited = false;
+        {
+            let InputMode::Prompt(prompt) = &mut self.state.mode else {
+                return;
+            };
+            let lists = prompt.kind.lists_candidates();
+            match combo.code {
+                KeyCode::Up if lists => prompt.move_selection(-1),
+                KeyCode::Down if lists => prompt.move_selection(1),
+                KeyCode::Left => prompt.cursor_left(),
+                KeyCode::Right => prompt.cursor_right(),
+                KeyCode::Home => prompt.cursor = 0,
+                KeyCode::End => prompt.cursor = prompt.input().chars().count(),
+                KeyCode::Backspace => {
+                    prompt.backspace();
+                    edited = true;
+                }
+                KeyCode::Delete => {
+                    prompt.delete();
+                    edited = true;
+                }
+                KeyCode::Char(ch)
+                    if !combo
+                        .mods
+                        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+                {
+                    prompt.insert_char(ch);
+                    edited = true;
+                }
+                _ => {}
+            }
+        }
+
+        if edited
+            && let InputMode::Prompt(prompt) = &self.state.mode
+            && prompt.kind == PromptKind::Find
+        {
+            let query = prompt.input().to_string();
+            self.preview_search(query);
         }
     }
 
@@ -83,7 +117,7 @@ impl App {
                 };
                 self.open_document(root.join(relative))
             }
-            PromptKind::Find => self.start_search(prompt.fields[0].clone()),
+            PromptKind::Find => self.commit_search(prompt.fields[0].clone()),
             PromptKind::Replace => self.replace_all(&prompt.fields[0], &prompt.fields[1]),
             PromptKind::GoToLine => {
                 let line: usize = prompt.fields[0]
@@ -94,8 +128,24 @@ impl App {
             }
             PromptKind::SaveAs => {
                 let path = resolve(&root, &prompt.fields[0])?;
-                self.dispatch(Command::SaveTo(path))
+                let current = self
+                    .state
+                    .active_document()
+                    .and_then(|document| document.path.clone());
+                if path.exists() && current.as_deref() != Some(path.as_path()) {
+                    self.open_prompt(PromptKind::Overwrite);
+                    if let InputMode::Prompt(prompt) = &mut self.state.mode {
+                        prompt.target = Some(path);
+                    }
+                    Ok(())
+                } else {
+                    self.dispatch(Command::SaveTo(path))
+                }
             }
+            PromptKind::Overwrite => match prompt.target.clone() {
+                Some(path) => self.dispatch(Command::SaveTo(path)),
+                None => Ok(()),
+            },
             PromptKind::NewFile => {
                 let path = resolve(&self.state.explorer.target_dir(), &prompt.fields[0])?;
                 self.dispatch(Command::CreateFile(path))
@@ -200,7 +250,7 @@ impl App {
                     .selected_row()
                     .map(|row| row.path.clone());
             }
-            PromptKind::Discard => {}
+            PromptKind::Discard | PromptKind::Overwrite => {}
             PromptKind::Theme => {
                 prompt.set_candidates(crate::theme::Theme::names(&self.state.themes_dir));
                 prompt.select_candidate(&self.state.config.appearance.theme);

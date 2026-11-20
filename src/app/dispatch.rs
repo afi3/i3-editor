@@ -37,6 +37,7 @@ impl App {
             }
             Command::DuplicateLine => self.duplicate_line()?,
             Command::InsertText(text) => self.insert_text(&text)?,
+            Command::InsertTab => self.insert_tab()?,
             Command::InsertNewline => self.insert_newline()?,
             Command::Backspace => self.delete_backward()?,
             Command::DeleteForward => self.delete_forward()?,

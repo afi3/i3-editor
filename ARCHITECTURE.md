@@ -114,13 +114,16 @@ rendering stays read-only. Text styles always set both foreground and background
 Ratatui writes the style it is given per cell, so a `Style::default()` span would
 erase a themed background.
 
-**Syntax highlighting is lexical and in-crate.** `syntax::highlight_line` returns
-char-offset spans for one line, keyed by `Language::from_path`; rendering merges
-the token foreground with the row background and lets selection override both.
-This needs no grammar dependencies and costs one pass over the visible lines per
-frame. The tradeoff is explicit: multiline block comments and template strings are
-colored line by line, and identifiers are classified by convention, not by a
-parse tree. Tree-sitter remains the upgrade path for structural fidelity.
+**Syntax highlighting is lexical but stateful.** `syntax::line_spans` consumes the
+lexer state at the start of a line and returns the state for the next one, so
+block comments, triple-quoted strings, template literals, raw strings, and
+Markdown fences keep their token kind across line breaks. `Document` memoizes one
+start state per line in `SyntaxCache`, invalidates from the edited line, and
+re-lexes only the lines a frame asks for; filling that memo during rendering is
+derived work and never changes document content. No grammar dependency is
+involved, and the cost stays one pass over the visible lines plus the gap between
+the last cached line and the viewport. Identifiers are still classified by
+convention; structural highlighting remains the Tree-sitter upgrade path.
 
 **The terminal panel is a real PTY plus a VT100 model.** `shell::ShellPanel`
 spawns `$SHELL` through `portable-pty`, reads the master in a dedicated thread into
@@ -164,9 +167,11 @@ derived at the boundary by `editor::text`, which uses `unicode-segmentation` for
 graphemes and `unicode-width` for cells.
 
 **Prompts are one subsystem.** Quick open, find, replace, save-as, new file,
-rename, delete, discard, and go-to-line all use `PromptState`. While a prompt is
-active it consumes every key except the quit binding, so a dialog cannot leak
-input into a document.
+rename, delete, discard, and go-to-line all use `PromptState`. Candidate prompts
+are ranked by Nucleo (`Pattern::parse` + `match_list`, smart case, path-boundary
+bonuses); `keep_selection` preserves an arrow-key choice while the query narrows.
+While a prompt is active it consumes every key except the quit binding, so a
+dialog cannot leak input into a document.
 
 **Rendering is read-only.** `ui::render` takes `&AppState`. The only mutation
 before a draw is `compute_layout`, which fills the rect cache.

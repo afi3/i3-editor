@@ -2,6 +2,9 @@
 
 use std::path::PathBuf;
 
+use nucleo::pattern::{CaseMatching, Normalization, Pattern};
+use nucleo::{Config, Matcher};
+
 use crate::state::DocumentId;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -11,6 +14,7 @@ pub enum PromptKind {
     Find,
     Replace,
     SaveAs,
+    Overwrite,
     NewFile,
     NewDir,
     Rename,
@@ -29,6 +33,7 @@ impl PromptKind {
             PromptKind::Find => "Find",
             PromptKind::Replace => "Replace",
             PromptKind::SaveAs => "Save As",
+            PromptKind::Overwrite => "Overwrite file",
             PromptKind::NewFile => "New File",
             PromptKind::NewDir => "New Directory",
             PromptKind::Rename => "Rename",
@@ -44,7 +49,10 @@ impl PromptKind {
     pub fn fields(self) -> usize {
         match self {
             PromptKind::Replace => 2,
-            PromptKind::Delete | PromptKind::Discard | PromptKind::QuitDirty => 0,
+            PromptKind::Delete
+            | PromptKind::Discard
+            | PromptKind::QuitDirty
+            | PromptKind::Overwrite => 0,
             _ => 1,
         }
     }
@@ -60,6 +68,18 @@ impl PromptKind {
     }
 }
 
+/// Candidate wrapper so a scored list can still report the original index.
+struct Candidate<'a> {
+    index: usize,
+    text: &'a str,
+}
+
+impl AsRef<str> for Candidate<'_> {
+    fn as_ref(&self) -> &str {
+        self.text
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PromptState {
     pub kind: PromptKind,
@@ -71,6 +91,9 @@ pub struct PromptState {
     pub selected: usize,
     pub target: Option<PathBuf>,
     pub document: Option<DocumentId>,
+    /// Set when the user moves the selection with arrows, so typing keeps that
+    /// candidate instead of jumping back to the best match.
+    keep_selection: bool,
 }
 
 impl PromptState {
@@ -85,6 +108,7 @@ impl PromptState {
             selected: 0,
             target: None,
             document: None,
+            keep_selection: false,
         }
     }
 
@@ -113,20 +137,43 @@ impl PromptState {
     pub fn set_candidates(&mut self, candidates: Vec<String>) {
         self.candidates = candidates;
         self.selected = 0;
+        self.keep_selection = false;
         self.refilter();
     }
 
     pub fn refilter(&mut self) {
-        let needle = self.input().to_ascii_lowercase();
-        self.filtered = self
-            .candidates
-            .iter()
-            .enumerate()
-            .filter(|(_, candidate)| {
-                needle.is_empty() || candidate.to_ascii_lowercase().contains(&needle)
-            })
-            .map(|(index, _)| index)
-            .collect();
+        let selected = self.selected_candidate().map(str::to_string);
+        let needle = self.input();
+        if needle.is_empty() {
+            self.filtered = (0..self.candidates.len()).collect();
+        } else {
+            let pattern = Pattern::parse(needle, CaseMatching::Smart, Normalization::Smart);
+            let mut matcher = Matcher::new(Config::DEFAULT);
+            let scored = pattern.match_list(
+                self.candidates
+                    .iter()
+                    .enumerate()
+                    .map(|(index, text)| Candidate { index, text }),
+                &mut matcher,
+            );
+            self.filtered = scored
+                .into_iter()
+                .map(|(candidate, _score)| candidate.index)
+                .collect();
+        }
+        // Arrow-key selections follow their candidate through the new ranking;
+        // otherwise the best match wins, so Enter opens what the ranking shows.
+        let kept = self
+            .keep_selection
+            .then_some(selected)
+            .flatten()
+            .and_then(|name| {
+                self.filtered
+                    .iter()
+                    .position(|index| self.candidates[*index] == name)
+            });
+        self.selected = kept.unwrap_or(0);
+        self.keep_selection = kept.is_some();
         if self.selected >= self.filtered.len() {
             self.selected = self.filtered.len().saturating_sub(1);
         }
@@ -141,6 +188,7 @@ impl PromptState {
             .position(|index| self.candidates[*index].eq_ignore_ascii_case(needle))
         {
             self.selected = index;
+            self.keep_selection = true;
         }
     }
 
@@ -156,6 +204,7 @@ impl PromptState {
         let last = self.filtered.len() - 1;
         let next = (self.selected as isize + delta).clamp(0, last as isize) as usize;
         self.selected = next;
+        self.keep_selection = true;
     }
 
     pub fn next_field(&mut self) {
@@ -245,6 +294,91 @@ mod tests {
         assert_eq!(prompt.visible(), vec!["Save", "Save As"]);
         prompt.move_selection(1);
         assert_eq!(prompt.selected_candidate(), Some("Save As"));
+    }
+
+    #[test]
+    fn fuzzy_matching_accepts_scattered_initials() {
+        let mut prompt = PromptState::new(PromptKind::QuickOpen);
+        prompt.set_candidates(vec![
+            "docs/domain_main.md".to_string(),
+            "src/app.rs".to_string(),
+            "src/main.rs".to_string(),
+        ]);
+        prompt.insert_char('s');
+        prompt.insert_char('m');
+        assert_eq!(prompt.selected_candidate(), Some("src/main.rs"));
+        assert_eq!(prompt.visible(), vec!["src/main.rs", "docs/domain_main.md"]);
+    }
+
+    #[test]
+    fn fuzzy_matching_ranks_boundaries_first() {
+        let mut prompt = PromptState::new(PromptKind::CommandPalette);
+        prompt.set_candidates(vec![
+            "split_top_bottom".to_string(),
+            "select_theme".to_string(),
+            "toggle_terminal".to_string(),
+        ]);
+        prompt.insert_char('t');
+        prompt.insert_char('t');
+        assert_eq!(prompt.selected_candidate(), Some("toggle_terminal"));
+    }
+
+    #[test]
+    fn fuzzy_matching_is_smart_about_case() {
+        let mut prompt = PromptState::new(PromptKind::QuickOpen);
+        prompt.set_candidates(vec!["src/main.rs".to_string(), "SRC/MAIN.RS".to_string()]);
+        prompt.insert_char('S');
+        prompt.insert_char('M');
+        assert_eq!(prompt.selected_candidate(), Some("SRC/MAIN.RS"));
+    }
+
+    #[test]
+    fn empty_query_keeps_order_and_selection() {
+        let mut prompt = PromptState::new(PromptKind::Theme);
+        prompt.set_candidates(vec!["b".to_string(), "a".to_string(), "c".to_string()]);
+        prompt.move_selection(2);
+        prompt.refilter();
+        assert_eq!(prompt.visible(), vec!["b", "a", "c"]);
+        assert_eq!(prompt.selected_candidate(), Some("c"));
+    }
+
+    #[test]
+    fn selection_survives_a_narrowing_filter() {
+        let mut prompt = PromptState::new(PromptKind::QuickOpen);
+        prompt.set_candidates(vec![
+            "src/main.rs".to_string(),
+            "src/mode.rs".to_string(),
+            "README.md".to_string(),
+        ]);
+        prompt.move_selection(1);
+        prompt.insert_char('m');
+        assert_eq!(prompt.selected_candidate(), Some("src/mode.rs"));
+    }
+
+    #[test]
+    fn selection_falls_back_to_the_best_match() {
+        let mut prompt = PromptState::new(PromptKind::QuickOpen);
+        prompt.set_candidates(vec![
+            "src/main.rs".to_string(),
+            "src/mode.rs".to_string(),
+            "README.md".to_string(),
+        ]);
+        prompt.move_selection(2);
+        for ch in "src".chars() {
+            prompt.insert_char(ch);
+        }
+        assert_eq!(prompt.selected_candidate(), Some("src/main.rs"));
+    }
+
+    #[test]
+    fn fuzzy_matching_reports_no_matches() {
+        let mut prompt = PromptState::new(PromptKind::QuickOpen);
+        prompt.set_candidates(vec!["src/main.rs".to_string()]);
+        for ch in "zzz".chars() {
+            prompt.insert_char(ch);
+        }
+        assert!(prompt.visible().is_empty());
+        assert_eq!(prompt.selected_candidate(), None);
     }
 
     #[test]

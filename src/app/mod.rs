@@ -70,7 +70,8 @@ impl App {
         target: Option<PathBuf>,
     ) -> Result<Self> {
         let (root, file) = split_target(target)?;
-        let explorer = ExplorerState::new(root.clone(), config.explorer.show_hidden)?;
+        let mut explorer = ExplorerState::new(root.clone(), config.explorer.show_hidden)?;
+        explorer.visible = config.explorer.visible;
         let mut ids = Ids::default();
         let pane_id = ids.pane();
         let workspace_id = ids.workspace();

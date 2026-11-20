@@ -6,28 +6,73 @@ use crate::state::{AppState, Focus, Search};
 use super::App;
 
 impl App {
-    pub(crate) fn start_search(&mut self, query: String) -> Result<()> {
+    /// Recompute matches while the Find prompt is open and preview the first one.
+    pub(crate) fn preview_search(&mut self, query: String) {
+        if query.is_empty() {
+            self.state.search = None;
+            return;
+        }
+        let Some(document_id) = self.state.active_document_id() else {
+            return;
+        };
+        let Some(document) = self.state.documents.get(&document_id) else {
+            return;
+        };
+        let matches = match_positions(&document.rope.to_string(), &query);
+        let total = matches.len();
+        self.state.search = Some(Search {
+            document: document_id,
+            query,
+            matches,
+            index: 0,
+        });
+        if total == 0 {
+            let query = self.state.search.as_ref().map(|s| s.query.clone());
+            if let Some(query) = query {
+                self.notify(format!("no match for {query}"));
+            }
+            return;
+        }
+        self.show_match(0);
+    }
+
+    /// Enter in the Find prompt. Matches produced while typing are kept as they
+    /// are, so an arrow-key selection survives the prompt closing.
+    pub(crate) fn commit_search(&mut self, query: String) -> Result<()> {
         if query.is_empty() {
             self.state.search = None;
             self.notify("search cleared");
             return Ok(());
         }
-        let Some(document) = self.state.active_document() else {
-            return Err(Error::NoActiveDocument);
-        };
-        let haystack = document.rope.to_string();
-        let matches = match_positions(&haystack, &query);
-        let total = matches.len();
-        self.state.search = Some(Search {
-            query: query.clone(),
-            matches,
-            index: 0,
-        });
-        if total == 0 {
-            self.notify(format!("no match for {query}"));
-            return Ok(());
+        let active = self.state.active_document_id();
+        let live = self
+            .state
+            .search
+            .as_ref()
+            .filter(|search| search.query == query && Some(search.document) == active)
+            .map(|search| (search.index, search.matches.len()));
+        match live {
+            Some((_, 0)) => self.notify(format!("no match for {query}")),
+            Some((index, total)) => {
+                self.notify(format!("{query}: match {}/{total}", index + 1));
+            }
+            None => self.preview_search(query),
         }
-        self.next_match()
+        Ok(())
+    }
+
+    /// Up/Down in the Find prompt: step through the match list, wrapping.
+    pub(crate) fn move_search_selection(&mut self, delta: isize) {
+        let Some(search) = self.state.search.as_ref() else {
+            self.notify("no active search");
+            return;
+        };
+        let total = search.matches.len();
+        if total == 0 {
+            return;
+        }
+        let index = (search.index as isize + delta).rem_euclid(total as isize) as usize;
+        self.show_match(index);
     }
 
     pub(crate) fn next_match(&mut self) -> Result<()> {
@@ -38,31 +83,36 @@ impl App {
         if search.matches.is_empty() {
             return Ok(());
         }
-        let cursor = self
-            .state
-            .focused_pane()
-            .map(|pane| pane.cursor)
-            .unwrap_or(0);
-        let index = search
-            .matches
-            .iter()
-            .position(|position| *position >= cursor)
-            .unwrap_or(0);
-        let start = search.matches[index];
-        let end = start + search.query.chars().count();
+        self.show_match(search.index + 1);
+        Ok(())
+    }
+
+    /// Select `index` (wrapping) and move the pane cursor onto that match.
+    fn show_match(&mut self, index: usize) {
+        let Some(search) = self.state.search.as_ref() else {
+            return;
+        };
         let total = search.matches.len();
+        if total == 0 {
+            return;
+        }
+        let index = index % total;
+        let start = search.matches[index];
+        let document = search.document;
+        let length = search.query.chars().count();
         let query = search.query.clone();
         if let Some(search) = self.state.search.as_mut() {
             search.index = index;
         }
-        if let Some(pane) = self.state.focused_pane_mut() {
+        if let Some(pane) = self.state.focused_pane_mut()
+            && pane.active == Some(document)
+        {
             pane.cursor = start;
-            pane.anchor = Some(end);
+            pane.anchor = Some(start + length);
             pane.target_col = None;
         }
         self.notify(format!("{query}: match {}/{total}", index + 1));
         self.ensure_cursor_visible();
-        Ok(())
     }
 
     pub(crate) fn goto_line(&mut self, line: usize) -> Result<()> {

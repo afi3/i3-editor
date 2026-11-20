@@ -117,8 +117,12 @@ impl Pane {
 }
 
 pub struct Search {
+    /// Document the offsets belong to; the same buffer may be open in two panes.
+    pub document: DocumentId,
     pub query: String,
+    /// Char offsets of every non-overlapping match.
     pub matches: Vec<usize>,
+    /// Index into `matches` of the match under the cursor.
     pub index: usize,
 }
 

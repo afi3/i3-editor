@@ -15,8 +15,10 @@ prose documents.
 | TOML configuration | `src/config/mod.rs` |
 | Keyboard configuration | `src/input/keymap.rs`, `src/input/presets.rs` |
 | Prompts (`MASTER` 5.3) | `src/input/prompt.rs`, `src/app/prompt.rs` |
+| Fuzzy candidate ranking | `src/input/prompt.rs` (`nucleo`) |
 | Undo model (`MASTER` 5.3.1) | `src/editor/history.rs` |
 | Terminal cleanup (`MASTER` 12.13) | `src/terminal.rs` |
+| Atomic save | `src/editor/document.rs` (`write_atomic`) |
 
 ## Deltas from the text
 
@@ -26,14 +28,16 @@ prose documents.
    still draws every region. See `ARCHITECTURE.md`.
 2. **Key scopes are `global`, `editing`, `explorer`.** `MASTER`'s older
    `[keys.pane]` example was replaced, because splits are global commands. The
-   loader accepts exactly these three sections; unknown sections inside `[keys]`
-   are ignored by serde's default behaviour.
-3. **Accepted but not applied configuration keys** are listed in `README.md`
-   under known limitations.
+   loader accepts exactly these three sections; unknown sections and keys are
+   reported through the config warnings channel instead of being ignored.
+3. **No configuration key is accepted without being applied.** Features that are
+   not implemented are listed in `README.md` under known limitations rather than
+   hidden behind inert keys.
 
 ## Non-negotiables that hold
 
-- Rendering never mutates state.
+- Rendering never mutates state. The sole side effect is filling `Document`'s
+  syntax-state memo, which cannot change rendered output or document content.
 - Every mutation flows through a `Command`.
 - A dirty document is never discarded without an explicit confirmation.
 - No pane can shrink below `MIN_PANE_ROWS = 4` / `MIN_PANE_COLS = 10`.

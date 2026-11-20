@@ -14,7 +14,6 @@ use serde::{Deserialize, Serialize};
 pub struct AppConfig {
     pub editor: EditorConfig,
     pub explorer: ExplorerConfig,
-    pub workspace: WorkspaceConfig,
     pub appearance: AppearanceConfig,
     pub terminal: TerminalConfig,
     pub keys: KeysConfig,
@@ -39,7 +38,6 @@ pub struct EditorConfig {
     pub tab_size: usize,
     pub insert_spaces: bool,
     pub line_numbers: bool,
-    pub word_wrap: bool,
     pub auto_indent: bool,
 }
 
@@ -49,7 +47,6 @@ impl Default for EditorConfig {
             tab_size: 4,
             insert_spaces: true,
             line_numbers: true,
-            word_wrap: false,
             auto_indent: true,
         }
     }
@@ -70,22 +67,6 @@ impl Default for ExplorerConfig {
             visible: true,
             width: 20,
             show_hidden: false,
-        }
-    }
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(default)]
-pub struct WorkspaceConfig {
-    pub default_layout: String,
-    pub auto_save_session: bool,
-}
-
-impl Default for WorkspaceConfig {
-    fn default() -> Self {
-        Self {
-            default_layout: "vertical".to_string(),
-            auto_save_session: false,
         }
     }
 }
@@ -164,16 +145,54 @@ pub fn load_from(path: &Path) -> (AppConfig, Vec<String>) {
         }
     };
 
+    const SECTIONS: [&str; 5] = ["editor", "explorer", "appearance", "terminal", "keys"];
+    if let Some(table) = value.as_table() {
+        for key in table.keys() {
+            if !SECTIONS.contains(&key.as_str()) {
+                warnings.push(format!("unknown section [{key}] ignored"));
+            }
+        }
+    }
+
+    warn_unknown_keys(&value, "editor", EDITOR_KEYS, &mut warnings);
+    warn_unknown_keys(&value, "explorer", EXPLORER_KEYS, &mut warnings);
+    warn_unknown_keys(&value, "appearance", APPEARANCE_KEYS, &mut warnings);
+    warn_unknown_keys(&value, "terminal", TERMINAL_KEYS, &mut warnings);
+    warn_unknown_keys(&value, "keys", KEYS_KEYS, &mut warnings);
+
     let mut config = AppConfig::default();
     take_section(&value, "editor", &mut config.editor, &mut warnings);
     take_section(&value, "explorer", &mut config.explorer, &mut warnings);
-    take_section(&value, "workspace", &mut config.workspace, &mut warnings);
     take_section(&value, "appearance", &mut config.appearance, &mut warnings);
     take_section(&value, "terminal", &mut config.terminal, &mut warnings);
     take_section(&value, "keys", &mut config.keys, &mut warnings);
     config.explorer.width = config.explorer.width.clamp(5, 50);
     config.terminal.height = config.terminal.height.clamp(3, 60);
     (config, warnings)
+}
+
+const EDITOR_KEYS: &[&str] = &["tab_size", "insert_spaces", "line_numbers", "auto_indent"];
+const EXPLORER_KEYS: &[&str] = &["visible", "width", "show_hidden"];
+const APPEARANCE_KEYS: &[&str] = &[
+    "theme",
+    "show_status_bar",
+    "show_document_tabs",
+    "show_workspace_tabs",
+];
+const TERMINAL_KEYS: &[&str] = &["height"];
+const KEYS_KEYS: &[&str] = &["preset", "global", "editing", "explorer"];
+
+/// Report keys the loader does not understand without discarding the rest of
+/// the section, matching the per-entry fallback contract.
+fn warn_unknown_keys(value: &toml::Value, name: &str, known: &[&str], warnings: &mut Vec<String>) {
+    let Some(section) = value.get(name).and_then(toml::Value::as_table) else {
+        return;
+    };
+    for key in section.keys() {
+        if !known.contains(&key.as_str()) {
+            warnings.push(format!("[{name}] unknown key {key} ignored"));
+        }
+    }
 }
 
 fn take_section<T: for<'de> Deserialize<'de> + std::fmt::Debug>(
@@ -390,5 +409,83 @@ mod theme_persist_tests {
         let text = std::fs::read_to_string(&path).expect("read");
         assert!(text.contains("theme = \"a\\\"b\""), "{text}");
         std::fs::remove_dir_all(path.parent().expect("parent")).ok();
+    }
+}
+
+#[cfg(test)]
+mod strict_tests {
+    use super::*;
+
+    fn config_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("i3-strict-{}-{name}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        dir
+    }
+
+    #[test]
+    fn unknown_key_is_reported_and_valid_keys_survive() {
+        let dir = config_dir("key");
+        let path = dir.join("config.toml");
+        std::fs::write(&path, "[editor]\ntab_size = 2\ntab_sise = 4\n").expect("write");
+        let (config, warnings) = load_from(&path);
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings[0].contains("tab_sise"), "{warnings:?}");
+        assert_eq!(
+            config.editor.tab_size, 2,
+            "valid keys in the section survive"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn unknown_key_sections_do_not_reset_bindings() {
+        let dir = config_dir("keys");
+        let path = dir.join("config.toml");
+        std::fs::write(
+            &path,
+            "[keys]\npreset = \"safe\"\n\n[keys.bogus]\nsave = \"ctrl+s\"\n",
+        )
+        .expect("write");
+        let (config, warnings) = load_from(&path);
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings[0].contains("bogus"), "{warnings:?}");
+        assert_eq!(config.keys.preset.as_deref(), Some("safe"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn known_key_lists_cover_every_config_field() {
+        let value = toml::Value::try_from(AppConfig::default()).expect("serialize");
+        let sections = [
+            ("editor", EDITOR_KEYS),
+            ("explorer", EXPLORER_KEYS),
+            ("appearance", APPEARANCE_KEYS),
+            ("terminal", TERMINAL_KEYS),
+            ("keys", KEYS_KEYS),
+        ];
+        for (name, known) in sections {
+            let table = value
+                .get(name)
+                .and_then(toml::Value::as_table)
+                .unwrap_or_else(|| panic!("missing [{name}]"));
+            for key in table.keys() {
+                assert!(
+                    known.contains(&key.as_str()),
+                    "[{name}] {key} is not listed"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn unknown_section_is_reported() {
+        let dir = config_dir("section");
+        let path = dir.join("config.toml");
+        std::fs::write(&path, "[bogus]\nvalue = 1\n\n[editor]\ntab_size = 2\n").expect("write");
+        let (config, warnings) = load_from(&path);
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings[0].contains("bogus"), "{warnings:?}");
+        assert_eq!(config.editor.tab_size, 2, "known sections still load");
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

@@ -57,7 +57,8 @@ Create/switch/close, workspace tab bar, preserved layout, tabs, cursor, scroll.
 
 Delivered:
 
-- Config loading with per-section fallback and warnings.
+- Config loading with per-section fallback and warnings; unknown sections and
+  unknown keys are reported instead of ignored.
 - Theme presets (`default`, `dark`, `light`, `high-contrast`) and theme files
   loaded by name from `<config>/i3-editor/themes/`, with `base` inheritance.
 - Lexical syntax highlighting for Rust, Python, JavaScript/TypeScript, Go, C,
@@ -66,12 +67,26 @@ Delivered:
   and closed from the palette, with theme-aware rendering and scrollback.
 - Runtime theme switching from the palette (`select_theme`, `next_theme`,
   `prev_theme`), persisted back into `config.toml` without disturbing other keys.
+- Live find: the prompt lists matching lines with line numbers, `Up`/`Down`
+  select a match and wrap, every match is highlighted in the buffer, and
+  `next_match` advances from the selected one instead of re-selecting it.
+- Fuzzy finder for quick open and the command palette, scored by Nucleo with
+  smart case and path-boundary bonuses; arrow selections survive a narrowing
+  query and otherwise the best match stays selected.
+- Stateful lexer: cross-line block comments (nested for Rust), Python
+  triple-quoted strings, JavaScript template literals, Go raw strings, and
+  Markdown fences whose body is highlighted with the named language. Per-line
+  lexer states are memoized on the document and invalidated from the edited line.
+- Saves replace the file atomically (temp file + rename) with permissions and
+  symlinks preserved; Save As confirms before replacing another file.
+- `Tab` honors `editor.insert_spaces`: spaces to the next tab stop or a literal
+  tab; `explorer.visible` is applied at startup.
 - Quit confirmation with save-all/discard-all, pane-close guard for modified
   documents, and bounded undo (1000 batches) that tracks the saved revision.
 - Keymap presets and capability handling.
 - Unicode width/grapheme handling with tests.
 - Error handling through a single `Error` type; status-bar messages.
-- 133 unit and integration tests, `TestBackend` render tests.
+- 166 unit and integration tests, `TestBackend` render tests.
 - `install.sh` one-liner with `--update` and `--uninstall` (checksum-verified
   release download, version comparison, Cargo fallback) and a tag-driven release
   workflow for macOS/Linux on x86_64 and aarch64.
@@ -80,14 +95,12 @@ Delivered:
 
 Not delivered yet:
 
-- `editor.word_wrap` and `workspace.auto_save_session` are parsed but unused.
-  Either implement them or remove the keys.
-- Find highlights only the current match; there is no match list UI.
 - No session persistence across restarts.
 - Terminal panel limits: no mouse reporting into shell programs, one panel only,
   shell path is `$SHELL` (not configurable), scrollback is fixed at 2000 lines.
-- Syntax highlighting is lexical: multiline block comments and template strings
-  are colored per line, and token kinds come from naming conventions. Structural
+- Syntax highlighting is lexical, not grammar-aware: token kinds come from naming
+  conventions, Rust raw strings and shell heredocs are not tracked across lines,
+  and code inside a Markdown fence is highlighted per line. Structural
   (Tree-sitter) highlighting remains future work.
 
 ## Verification commands
@@ -100,4 +113,4 @@ cargo clippy --all-targets --all-features
 cargo run -- --dump-keymap
 ```
 
-Last recorded run: `cargo test` → 133 passed, `cargo clippy` → 0 warnings.
+Last recorded run: `cargo test` → 166 passed, `cargo clippy` → 0 warnings.

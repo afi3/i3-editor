@@ -77,7 +77,7 @@ impl KeyMap {
             bind(scope, "backspace", Command::Backspace);
             bind(scope, "delete", Command::DeleteForward);
             bind(scope, "enter", Command::InsertNewline);
-            bind(scope, "tab", Command::InsertText("\t".to_string()));
+            bind(scope, "tab", Command::InsertTab);
             bind(scope, "ctrl+z", Command::Undo);
             bind(scope, "ctrl+y", Command::Redo);
             bind(scope, "ctrl+a", Command::SelectAll);

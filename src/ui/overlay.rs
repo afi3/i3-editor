@@ -102,6 +102,35 @@ pub fn render_explorer(frame: &mut Frame, state: &AppState) {
     frame.render_widget(Paragraph::new(lines), inner);
 }
 
+/// Rows of the match list shown under the Find field: `(selected offset, rows)`.
+/// A row is `(line number, line text)`.
+fn find_rows(state: &AppState, prompt: &PromptState) -> Option<(usize, Vec<(usize, String)>)> {
+    const MAX_ROWS: usize = 8;
+    if prompt.kind != PromptKind::Find {
+        return None;
+    }
+    let search = state.search.as_ref()?;
+    let document = state.documents.get(&search.document)?;
+    if Some(search.document) != state.active_document_id() || prompt.input() != search.query {
+        return None;
+    }
+    let total = search.matches.len();
+    if total == 0 {
+        return None;
+    }
+    let selected = search.index.min(total - 1);
+    let start = selected.saturating_sub(MAX_ROWS - 1);
+    let end = (start + MAX_ROWS).min(total);
+    let rows = search.matches[start..end]
+        .iter()
+        .map(|offset| {
+            let line = document.line_of_char(*offset);
+            (line + 1, document.line_text(line))
+        })
+        .collect();
+    Some((selected - start, rows))
+}
+
 pub fn render_prompt(frame: &mut Frame, state: &AppState, prompt: &PromptState) {
     let screen = frame.area();
     let width = ((u32::from(screen.width) * 70 / 100) as u16).clamp(30, 100);
@@ -111,8 +140,19 @@ pub fn render_prompt(frame: &mut Frame, state: &AppState, prompt: &PromptState) 
     } else {
         0
     };
+    let matches = find_rows(state, prompt);
+    let match_rows = matches.as_ref().map_or(0, |(_, rows)| rows.len() as u16);
+    let target = if prompt.kind == PromptKind::Overwrite {
+        prompt
+            .target
+            .as_ref()
+            .map(|path| path.to_string_lossy().into_owned())
+    } else {
+        None
+    };
+    let target_rows = u16::from(target.is_some());
     let fields = prompt.fields.len() as u16;
-    let height = (fields + candidates + 2).min(screen.height.max(1));
+    let height = (fields + candidates + match_rows + target_rows + 2).min(screen.height.max(1));
     let x = screen.x + screen.width.saturating_sub(width) / 2;
     let y = screen.y + screen.height.saturating_sub(height) / 2;
     let area = Rect::new(x, y, width, height);
@@ -120,11 +160,21 @@ pub fn render_prompt(frame: &mut Frame, state: &AppState, prompt: &PromptState) 
     frame.render_widget(Clear, area);
     let theme = state.theme;
     frame.buffer_mut().set_style(area, theme.base());
+    let title = match (prompt.kind, state.search.as_ref()) {
+        (PromptKind::Find, Some(search))
+            if Some(search.document) == state.active_document_id()
+                && search.query == prompt.input()
+                && !search.matches.is_empty() =>
+        {
+            format!(" Find {}/{} ", search.index + 1, search.matches.len())
+        }
+        _ => format!(" {} ", prompt.kind.title()),
+    };
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme.prompt_border))
         .style(theme.base())
-        .title(format!(" {} ", prompt.kind.title()));
+        .title(title);
     let inner = block.inner(area);
     frame.render_widget(block, area);
     if inner.width == 0 || inner.height == 0 {
@@ -210,9 +260,53 @@ pub fn render_prompt(frame: &mut Frame, state: &AppState, prompt: &PromptState) 
         }
     }
 
+    if let Some(path) = target {
+        let shown = tail(&path, inner.width);
+        frame.buffer_mut().set_stringn(
+            inner.x,
+            inner.y,
+            &shown,
+            inner.width as usize,
+            Style::default().bg(theme.background).fg(theme.gutter),
+        );
+    }
+
+    if let Some((selected, rows)) = matches {
+        let top = inner.y.saturating_add(fields);
+        let buffer = frame.buffer_mut();
+        for (offset, (line, text)) in rows.iter().enumerate() {
+            let row = top.saturating_add(offset as u16);
+            if row >= inner.y.saturating_add(inner.height) {
+                break;
+            }
+            let style = if offset == selected {
+                theme.selection_style()
+            } else {
+                theme.base()
+            };
+            let label = format!("{line:>5}  {}", text.trim_end());
+            buffer.set_stringn(inner.x, row, &label, inner.width as usize, style);
+        }
+    }
+
     if let Some((x, y)) = cursor_position {
         frame.set_cursor_position((x, y));
     }
+}
+
+/// Clip a path from the left so its file name stays visible.
+fn tail(text: &str, width: u16) -> String {
+    let width = width as usize;
+    if width == 0 {
+        return String::new();
+    }
+    let chars: Vec<char> = text.chars().collect();
+    if chars.len() <= width {
+        return text.to_string();
+    }
+    let mut out = String::from("…");
+    out.extend(chars[chars.len() - (width - 1)..].iter());
+    out
 }
 
 fn field_label(kind: PromptKind, index: usize) -> &'static str {

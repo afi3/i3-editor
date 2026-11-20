@@ -1,15 +1,27 @@
 //! A document owns the rope, its file identity, and its undo history.
 //! It knows nothing about panes or screen geometry.
 
+use std::cell::RefCell;
+use std::io::Write;
 use std::ops::Range;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use ropey::Rope;
 
 use crate::error::{Error, Result};
 use crate::state::DocumentId;
+use crate::syntax::{self, Language, LexState, Span};
 
 use super::history::History;
+
+/// Derived highlighting state: the lexer state at the start of each line whose
+/// start has been computed. Cleared from the edited line onward, so only the
+/// lines a frame needs are ever re-lexed after an edit.
+#[derive(Debug, Default)]
+pub(crate) struct SyntaxCache {
+    language: Language,
+    states: Vec<LexState>,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Eol {
@@ -51,6 +63,8 @@ pub struct Document {
     pub dirty: bool,
     pub eol: Eol,
     pub history: History,
+    /// Highlighting memo; derived from `rope`, never part of the file identity.
+    pub(crate) syntax: RefCell<SyntaxCache>,
 }
 
 impl Document {
@@ -62,6 +76,7 @@ impl Document {
             dirty: false,
             eol: Eol::Lf,
             history: History::default(),
+            syntax: RefCell::new(SyntaxCache::default()),
         }
     }
 
@@ -77,6 +92,7 @@ impl Document {
             dirty: false,
             eol,
             history: History::default(),
+            syntax: RefCell::new(SyntaxCache::default()),
         })
     }
 
@@ -114,6 +130,44 @@ impl Document {
         text
     }
 
+    /// Highlight spans for `line`, using the cached lexer state from the lines
+    /// above it. Filling the cache is derived work: rendering can call this
+    /// through `&self` without changing the document.
+    pub fn syntax_spans(&self, line: usize, text: &str) -> Vec<Span> {
+        let language = Language::from_path(self.path.as_deref());
+        let mut cache = self.syntax.borrow_mut();
+        if cache.language != language {
+            cache.language = language;
+            cache.states.clear();
+        }
+        let lines = self.line_count().max(1);
+        if cache.states.is_empty() {
+            cache.states.push(LexState::Normal);
+        } else if cache.states.len() > lines {
+            cache.states.truncate(lines);
+        }
+        let target = line.min(lines - 1);
+        while cache.states.len() <= target {
+            let previous = cache.states.len() - 1;
+            let previous_text = self.line_text(previous);
+            let (_, next) = syntax::line_spans(language, &previous_text, cache.states[previous]);
+            cache.states.push(next);
+        }
+        syntax::line_spans(language, text, cache.states[target]).0
+    }
+
+    /// The edited line keeps its start state; later lines are re-lexed lazily.
+    fn invalidate_syntax(&mut self, line: usize) {
+        self.syntax
+            .get_mut()
+            .states
+            .truncate(line.saturating_add(1));
+    }
+
+    fn reset_syntax(&mut self) {
+        self.syntax.get_mut().states.clear();
+    }
+
     pub fn insert(
         &mut self,
         char_idx: usize,
@@ -122,10 +176,12 @@ impl Document {
         scroll_before: (usize, u16),
     ) {
         let char_idx = char_idx.min(self.len_chars());
+        let line = self.line_of_char(char_idx);
         self.rope.insert(char_idx, text);
         self.history
             .record_insert(char_idx, text, cursor_before, scroll_before);
         self.dirty = self.history.is_modified();
+        self.invalidate_syntax(line);
     }
 
     pub fn remove(
@@ -139,11 +195,13 @@ impl Document {
         if start >= end {
             return String::new();
         }
+        let line = self.line_of_char(start);
         let text: String = self.rope.slice(start..end).to_string();
         self.rope.remove(start..end);
         self.history
             .record_remove(start, &text, cursor_before, scroll_before);
         self.dirty = self.history.is_modified();
+        self.invalidate_syntax(line);
         text
     }
 
@@ -151,12 +209,14 @@ impl Document {
     pub fn undo(&mut self) -> Option<(usize, (usize, u16))> {
         let restore = self.history.undo(&mut self.rope)?;
         self.dirty = self.history.is_modified();
+        self.reset_syntax();
         Some(restore)
     }
 
     pub fn redo(&mut self) -> Option<(usize, (usize, u16))> {
         let restore = self.history.redo(&mut self.rope)?;
         self.dirty = self.history.is_modified();
+        self.reset_syntax();
         Some(restore)
     }
 
@@ -171,12 +231,42 @@ impl Document {
 
     fn write_to(&mut self, path: PathBuf) -> Result<()> {
         let text = self.eol.normalize(&self.rope.to_string());
-        std::fs::write(&path, text).map_err(|error| Error::io("write", &path, error))?;
+        write_atomic(&path, text.as_bytes()).map_err(|error| Error::io("write", &path, error))?;
         self.path = Some(path);
         self.history.mark_saved();
         self.dirty = false;
         Ok(())
     }
+}
+
+/// Replace `path` without ever truncating the original: write a sibling temp
+/// file, flush it, then rename over the target. Symlinks are followed so the
+/// link survives. Existing permissions are preserved.
+fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let target = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let parent = target
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let name = target
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "document".to_string());
+    let temporary = parent.join(format!(".{name}.i3-{}.tmp", std::process::id()));
+    let result = (|| {
+        let mut file = std::fs::File::create(&temporary)?;
+        file.write_all(bytes)?;
+        if let Ok(metadata) = std::fs::metadata(&target) {
+            file.set_permissions(metadata.permissions())?;
+        }
+        file.sync_all()?;
+        drop(file);
+        std::fs::rename(&temporary, &target)
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temporary);
+    }
+    result
 }
 
 #[cfg(test)]
@@ -247,6 +337,94 @@ mod tests {
         let written = std::fs::read_to_string(&path).expect("read");
         assert_eq!(written, "one\r\ntwo");
         assert!(!document.dirty);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn syntax_cache_follows_edits_and_undo() {
+        use crate::syntax::TokenKind;
+
+        let mut document = Document::empty(DocumentId(1), Some(PathBuf::from("/tmp/test.rs")));
+        document.rope = Rope::from_str("/* a\nb */ let x = 1;\n");
+
+        let text = document.line_text(1);
+        let spans = document.syntax_spans(1, &text);
+        assert!(
+            spans.iter().any(|span| span.kind == TokenKind::Comment),
+            "second line starts inside the comment"
+        );
+
+        document.remove(0..2, 0, (0, 0));
+        for line in 0..2 {
+            let text = document.line_text(line);
+            let spans = document.syntax_spans(line, &text);
+            assert!(
+                !spans.iter().any(|span| span.kind == TokenKind::Comment),
+                "line {line} after removing the opener"
+            );
+        }
+
+        document.undo();
+        let text = document.line_text(1);
+        let spans = document.syntax_spans(1, &text);
+        assert!(
+            spans.iter().any(|span| span.kind == TokenKind::Comment),
+            "undo restores the comment state"
+        );
+    }
+
+    #[test]
+    fn save_replaces_atomically_and_keeps_permissions() {
+        let dir = std::env::temp_dir().join(format!("i3-atomic-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let path = dir.join("script.sh");
+        std::fs::write(&path, "old\n").expect("seed");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o640)).expect("mode");
+        }
+
+        let mut document = doc("new\n");
+        document.save_as(path.clone()).expect("save");
+        assert_eq!(std::fs::read_to_string(&path).expect("read"), "new\n");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&path)
+                .expect("metadata")
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o777, 0o640);
+        }
+        let leftovers: Vec<_> = std::fs::read_dir(&dir)
+            .expect("dir")
+            .flatten()
+            .filter(|entry| entry.file_name().to_string_lossy().contains(".tmp"))
+            .collect();
+        assert!(leftovers.is_empty(), "{leftovers:?}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn saving_through_a_symlink_keeps_the_link() {
+        let dir = std::env::temp_dir().join(format!("i3-symlink-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let target = dir.join("real.txt");
+        std::fs::write(&target, "old\n").expect("seed");
+        let link = dir.join("link.txt");
+        std::os::unix::fs::symlink(&target, &link).expect("symlink");
+
+        let mut document = doc("new\n");
+        document.save_as(link.clone()).expect("save");
+        assert!(
+            std::fs::symlink_metadata(&link)
+                .expect("link")
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(std::fs::read_to_string(&target).expect("read"), "new\n");
         std::fs::remove_dir_all(&dir).ok();
     }
 

@@ -345,7 +345,7 @@ mod tests {
     use crate::editor::history::History;
     use crate::explorer::ExplorerState;
     use crate::input::{KeyMap, PromptKind, PromptState};
-    use crate::state::{DocumentId, Focus, Ids, InputMode, Pane, WorkspaceId};
+    use crate::state::{DocumentId, Focus, Ids, InputMode, Pane, Search, WorkspaceId};
     use crate::workspace::{SplitAxis, Workspace, WorkspaceManager};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
@@ -375,6 +375,7 @@ mod tests {
                 dirty: false,
                 eol: Eol::Lf,
                 history: History::default(),
+                syntax: Default::default(),
             },
         );
 
@@ -577,6 +578,39 @@ mod tests {
     }
 
     #[test]
+    fn multiline_comments_stay_colored_on_later_lines() {
+        use crate::theme::Theme;
+
+        let (mut state, dir) = state("/* start\nstill comment */ let x = 1;\n");
+        let theme = Theme::preset("dark");
+        state.theme = theme;
+
+        let buffer = draw_buffer(&mut state, 80, 24);
+        let rect = state.ui.pane_rects[&PaneId(1)];
+        let geometry = {
+            let pane = state.panes.get(&PaneId(1)).expect("pane");
+            let document = state.documents.get(&DocumentId(1)).expect("document");
+            crate::ui::pane::text_geometry(&state, pane, document, rect).expect("geometry")
+        };
+        let x = geometry.area.x + geometry.gutter;
+        let y = geometry.area.y;
+
+        assert_eq!(buffer[(x, y + 1)].symbol(), "s");
+        assert_eq!(
+            buffer[(x, y + 1)].fg,
+            theme.syntax.comment,
+            "continuation line stays a comment"
+        );
+        assert_eq!(buffer[(x + 17, y + 1)].symbol(), "l");
+        assert_eq!(
+            buffer[(x + 17, y + 1)].fg,
+            theme.syntax.keyword,
+            "text after the closing marker is highlighted again"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
     fn renders_container_tab_strip() {
         let (mut state, dir) = state("abc\n");
         let second = PaneId(2);
@@ -601,6 +635,18 @@ mod tests {
         assert_eq!(state.ui.tab_bars.len(), 1);
         assert_eq!(state.ui.tab_bars[0].tabs.len(), 2);
         assert!(screen.contains("main.rs"), "{screen}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn overwrite_prompt_names_the_target_path() {
+        let (mut state, dir) = state("abc\n");
+        let mut prompt = PromptState::new(PromptKind::Overwrite);
+        prompt.target = Some(dir.join("other.txt"));
+        state.mode = InputMode::Prompt(prompt);
+        let screen = draw(&mut state, 80, 24);
+        assert!(screen.contains("Overwrite"), "{screen}");
+        assert!(screen.contains("other.txt"), "{screen}");
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -634,6 +680,42 @@ mod tests {
         state.mode = InputMode::Prompt(PromptState::new(PromptKind::Find));
         let screen = draw(&mut state, 80, 24);
         assert!(screen.contains("Find"), "{screen}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn find_prompt_lists_matches_and_highlights_all_of_them() {
+        use ratatui::style::Modifier;
+
+        let (mut state, dir) = state("alpha\nbeta alpha\n");
+        let theme = crate::theme::Theme::default();
+        state.theme = theme;
+        state.search = Some(Search {
+            document: DocumentId(1),
+            query: "alpha".to_string(),
+            matches: vec![0, 11],
+            index: 1,
+        });
+        let mut prompt = PromptState::new(PromptKind::Find);
+        prompt = prompt.with_field("alpha");
+        state.mode = InputMode::Prompt(prompt);
+
+        let buffer = draw_buffer(&mut state, 80, 24);
+        {
+            let pane = state.panes.get(&PaneId(1)).expect("pane");
+            let document = state.documents.get(&DocumentId(1)).expect("document");
+            let rect = state.ui.pane_rects[&PaneId(1)];
+            let geometry =
+                super::pane::text_geometry(&state, pane, document, rect).expect("geometry");
+            let cell = &buffer[(geometry.area.x + geometry.gutter, geometry.area.y)];
+            assert_eq!(cell.symbol(), "a");
+            assert_eq!(cell.bg, theme.selection);
+            assert!(cell.modifier.contains(Modifier::UNDERLINED));
+        }
+
+        let screen = draw(&mut state, 80, 24);
+        assert!(screen.contains("Find 2/2"), "{screen}");
+        assert!(screen.contains("    2  beta alpha"), "{screen}");
         std::fs::remove_dir_all(&dir).ok();
     }
 }
