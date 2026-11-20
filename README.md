@@ -46,7 +46,8 @@ which stays on disk unless you delete it.
 
 ### Self-update
 
-`i3-editor --update` performs the same update without the installer:
+`i3-editor --update` performs the same update without the installer. Releases
+before 0.1.1 predate the flag, so update those once with the installer form above:
 
 1. Reads `https://api.github.com/repos/afi3/i3-editor/releases/latest`.
 2. Exits with `already up to date` when the running version is current, and does
