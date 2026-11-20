@@ -84,6 +84,9 @@ Delivered:
   written to `session.toml` and restored when launched without a path in the same
   directory; untitled buffers are skipped and broken sessions are ignored.
 - Terminal panel honors `[terminal] shell` and `[terminal] scrollback`.
+- Self-update: `i3-editor --update` checks the latest GitHub release, refuses
+  downgrades, verifies the SHA-256, and atomically replaces the binary; README
+  documents the tag-based release path.
 - `Tab` honors `editor.insert_spaces`: spaces to the next tab stop or a literal
   tab; `explorer.visible` is applied at startup.
 - Quit confirmation with save-all/discard-all, pane-close guard for modified
@@ -91,7 +94,7 @@ Delivered:
 - Keymap presets and capability handling.
 - Unicode width/grapheme handling with tests.
 - Error handling through a single `Error` type; status-bar messages.
-- 174 unit and integration tests, `TestBackend` render tests.
+- 179 unit and integration tests, `TestBackend` render tests.
 - `install.sh` one-liner with `--update` and `--uninstall` (checksum-verified
   release download, version comparison, Cargo fallback) and a tag-driven release
   workflow for macOS/Linux on x86_64 and aarch64.
@@ -116,4 +119,4 @@ cargo clippy --all-targets --all-features
 cargo run -- --dump-keymap
 ```
 
-Last recorded run: `cargo test` → 174 passed, `cargo clippy` → 0 warnings.
+Last recorded run: `cargo test` → 179 passed, `cargo clippy` → 0 warnings.

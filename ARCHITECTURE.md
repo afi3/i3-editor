@@ -158,6 +158,13 @@ pane referenced exactly once); a failure is reported and the default workspace
 stays. Only files on disk are restored, so untitled buffers never appear as empty
 documents.
 
+**Self-update follows the release contract.** `--update` queries the latest
+release, refuses to move backwards, downloads the platform archive plus its
+SHA-256 file through `curl`, verifies with `sha2`, extracts with `tar`, and
+installs by copying to a sibling file, setting mode 755, and renaming over the
+canonical executable. The running process keeps its mapping until exit, and a
+failure leaves the old binary intact. Only the executable changes.
+
 **Theme switching is a runtime state change, not a restart.** `select_theme`,
 `next_theme`, and `prev_theme` run through the same command path as everything
 else: `Theme::names` merges presets with `themes/*.toml`, `Theme::from_config`

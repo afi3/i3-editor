@@ -18,6 +18,7 @@ prose documents.
 | Fuzzy candidate ranking | `src/input/prompt.rs` (`nucleo`) |
 | Session persistence | `src/session.rs` |
 | External-change guard | `src/editor/document.rs`, `src/app/editing.rs` |
+| Self-update (`--update`) | `src/update.rs`, `.github/workflows/release.yml` |
 | Undo model (`MASTER` 5.3.1) | `src/editor/history.rs` |
 | Terminal cleanup (`MASTER` 12.13) | `src/terminal.rs` |
 | Atomic save | `src/editor/document.rs` (`write_atomic`) |

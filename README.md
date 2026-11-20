@@ -27,9 +27,10 @@ curl -fsSL https://raw.githubusercontent.com/afi3/i3-editor/main/install.sh \
 
 # pinned version
 curl -fsSL https://raw.githubusercontent.com/afi3/i3-editor/main/install.sh \
-  | sh -s -- --version 0.1.0
+  | sh -s -- --version 0.1.1
 
-# update an existing install
+# update an existing install (installer or the binary itself)
+i3-editor --update
 curl -fsSL https://raw.githubusercontent.com/afi3/i3-editor/main/install.sh \
   | sh -s -- --update
 
@@ -38,10 +39,31 @@ curl -fsSL https://raw.githubusercontent.com/afi3/i3-editor/main/install.sh \
   | sh -s -- --uninstall
 ```
 
-`--update` asks the GitHub API for the latest release, compares it with
-`i3-editor --version`, and exits early with `already up to date` when they match;
-combine it with `--version` to pin. `--uninstall` removes only the binary and
-reports the configuration directory, which stays on disk unless you delete it.
+`--update` asks the GitHub API for the latest release and compares it with
+`i3-editor --version`; combine the installer form with `--version` to pin.
+`--uninstall` removes only the binary and reports the configuration directory,
+which stays on disk unless you delete it.
+
+### Self-update
+
+`i3-editor --update` performs the same update without the installer:
+
+1. Reads `https://api.github.com/repos/afi3/i3-editor/releases/latest`.
+2. Exits with `already up to date` when the running version is current, and does
+   not downgrade when the running build is newer.
+3. Downloads `i3-editor-<target>.tar.gz` and its `.sha256` from the release,
+   verifies the checksum, and extracts the binary.
+4. Replaces the canonical executable through a sibling temporary file and a
+   rename, so a failed update never truncates the running binary.
+
+It needs `curl` and `tar` (both present on macOS and Linux by default), write
+permission to the binary's directory, and network access. Configuration, themes,
+and the session file are untouched. If permission is denied, rerun with `sudo`
+or use the installer with `--prefix`. The checksum comes from the same release,
+so it protects against transfer corruption but not a compromised repository;
+there is no signature. For mirrors or local testing, `I3_EDITOR_UPDATE_API`
+(full API URL) and `I3_EDITOR_UPDATE_BASE` (release download base, the tag is
+appended) override the endpoints.
 
 `--help` prints all options; `I3_EDITOR_INSTALL_DIR` and `I3_EDITOR_VERSION` work
 too. If no matching release asset exists yet, the script falls back to
@@ -59,13 +81,14 @@ cargo build --release
 cargo run                      # open the current directory
 cargo run -- .                 # same, explicit
 cargo run -- src/main.rs       # open a file directly
+cargo run -- --update          # self-update from the latest release
 cargo run -- --dump-keymap     # print the resolved bindings and exit
 cargo run -- --version         # print the version
 cargo run -- --help            # usage summary
 ```
 
-Stable Rust 1.85+ (edition 2024). No system dependencies beyond a POSIX
-terminal.
+Stable Rust 1.85+ (edition 2024). The editor needs no system dependencies beyond
+a POSIX terminal; `--update` additionally uses `curl` and `tar`.
 
 ## Interface
 
@@ -398,10 +421,37 @@ Conflicts and unknown names are reported, never silently dropped.
 ```bash
 cargo fmt --check
 cargo check
-cargo test              # 174 unit + integration tests, no terminal required
+cargo test              # 179 unit + integration tests, no terminal required
 cargo clippy --all-targets --all-features
 python3 scripts/make_demo.py   # regenerate docs/demo.gif (needs pyte + Pillow)
 ```
+
+## Releasing
+
+Users receive a new version only after a `v*` tag publishes a release; pushing
+commits to `main` changes neither the latest release nor `--update`.
+
+```bash
+# 1. bump the version in Cargo.toml (Cargo.lock follows)
+cargo test
+cargo clippy --all-targets --all-features
+
+# 2. commit, then tag the same commit
+git tag -a v0.1.1 -m "v0.1.1"
+git push origin main
+git push origin v0.1.1
+
+# 3. the release workflow builds four targets and publishes assets:
+#    i3-editor-<target>.tar.gz + .sha256
+gh release view v0.1.1
+
+# 4. verify the updater against the published release
+i3-editor --update
+```
+
+The version in `Cargo.toml` must match the tag. `--update` compares versions, so
+a tag whose binary still reports the old version would be downloaded again on
+every check.
 
 ## Known limitations
 
@@ -410,6 +460,8 @@ python3 scripts/make_demo.py   # regenerate docs/demo.gif (needs pyte + Pillow)
   fences are not tracked across lines. Tree-sitter remains future work.
 - Filesystem watching (Notify) is not implemented; quick open rescans the project
   on every invocation and caps the list at 5000 files.
+- `--update` uses the unauthenticated GitHub API (60 requests per hour per IP)
+  and trusts the checksum published in the same release; there is no signature.
 - Saving replaces the file by rename, so an extra hard link keeps pointing at the
   old inode. Symlinked files are updated through the link.
 - Clipboard writes are best effort: the internal clipboard always works, OSC 52

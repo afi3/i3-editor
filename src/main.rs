@@ -15,6 +15,7 @@ mod syntax;
 mod terminal;
 mod theme;
 mod ui;
+mod update;
 mod workspace;
 
 use std::path::PathBuf;
@@ -34,11 +35,13 @@ fn run() -> error::Result<()> {
     let mut dump_keymap = false;
     let mut show_version = false;
     let mut show_help = false;
+    let mut run_update = false;
     for argument in std::env::args().skip(1) {
         match argument.as_str() {
             "--dump-keymap" => dump_keymap = true,
             "--version" | "-V" => show_version = true,
             "--help" | "-h" => show_help = true,
+            "--update" => run_update = true,
             other => {
                 if target.is_none() {
                     target = Some(PathBuf::from(other));
@@ -56,6 +59,9 @@ fn run() -> error::Result<()> {
     if show_help {
         print_usage();
         return Ok(());
+    }
+    if run_update {
+        return update::run();
     }
 
     let (config, warnings) = config::load();
@@ -96,9 +102,10 @@ fn print_usage() {
         out,
         "i3-editor {}\n\
          \n\
-         usage: i3-editor [PATH] [--dump-keymap] [--version]\n\
+         usage: i3-editor [PATH] [--update] [--dump-keymap] [--version]\n\
          \n\
          PATH            file or directory to open (default: current directory)\n\
+         --update        download and install the latest release, then exit\n\
          --dump-keymap   print resolved key bindings and theme, then exit\n\
          --version, -V   print the version and exit\n\
          --help, -h      print this help and exit",

@@ -35,6 +35,8 @@ pub enum Error {
     Terminal(#[from] std::io::Error),
     #[error("{0}")]
     Shell(String),
+    #[error("{0}")]
+    Update(String),
     #[error("{0} already exists")]
     AlreadyExists(PathBuf),
     #[error("invalid path {0}")]

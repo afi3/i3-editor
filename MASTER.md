@@ -660,6 +660,10 @@ persisted: untitled buffers are skipped, missing files are reported, and the
 snapshot is validated before replacing the default workspace. A broken session is
 reported and ignored rather than blocking startup.
 
+`i3-editor --update` installs the latest GitHub release after verifying its
+published SHA-256 and refuses to downgrade. It is a release client, not a
+keyboard command, and leaves configuration and session files untouched.
+
 Changing the theme from the palette writes the new `theme` value back to the
 configuration file. Only that key is rewritten; other sections, comments, and key
 bindings must be preserved.
