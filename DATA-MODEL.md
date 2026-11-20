@@ -20,6 +20,8 @@ a new object.
 | `eol: Eol` | `Lf` or `Crlf`, applied on write only |
 | `history: History` | Undo/redo log |
 | `syntax: RefCell<SyntaxCache>` | Derived lexer state per line; invalidated from the edited line |
+| `disk_modified: Option<SystemTime>` | Mtime seen at the last load/save, for conflict detection |
+| `disk_len: u64` | Byte length seen at the last load/save |
 
 Invariants: line endings are normalized on load and restored on save; the rope
 stores tabs literally, expansion is a render concern.
@@ -145,3 +147,13 @@ confirmation prompt has no text input.
 `KeyCombo { code: KeyCode, mods: KeyModifiers }` normalized so that uppercase
 characters carry `SHIFT` and `BackTab` drops it. `KeyMap { global, editing,
 explorer }` maps combos to `Command`. Resolution: prompt, focused scope, global.
+
+## Session — `src/session.rs`
+
+`Session { version, root, active, show_hidden, documents: Vec<PathBuf>, workspaces }`
+is written to `<config>/i3-editor/session.toml`. Each workspace stores a `Node`
+tree (`pane { index }` or `split { axis, mode, active, weights, children }`), one
+`PaneSession` per pane (`cursor`, `scroll_top`, `scroll_left`, `tabs`, `active`),
+and the focused pane index. `tabs`/`active` reference the global `documents` list.
+Restore validates every bound before replacing `AppState` panes and workspaces.
+

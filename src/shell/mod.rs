@@ -26,13 +26,25 @@ pub struct ShellPanel {
 }
 
 impl ShellPanel {
-    /// Spawn `$SHELL` (fallback `/bin/sh`) in `cwd`.
-    pub fn spawn(cwd: &Path, rows: u16, cols: u16) -> Result<Self> {
-        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
-        Self::spawn_shell(cwd, rows, cols, &shell)
+    /// Spawn the configured shell (fallback `$SHELL`, then `/bin/sh`) in `cwd`.
+    pub fn spawn(
+        cwd: &Path,
+        rows: u16,
+        cols: u16,
+        shell: Option<&str>,
+        scrollback: usize,
+    ) -> Result<Self> {
+        let shell = resolve_shell(shell);
+        Self::spawn_shell(cwd, rows, cols, &shell, scrollback)
     }
 
-    pub fn spawn_shell(cwd: &Path, rows: u16, cols: u16, shell: &str) -> Result<Self> {
+    pub fn spawn_shell(
+        cwd: &Path,
+        rows: u16,
+        cols: u16,
+        shell: &str,
+        scrollback: usize,
+    ) -> Result<Self> {
         let rows = rows.max(1);
         let cols = cols.max(2);
         let pair = native_pty_system()
@@ -81,7 +93,7 @@ impl ShellPanel {
             master: pair.master,
             writer,
             child,
-            parser: Parser::new(nonzero(rows), nonzero(cols), 2000),
+            parser: Parser::new(nonzero(rows), nonzero(cols), scrollback),
             output,
             rows,
             cols,
@@ -232,6 +244,14 @@ fn function_key(number: u8) -> &'static [u8] {
     }
 }
 
+/// Configured shell wins; an empty value falls back to `$SHELL`, then `/bin/sh`.
+fn resolve_shell(configured: Option<&str>) -> String {
+    if let Some(shell) = configured.map(str::trim).filter(|shell| !shell.is_empty()) {
+        return shell.to_string();
+    }
+    std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -273,9 +293,15 @@ mod tests {
     }
 
     #[test]
+    fn configured_shell_beats_the_environment() {
+        assert_eq!(resolve_shell(Some(" /bin/sh ")), "/bin/sh");
+        assert!(!resolve_shell(Some("  ")).is_empty());
+    }
+
+    #[test]
     fn spawns_a_shell_and_reads_output() {
         let dir = std::env::temp_dir();
-        let mut panel = ShellPanel::spawn_shell(&dir, 10, 60, "/bin/sh").expect("spawn");
+        let mut panel = ShellPanel::spawn_shell(&dir, 10, 60, "/bin/sh", 2000).expect("spawn");
         panel.write(b"printf 'panel-ok\\n'\n");
         let mut visible = String::new();
         for _ in 0..100 {

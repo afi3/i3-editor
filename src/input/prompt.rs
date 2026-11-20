@@ -15,6 +15,7 @@ pub enum PromptKind {
     Replace,
     SaveAs,
     Overwrite,
+    ExternalChange,
     NewFile,
     NewDir,
     Rename,
@@ -34,6 +35,7 @@ impl PromptKind {
             PromptKind::Replace => "Replace",
             PromptKind::SaveAs => "Save As",
             PromptKind::Overwrite => "Overwrite file",
+            PromptKind::ExternalChange => "File changed on disk",
             PromptKind::NewFile => "New File",
             PromptKind::NewDir => "New Directory",
             PromptKind::Rename => "Rename",
@@ -52,7 +54,8 @@ impl PromptKind {
             PromptKind::Delete
             | PromptKind::Discard
             | PromptKind::QuitDirty
-            | PromptKind::Overwrite => 0,
+            | PromptKind::Overwrite
+            | PromptKind::ExternalChange => 0,
             _ => 1,
         }
     }
@@ -64,6 +67,7 @@ impl PromptKind {
                 | PromptKind::QuickOpen
                 | PromptKind::Theme
                 | PromptKind::QuitDirty
+                | PromptKind::ExternalChange
         )
     }
 }

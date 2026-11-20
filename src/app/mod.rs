@@ -69,6 +69,7 @@ impl App {
         warnings: Vec<String>,
         target: Option<PathBuf>,
     ) -> Result<Self> {
+        let restore_session = target.is_none();
         let (root, file) = split_target(target)?;
         let mut explorer = ExplorerState::new(root.clone(), config.explorer.show_hidden)?;
         explorer.visible = config.explorer.visible;
@@ -116,6 +117,10 @@ impl App {
         };
         state.warnings.extend(key_warnings);
         state.warnings.extend(theme_warnings);
+        if restore_session {
+            let session_warnings = crate::session::restore(&mut state);
+            state.warnings.extend(session_warnings);
+        }
         state.ui.message = state.warnings.first().cloned().unwrap_or_default();
 
         let mut app = Self {
@@ -154,6 +159,7 @@ impl App {
                 _ => {}
             }
         }
+        crate::session::persist(&self.state)?;
         Ok(())
     }
 

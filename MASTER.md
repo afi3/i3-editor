@@ -148,8 +148,9 @@ editor panes:
 
 - Opened and closed from the command palette (`toggle_terminal`); closing kills
   the shell process.
-- Spawns `$SHELL` (fallback `/bin/sh`) in the explorer root with a PTY sized to
-  the panel.
+- Spawns `[terminal] shell`, `$SHELL`, or `/bin/sh` (first non-empty) in the
+  explorer root with a PTY sized to the panel; scrollback comes from
+  `[terminal] scrollback`.
 - While the panel owns focus, keys are forwarded to the shell except the quit
   binding, the palette binding, and the terminal toggle.
 - Height comes from `[terminal] height`, clamped so panes keep their minimum.
@@ -453,6 +454,8 @@ Enable bracketed paste on startup and disable it on cleanup, so a multiline past
 
 Preserve the file's original line ending on save, or normalize explicitly and say so in the status message. Never silently rewrite a CRLF file as LF.
 
+Detect a file changed on disk since load; a save offers overwrite or reload instead of clobbering it.
+
 For syntax highlighting, prepare the editor architecture for Tree-sitter integration, but do not make advanced language support a blocker for the initial MVP.
 
 Syntax highlighting is implemented lexically in the meantime, with a lexer state
@@ -632,6 +635,8 @@ show_workspace_tabs = true
 
 [terminal]
 height = 12                # bottom terminal panel rows, clamped to 3..=60
+shell = "/bin/zsh"         # optional; default $SHELL, then /bin/sh
+scrollback = 2000          # kept lines, clamped to 100..=100000
 
 [keys]
 preset = "default"
@@ -648,6 +653,12 @@ type name, constant, operator, punctuation). Colors accept `#rgb`, `#rrggbb`,
 its inherited value.
 
 Support sensible defaults when the configuration file does not exist.
+
+The editor writes `<config>/i3-editor/session.toml` on exit and restores it when
+launched without a path argument in the same directory. Only files on disk are
+persisted: untitled buffers are skipped, missing files are reported, and the
+snapshot is validated before replacing the default workspace. A broken session is
+reported and ignored rather than blocking startup.
 
 Changing the theme from the palette writes the new `theme` value back to the
 configuration file. Only that key is rewritten; other sections, comments, and key

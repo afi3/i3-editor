@@ -5,6 +5,7 @@ use std::cell::RefCell;
 use std::io::Write;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 use ropey::Rope;
 
@@ -65,6 +66,10 @@ pub struct Document {
     pub history: History,
     /// Highlighting memo; derived from `rope`, never part of the file identity.
     pub(crate) syntax: RefCell<SyntaxCache>,
+    /// Modification time and size seen at the last load or save, to detect
+    /// writes made by other programs.
+    pub(crate) disk_modified: Option<SystemTime>,
+    pub(crate) disk_len: u64,
 }
 
 impl Document {
@@ -77,6 +82,8 @@ impl Document {
             eol: Eol::Lf,
             history: History::default(),
             syntax: RefCell::new(SyntaxCache::default()),
+            disk_modified: None,
+            disk_len: 0,
         }
     }
 
@@ -85,7 +92,7 @@ impl Document {
         let text =
             String::from_utf8(bytes).map_err(|_| Error::InvalidUtf8 { path: path.clone() })?;
         let eol = Eol::detect(&text);
-        Ok(Self {
+        let mut document = Self {
             id,
             path: Some(path),
             rope: Rope::from_str(&Eol::Lf.normalize(&text)),
@@ -93,7 +100,11 @@ impl Document {
             eol,
             history: History::default(),
             syntax: RefCell::new(SyntaxCache::default()),
-        })
+            disk_modified: None,
+            disk_len: 0,
+        };
+        document.record_disk_state();
+        Ok(document)
     }
 
     pub fn display_name(&self) -> String {
@@ -235,7 +246,54 @@ impl Document {
         self.path = Some(path);
         self.history.mark_saved();
         self.dirty = false;
+        self.record_disk_state();
         Ok(())
+    }
+
+    /// True when another program changed or removed the file since the last
+    /// load or save. Untitled buffers and unknown metadata never conflict.
+    pub fn disk_changed(&self) -> bool {
+        let (Some(path), Some(recorded)) = (&self.path, self.disk_modified) else {
+            return false;
+        };
+        match std::fs::metadata(path) {
+            Ok(metadata) => {
+                metadata.modified().ok() != Some(recorded) || metadata.len() != self.disk_len
+            }
+            Err(_) => true,
+        }
+    }
+
+    /// Replace the buffer with the file on disk, dropping undo history.
+    pub fn reload(&mut self) -> Result<()> {
+        let path = self.path.clone().ok_or(Error::NoPath)?;
+        let bytes = std::fs::read(&path).map_err(|error| Error::io("read", &path, error))?;
+        let text =
+            String::from_utf8(bytes).map_err(|_| Error::InvalidUtf8 { path: path.clone() })?;
+        self.eol = Eol::detect(&text);
+        self.rope = Rope::from_str(&Eol::Lf.normalize(&text));
+        self.history = History::default();
+        self.dirty = false;
+        self.reset_syntax();
+        self.record_disk_state();
+        Ok(())
+    }
+
+    pub(crate) fn record_disk_state(&mut self) {
+        let metadata = self
+            .path
+            .as_ref()
+            .and_then(|path| std::fs::metadata(path).ok());
+        match metadata {
+            Some(metadata) => {
+                self.disk_modified = metadata.modified().ok();
+                self.disk_len = metadata.len();
+            }
+            None => {
+                self.disk_modified = None;
+                self.disk_len = 0;
+            }
+        }
     }
 }
 

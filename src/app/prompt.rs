@@ -146,6 +146,17 @@ impl App {
                 Some(path) => self.dispatch(Command::SaveTo(path)),
                 None => Ok(()),
             },
+            PromptKind::ExternalChange => match prompt.selected_candidate() {
+                Some("Overwrite with the buffer") => match prompt.target.clone() {
+                    Some(path) => self.force_save_to(path),
+                    None => Ok(()),
+                },
+                Some("Reload from disk") => match prompt.document {
+                    Some(id) => self.reload_document(id),
+                    None => Ok(()),
+                },
+                _ => Ok(()),
+            },
             PromptKind::NewFile => {
                 let path = resolve(&self.state.explorer.target_dir(), &prompt.fields[0])?;
                 self.dispatch(Command::CreateFile(path))
@@ -250,7 +261,7 @@ impl App {
                     .selected_row()
                     .map(|row| row.path.clone());
             }
-            PromptKind::Discard | PromptKind::Overwrite => {}
+            PromptKind::Discard | PromptKind::Overwrite | PromptKind::ExternalChange => {}
             PromptKind::Theme => {
                 prompt.set_candidates(crate::theme::Theme::names(&self.state.themes_dir));
                 prompt.select_candidate(&self.state.config.appearance.theme);

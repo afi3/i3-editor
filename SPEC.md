@@ -16,6 +16,8 @@ prose documents.
 | Keyboard configuration | `src/input/keymap.rs`, `src/input/presets.rs` |
 | Prompts (`MASTER` 5.3) | `src/input/prompt.rs`, `src/app/prompt.rs` |
 | Fuzzy candidate ranking | `src/input/prompt.rs` (`nucleo`) |
+| Session persistence | `src/session.rs` |
+| External-change guard | `src/editor/document.rs`, `src/app/editing.rs` |
 | Undo model (`MASTER` 5.3.1) | `src/editor/history.rs` |
 | Terminal cleanup (`MASTER` 12.13) | `src/terminal.rs` |
 | Atomic save | `src/editor/document.rs` (`write_atomic`) |

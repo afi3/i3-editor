@@ -285,6 +285,19 @@ theme file were read.
   target: a crash or full disk during the write cannot truncate the original.
   Existing permissions are preserved and symlinks are resolved, so the link stays.
 - `F2` Save As asks for confirmation before replacing a different existing file.
+- If another program changed the file since it was loaded, `Ctrl+S` asks first:
+  `Overwrite with the buffer` or `Reload from disk`. Nothing is written until you
+  choose, so an external edit is never clobbered silently.
+
+### Sessions
+
+On exit the editor writes `<config>/i3-editor/session.toml`: workspaces, layout
+trees, pane tabs (saved files only), cursor, and scroll. Launching without a path
+argument in the same directory restores it; launching with a path starts fresh.
+Untitled buffers are not persisted, files that no longer exist are skipped with a
+status-bar warning, and closing every document removes the session file. The
+session is validated (version, counts, layout invariants) before it can replace
+the default workspace; a broken session is reported and ignored.
 
 ## Terminal panel
 
@@ -292,10 +305,12 @@ The editor can host a real shell in a panel at the bottom of the window, outside
 the panes. Open it from the command palette (`F1`, then `toggle_terminal`); the
 same command closes it, which kills the shell process.
 
-- The shell is `$SHELL` (fallback `/bin/sh`), started in the explorer root.
+- The shell comes from `[terminal] shell`, otherwise `$SHELL`, otherwise
+  `/bin/sh`; it starts in the explorer root.
 - While the panel has focus, every key is forwarded to the shell except `Ctrl+Q`,
   `F1`, and the terminal toggle itself.
-- Click the panel to focus it; the wheel scrolls 2000 lines of scrollback.
+- Click the panel to focus it; the wheel scrolls `[terminal] scrollback` lines
+  (default 2000).
 - The panel height comes from `[terminal] height`; panes keep their minimum size,
   so the panel shrinks instead of squeezing them out.
 - Output is parsed with `vt100` (colors, bold, underline, inverse, cursor) and
@@ -348,6 +363,8 @@ show_workspace_tabs = true
 
 [terminal]
 height = 12                # rows for the bottom panel, clamped to 3..=60
+shell = "/bin/zsh"         # optional: default $SHELL, then /bin/sh
+scrollback = 2000          # lines kept, clamped to 100..=100000
 
 [keys]
 preset = "default"         # "default" | "safe"
@@ -381,7 +398,7 @@ Conflicts and unknown names are reported, never silently dropped.
 ```bash
 cargo fmt --check
 cargo check
-cargo test              # 166 unit + integration tests, no terminal required
+cargo test              # 174 unit + integration tests, no terminal required
 cargo clippy --all-targets --all-features
 python3 scripts/make_demo.py   # regenerate docs/demo.gif (needs pyte + Pillow)
 ```
@@ -399,6 +416,5 @@ python3 scripts/make_demo.py   # regenerate docs/demo.gif (needs pyte + Pillow)
   depends on the terminal.
 - Startup probes keyboard enhancement support; terminals that never answer the
   query add a short delay to startup.
-- Session persistence across restarts is not implemented.
-- Terminal panel: one shell only, no mouse reporting into shell programs, shell
-  path is `$SHELL`, scrollback fixed at 2000 lines.
+- Terminal panel: one shell at a time, and mouse input is not reported into shell
+  programs; the wheel scrolls the panel instead.

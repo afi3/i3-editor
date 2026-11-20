@@ -76,10 +76,33 @@ impl App {
     }
 
     pub(crate) fn save_to(&mut self, path: PathBuf) -> Result<()> {
+        self.save_to_inner(path, false)
+    }
+
+    fn save_to_inner(&mut self, path: PathBuf, force: bool) -> Result<()> {
         let id = self
             .state
             .active_document_id()
             .ok_or(Error::NoActiveDocument)?;
+        let same_path = {
+            let document = self
+                .state
+                .documents
+                .get(&id)
+                .ok_or(Error::UnknownDocument(id))?;
+            document.path.as_deref() == Some(path.as_path())
+        };
+        if same_path && !force {
+            let changed = self
+                .state
+                .documents
+                .get(&id)
+                .is_some_and(Document::disk_changed);
+            if changed {
+                self.open_external_change_prompt(id, path);
+                return Ok(());
+            }
+        }
         let document = self
             .state
             .documents
@@ -92,6 +115,49 @@ impl App {
         }
         self.notify(format!("saved {}", path.display()));
         self.state.explorer.refresh();
+        Ok(())
+    }
+
+    pub(crate) fn force_save_to(&mut self, path: PathBuf) -> Result<()> {
+        self.save_to_inner(path, true)
+    }
+
+    /// Ask what to do when the file changed under a modified buffer.
+    pub(crate) fn open_external_change_prompt(&mut self, id: DocumentId, path: PathBuf) {
+        self.open_prompt(PromptKind::ExternalChange);
+        if let crate::state::InputMode::Prompt(prompt) = &mut self.state.mode {
+            prompt.set_candidates(vec![
+                "Overwrite with the buffer".to_string(),
+                "Reload from disk".to_string(),
+            ]);
+            prompt.target = Some(path);
+            prompt.document = Some(id);
+        }
+    }
+
+    /// Replace a buffer with the file on disk and clear its undo history.
+    pub(crate) fn reload_document(&mut self, id: DocumentId) -> Result<()> {
+        let (path, len) = {
+            let document = self
+                .state
+                .documents
+                .get_mut(&id)
+                .ok_or(Error::UnknownDocument(id))?;
+            document.reload()?;
+            (
+                document.path.clone().unwrap_or_default(),
+                document.len_chars(),
+            )
+        };
+        for pane in self.state.panes.values_mut() {
+            if pane.tabs.contains(&id) {
+                pane.cursor = pane.cursor.min(len);
+                pane.anchor = None;
+                pane.target_col = None;
+            }
+        }
+        self.ensure_cursor_visible();
+        self.notify(format!("reloaded {}", path.display()));
         Ok(())
     }
 

@@ -8,6 +8,7 @@ mod editor;
 mod error;
 mod explorer;
 mod input;
+mod session;
 mod shell;
 mod state;
 mod syntax;

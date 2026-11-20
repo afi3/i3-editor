@@ -78,7 +78,12 @@ Delivered:
   Markdown fences whose body is highlighted with the named language. Per-line
   lexer states are memoized on the document and invalidated from the edited line.
 - Saves replace the file atomically (temp file + rename) with permissions and
-  symlinks preserved; Save As confirms before replacing another file.
+  symlinks preserved; Save As confirms before replacing another file. A save after
+  an external change asks to overwrite or reload instead of clobbering it.
+- Session persistence: workspaces, layouts, pane tabs, cursor, and scroll are
+  written to `session.toml` and restored when launched without a path in the same
+  directory; untitled buffers are skipped and broken sessions are ignored.
+- Terminal panel honors `[terminal] shell` and `[terminal] scrollback`.
 - `Tab` honors `editor.insert_spaces`: spaces to the next tab stop or a literal
   tab; `explorer.visible` is applied at startup.
 - Quit confirmation with save-all/discard-all, pane-close guard for modified
@@ -86,7 +91,7 @@ Delivered:
 - Keymap presets and capability handling.
 - Unicode width/grapheme handling with tests.
 - Error handling through a single `Error` type; status-bar messages.
-- 166 unit and integration tests, `TestBackend` render tests.
+- 174 unit and integration tests, `TestBackend` render tests.
 - `install.sh` one-liner with `--update` and `--uninstall` (checksum-verified
   release download, version comparison, Cargo fallback) and a tag-driven release
   workflow for macOS/Linux on x86_64 and aarch64.
@@ -95,9 +100,7 @@ Delivered:
 
 Not delivered yet:
 
-- No session persistence across restarts.
-- Terminal panel limits: no mouse reporting into shell programs, one panel only,
-  shell path is `$SHELL` (not configurable), scrollback is fixed at 2000 lines.
+- Terminal panel limits: no mouse reporting into shell programs, one panel only.
 - Syntax highlighting is lexical, not grammar-aware: token kinds come from naming
   conventions, Rust raw strings and shell heredocs are not tracked across lines,
   and code inside a Markdown fence is highlighted per line. Structural
@@ -113,4 +116,4 @@ cargo clippy --all-targets --all-features
 cargo run -- --dump-keymap
 ```
 
-Last recorded run: `cargo test` → 166 passed, `cargo clippy` → 0 warnings.
+Last recorded run: `cargo test` → 174 passed, `cargo clippy` → 0 warnings.

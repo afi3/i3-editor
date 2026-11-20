@@ -24,11 +24,19 @@ pub struct AppConfig {
 pub struct TerminalConfig {
     /// Height of the bottom terminal panel in rows.
     pub height: u16,
+    /// Shell executable; empty or missing uses `$SHELL`, then `/bin/sh`.
+    pub shell: Option<String>,
+    /// Lines kept in the panel's scrollback.
+    pub scrollback: usize,
 }
 
 impl Default for TerminalConfig {
     fn default() -> Self {
-        Self { height: 12 }
+        Self {
+            height: 12,
+            shell: None,
+            scrollback: 2000,
+        }
     }
 }
 
@@ -168,6 +176,7 @@ pub fn load_from(path: &Path) -> (AppConfig, Vec<String>) {
     take_section(&value, "keys", &mut config.keys, &mut warnings);
     config.explorer.width = config.explorer.width.clamp(5, 50);
     config.terminal.height = config.terminal.height.clamp(3, 60);
+    config.terminal.scrollback = config.terminal.scrollback.clamp(100, 100_000);
     (config, warnings)
 }
 
@@ -179,7 +188,7 @@ const APPEARANCE_KEYS: &[&str] = &[
     "show_document_tabs",
     "show_workspace_tabs",
 ];
-const TERMINAL_KEYS: &[&str] = &["height"];
+const TERMINAL_KEYS: &[&str] = &["height", "shell", "scrollback"];
 const KEYS_KEYS: &[&str] = &["preset", "global", "editing", "explorer"];
 
 /// Report keys the loader does not understand without discarding the rest of
@@ -486,6 +495,30 @@ mod strict_tests {
         assert_eq!(warnings.len(), 1, "{warnings:?}");
         assert!(warnings[0].contains("bogus"), "{warnings:?}");
         assert_eq!(config.editor.tab_size, 2, "known sections still load");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+}
+
+#[cfg(test)]
+mod terminal_tests {
+    use super::*;
+
+    #[test]
+    fn scrollback_is_clamped_and_shell_is_kept() {
+        let dir = std::env::temp_dir().join(format!("i3-terminal-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let path = dir.join("config.toml");
+
+        std::fs::write(&path, "[terminal]\nscrollback = 1\nshell = \"/bin/sh\"\n").expect("write");
+        let (config, warnings) = load_from(&path);
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(config.terminal.scrollback, 100);
+        assert_eq!(config.terminal.shell.as_deref(), Some("/bin/sh"));
+
+        std::fs::write(&path, "[terminal]\nscrollback = 9999999\n").expect("write");
+        let (config, _) = load_from(&path);
+        assert_eq!(config.terminal.scrollback, 100_000);
+        assert_eq!(config.terminal.shell, None);
         std::fs::remove_dir_all(&dir).ok();
     }
 }

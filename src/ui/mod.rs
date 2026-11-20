@@ -376,6 +376,8 @@ mod tests {
                 eol: Eol::Lf,
                 history: History::default(),
                 syntax: Default::default(),
+                disk_modified: None,
+                disk_len: 0,
             },
         );
 

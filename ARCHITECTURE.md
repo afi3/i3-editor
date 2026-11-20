@@ -143,6 +143,21 @@ whose tabs include modified documents, so no document becomes unreachable. Both
 paths reuse the existing command/prompt machinery, so the guard is testable
 without a terminal.
 
+**Disk state is tracked, not assumed.** A document records the mtime and size it
+saw at load or save. If the file changed underneath a modified buffer, `Ctrl+S`
+opens a prompt offering `Overwrite with the buffer` or `Reload from disk`; the
+write is deferred until the choice. Reload replaces the rope, drops undo history,
+clears the syntax memo, and clamps cursors in every pane showing that document.
+
+**Sessions are validated snapshots.** `src/session.rs` serializes workspaces,
+layout trees (axis, tiling/tabbed mode, active child, weights), pane tabs, cursor,
+and scroll to `session.toml`. Restore only runs without a CLI path when the saved
+root matches the current directory. The snapshot is capped and validated first
+(version, workspace/pane/document counts, split child and weight ranges, every
+pane referenced exactly once); a failure is reported and the default workspace
+stays. Only files on disk are restored, so untitled buffers never appear as empty
+documents.
+
 **Theme switching is a runtime state change, not a restart.** `select_theme`,
 `next_theme`, and `prev_theme` run through the same command path as everything
 else: `Theme::names` merges presets with `themes/*.toml`, `Theme::from_config`

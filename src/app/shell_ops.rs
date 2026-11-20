@@ -40,7 +40,13 @@ impl App {
         let rows = self.state.config.terminal.height.saturating_sub(2).max(3);
         let cols = self.state.ui.area.width.saturating_sub(2).max(20);
         let cwd = self.state.explorer.root.clone();
-        match crate::shell::ShellPanel::spawn(&cwd, rows, cols) {
+        match crate::shell::ShellPanel::spawn(
+            &cwd,
+            rows,
+            cols,
+            self.state.config.terminal.shell.as_deref(),
+            self.state.config.terminal.scrollback,
+        ) {
             Ok(panel) => {
                 self.state.shell = Some(panel);
                 self.state.focus = Focus::Shell;

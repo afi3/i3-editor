@@ -33,18 +33,19 @@ fn fixture(text: &str) -> (App, PathBuf) {
     panes.insert(pane_id, pane);
 
     let mut documents = std::collections::HashMap::new();
-    documents.insert(
-        document_id,
-        Document {
-            id: document_id,
-            path: Some(path.clone()),
-            rope: ropey::Rope::from_str(text),
-            dirty: false,
-            eol: Eol::Lf,
-            history: History::default(),
-            syntax: Default::default(),
-        },
-    );
+    let mut document = Document {
+        id: document_id,
+        path: Some(path.clone()),
+        rope: ropey::Rope::from_str(text),
+        dirty: false,
+        eol: Eol::Lf,
+        history: History::default(),
+        syntax: Default::default(),
+        disk_modified: None,
+        disk_len: 0,
+    };
+    document.record_disk_state();
+    documents.insert(document_id, document);
 
     let mut workspaces = WorkspaceManager::default();
     workspaces.push(Workspace::new(workspace_id, "test", pane_id));
@@ -1011,8 +1012,61 @@ fn config_visibility_is_applied_at_startup() {
         },
         config,
         Vec::new(),
-        None,
+        Some(std::env::temp_dir()),
     )
     .expect("app");
     assert!(!app.state.explorer.visible);
+}
+
+#[test]
+fn saving_after_an_external_change_asks_and_can_reload() {
+    let (mut app, dir) = fixture("one\n");
+    let path = app
+        .state
+        .active_document()
+        .and_then(|document| document.path.clone())
+        .expect("path");
+    app.dispatch(Command::InsertText("two".to_string()))
+        .expect("type");
+    std::fs::write(&path, "outside change\n").expect("external write");
+
+    app.dispatch(Command::Save).expect("save");
+    let InputMode::Prompt(prompt) = &app.state.mode else {
+        panic!("external-change prompt missing")
+    };
+    assert_eq!(prompt.kind, crate::input::PromptKind::ExternalChange);
+    assert_eq!(
+        std::fs::read_to_string(&path).expect("read"),
+        "outside change\n",
+        "save must not run before the choice"
+    );
+
+    if let InputMode::Prompt(prompt) = &mut app.state.mode {
+        prompt.move_selection(1);
+    }
+    app.submit_prompt().expect("reload");
+    assert!(!app.state.mode.is_prompt());
+    assert_eq!(text(&app), "outside change\n");
+    assert!(!app.state.active_document().expect("doc").dirty);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn overwrite_after_an_external_change_writes_the_buffer() {
+    let (mut app, dir) = fixture("one\n");
+    let path = app
+        .state
+        .active_document()
+        .and_then(|document| document.path.clone())
+        .expect("path");
+    app.dispatch(Command::InsertText("two".to_string()))
+        .expect("type");
+    std::fs::write(&path, "outside\n").expect("external write");
+
+    app.dispatch(Command::Save).expect("save");
+    assert!(app.state.mode.is_prompt(), "prompt expected");
+    app.submit_prompt().expect("overwrite");
+    assert_eq!(std::fs::read_to_string(&path).expect("read"), "twoone\n");
+    assert!(!app.state.active_document().expect("doc").dirty);
+    std::fs::remove_dir_all(&dir).ok();
 }
