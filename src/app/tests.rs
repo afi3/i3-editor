@@ -908,6 +908,34 @@ fn quick_open_uses_fuzzy_ranking() {
 }
 
 #[test]
+fn quick_open_lists_dotfiles_when_hidden_is_shown() {
+    let (mut app, dir) = fixture("note\n");
+    std::fs::write(dir.join(".gitignore"), ".env\n").expect("gitignore");
+    std::fs::write(dir.join(".env"), "SECRET=1\n").expect("dotfile");
+
+    app.dispatch(Command::QuickOpen).expect("quick open");
+    let InputMode::Prompt(prompt) = &app.state.mode else {
+        panic!("quick open prompt missing")
+    };
+    assert!(!prompt.candidates.iter().any(|name| name == ".env"));
+
+    press(&mut app, ratatui::crossterm::event::KeyCode::Esc);
+    app.dispatch(Command::ExplorerToggleHidden).expect("toggle");
+    app.dispatch(Command::QuickOpen).expect("quick open");
+    let InputMode::Prompt(prompt) = &app.state.mode else {
+        panic!("quick open prompt missing")
+    };
+    assert!(
+        prompt.candidates.iter().any(|name| name == ".env"),
+        "{:?}",
+        prompt.candidates
+    );
+
+    press(&mut app, ratatui::crossterm::event::KeyCode::Esc);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn tab_inserts_spaces_up_to_the_next_stop() {
     let (mut app, dir) = fixture("x\n");
     app.state.config.editor.tab_size = 4;

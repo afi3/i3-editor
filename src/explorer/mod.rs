@@ -88,8 +88,12 @@ impl ExplorerState {
     }
 
     fn is_visible(&self, path: &Path) -> bool {
-        let name = display_name(path);
-        if !self.show_hidden && name.starts_with('.') {
+        // Showing hidden files also reveals entries hidden by `.gitignore`, so
+        // a file such as `.env` becomes reachable with one toggle.
+        if self.show_hidden {
+            return true;
+        }
+        if display_name(path).starts_with('.') {
             return false;
         }
         match &self.ignore {
@@ -261,4 +265,30 @@ fn validate_name(name: &str) -> Result<&str> {
         return Err(Error::InvalidPath(PathBuf::from(name)));
     }
     Ok(name)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn show_hidden_reveals_dotfiles_and_gitignored_entries() {
+        let dir = std::env::temp_dir().join(format!("i3-explorer-{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::create_dir_all(dir.join("target")).expect("target dir");
+        std::fs::write(dir.join(".gitignore"), ".env\ntarget/\n").expect("gitignore");
+        std::fs::write(dir.join(".env"), "SECRET=1\n").expect("dotfile");
+        std::fs::write(dir.join("target").join("artifact"), "").expect("ignored file");
+        std::fs::write(dir.join("main.rs"), "").expect("file");
+
+        let mut explorer = ExplorerState::new(dir.clone(), false).expect("explorer");
+        let visible: Vec<&str> = explorer.rows.iter().map(|row| row.name.as_str()).collect();
+        assert_eq!(visible, ["main.rs"]);
+
+        explorer.toggle_hidden();
+        let visible: Vec<&str> = explorer.rows.iter().map(|row| row.name.as_str()).collect();
+        assert_eq!(visible, ["target", ".env", ".gitignore", "main.rs"]);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }

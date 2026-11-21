@@ -66,6 +66,7 @@ pub struct ExplorerConfig {
     pub visible: bool,
     /// Percentage of the terminal width, clamped to `5..=50`.
     pub width: u16,
+    /// Show dotfiles and entries ignored by `.gitignore` (for example `.env`).
     pub show_hidden: bool,
 }
 

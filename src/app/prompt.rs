@@ -282,9 +282,13 @@ impl App {
     fn quick_open_candidates(&self) -> Vec<String> {
         let root = self.state.explorer.root.clone();
         let mut out = Vec::new();
+        let show_all = self.state.explorer.show_hidden;
         let walker = ignore::WalkBuilder::new(&root)
-            .hidden(!self.state.explorer.show_hidden)
-            .git_ignore(true)
+            .hidden(!show_all)
+            .git_ignore(!show_all)
+            .git_global(!show_all)
+            .git_exclude(!show_all)
+            .ignore(!show_all)
             .build();
         for entry in walker.flatten() {
             let path = entry.path();

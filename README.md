@@ -143,7 +143,7 @@ no `Alt+<letter>`, no `Ctrl+2`..`Ctrl+8`.
 
 Explorer focus keys: `Up`/`Down`, `Enter` (open), `Right`/`Left` (expand or
 collapse), `n` new file, `Shift+N` new directory, `r` rename, `d` delete,
-`h` hidden files, `Ctrl+R` refresh.
+`h` hidden and ignored files (such as `.env`), `Ctrl+R` refresh.
 
 Mouse: click a pane to focus it, drag a pane border to resize the split.
 
