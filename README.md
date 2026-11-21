@@ -271,24 +271,25 @@ Colors accept `#rgb`, `#rrggbb`, `indexed:0..255`, or names such as `reset`,
 
 ### Syntax highlighting
 
-Highlighting is lexical but stateful across lines: the lexer carries its state
-from one line to the next, so a `/* */` block (nested in Rust), a Python
-`"""` / `'''` block, a JavaScript template literal, and a Go raw string keep
+Rust, Python, JavaScript/TypeScript, Go, C, and Shell are highlighted from a
+tree-sitter parse tree. The grammar's highlight query decides the token kind, so
+Rust raw strings, shell heredocs, nested block comments, and template literals
+keep their color across line breaks, and identifiers are classified by their role
+in the tree rather than by naming convention. Each document keeps its tree and
+hands every edit to it as an `InputEdit`; the next frame reparses only the changed
+region and runs the query over the visible lines instead of the whole file.
+
+TOML, JSON, and Markdown use the built-in stateful lexer: a `/* */` block (nested
+in Rust), a Python `"""` / `'''` block, and a JavaScript template literal keep
 their comment or string color until the closing delimiter. Markdown fenced blocks
 (backticks or tildes) are tracked as well, and their body is highlighted with the
 named language when it is one of the supported ones.
 
-Keywords, numbers, function calls, type names, constants, operators, and
-punctuation are colored per line for Rust, Python, JavaScript/TypeScript, Go, C,
-Shell, TOML, JSON, and Markdown. Files with other extensions render in the theme
-foreground.
+Files with other extensions render in the theme foreground.
 
-Known limits: identifiers are still classified by naming convention (`Thing` →
-type, `THING` → constant, `name(` → function) instead of a parse tree; Rust raw
-strings (`r#"..."#`) and shell heredocs are not tracked across lines; and code
-inside a Markdown fence is highlighted line by line, without carrying state.
-Structural, grammar-aware highlighting is still the Tree-sitter work listed in
-`ROADMAP.md`.
+Known limits: TOML, JSON, and Markdown are still lexical, and code inside a
+Markdown fence is highlighted line by line, without carrying grammar state across
+the fence.
 
 The terminal backend honors `NO_COLOR`: when that variable is set, color
 sequences are suppressed and the theme has no visible effect. `--dump-keymap`
@@ -456,9 +457,9 @@ every check.
 
 ## Known limitations
 
-- Syntax highlighting is lexical, not grammar-aware: token kinds come from naming
-  conventions, and Rust raw strings, shell heredocs, and state inside Markdown
-  fences are not tracked across lines. Tree-sitter remains future work.
+- Syntax highlighting is structural for Rust, Python, JavaScript/TypeScript, Go,
+  C, and Shell. TOML, JSON, and Markdown still use the lexical highlighter, so
+  code inside a Markdown fence is colored per line without grammar state.
 - Filesystem watching (Notify) is not implemented; quick open rescans the project
   on every invocation and caps the list at 5000 files.
 - `--update` uses the unauthenticated GitHub API (60 requests per hour per IP)

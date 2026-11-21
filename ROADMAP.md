@@ -61,8 +61,10 @@ Delivered:
   unknown keys are reported instead of ignored.
 - Theme presets (`default`, `dark`, `light`, `high-contrast`) and theme files
   loaded by name from `<config>/i3-editor/themes/`, with `base` inheritance.
-- Lexical syntax highlighting for Rust, Python, JavaScript/TypeScript, Go, C,
-  Shell, TOML, JSON, and Markdown, with token colors from the active theme.
+- Tree-sitter highlighting for Rust, Python, JavaScript/TypeScript, Go, C, and
+  Shell: each document keeps its parse tree, every edit becomes an `InputEdit`
+  for an incremental reparse, and the highlight query runs over the visible byte
+  range. TOML, JSON, and Markdown keep the stateful lexer.
 - Bottom terminal panel running a real shell (`portable-pty` + `vt100`), opened
   and closed from the palette, with theme-aware rendering and scrollback.
 - Runtime theme switching from the palette (`select_theme`, `next_theme`,
@@ -94,7 +96,7 @@ Delivered:
 - Keymap presets and capability handling.
 - Unicode width/grapheme handling with tests.
 - Error handling through a single `Error` type; status-bar messages.
-- 179 unit and integration tests, `TestBackend` render tests.
+- 187 unit and integration tests, `TestBackend` render tests.
 - `install.sh` one-liner with `--update` and `--uninstall` (checksum-verified
   release download, version comparison, Cargo fallback) and a tag-driven release
   workflow for macOS/Linux on x86_64 and aarch64.
@@ -104,10 +106,8 @@ Delivered:
 Not delivered yet:
 
 - Terminal panel limits: no mouse reporting into shell programs, one panel only.
-- Syntax highlighting is lexical, not grammar-aware: token kinds come from naming
-  conventions, Rust raw strings and shell heredocs are not tracked across lines,
-  and code inside a Markdown fence is highlighted per line. Structural
-  (Tree-sitter) highlighting remains future work.
+- TOML, JSON, and Markdown still use the lexical highlighter; code inside a
+  Markdown fence is highlighted per line without grammar state.
 
 ## Verification commands
 
@@ -119,4 +119,4 @@ cargo clippy --all-targets --all-features
 cargo run -- --dump-keymap
 ```
 
-Last recorded run: `cargo test` → 179 passed, `cargo clippy` → 0 warnings.
+Last recorded run: `cargo test` → 187 passed, `cargo clippy` → 0 warnings.

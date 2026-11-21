@@ -114,16 +114,17 @@ rendering stays read-only. Text styles always set both foreground and background
 Ratatui writes the style it is given per cell, so a `Style::default()` span would
 erase a themed background.
 
-**Syntax highlighting is lexical but stateful.** `syntax::line_spans` consumes the
-lexer state at the start of a line and returns the state for the next one, so
-block comments, triple-quoted strings, template literals, raw strings, and
-Markdown fences keep their token kind across line breaks. `Document` memoizes one
-start state per line in `SyntaxCache`, invalidates from the edited line, and
-re-lexes only the lines a frame asks for; filling that memo during rendering is
-derived work and never changes document content. No grammar dependency is
-involved, and the cost stays one pass over the visible lines plus the gap between
-the last cached line and the viewport. Identifiers are still classified by
-convention; structural highlighting remains the Tree-sitter upgrade path.
+**Syntax highlighting is structural where a grammar exists.** `syntax::tree`
+owns a tree-sitter parser per document: Rust, Python, JavaScript/TypeScript, Go,
+C, and Shell each load their highlight query once in a `LazyLock`. `Document`
+hands every insert and removal to the tree as an `InputEdit`, so the next frame
+reparses only the changed region; the query cursor is bounded to the visible byte
+range. Captures map to `TokenKind` by capture-name prefix, and numbers captured as
+`constant.builtin` (Rust literals) stay `TokenKind::Number`. TOML, JSON, and
+Markdown fall back to `syntax::line_spans`, the stateful lexer that carries block
+comments, triple-quoted strings, template literals, and fences across lines.
+`SyntaxCache` holds both the tree and the lexer's per-line state; filling either
+during rendering is derived work and never changes document content.
 
 **The terminal panel is a real PTY plus a VT100 model.** `shell::ShellPanel`
 spawns `$SHELL` through `portable-pty`, reads the master in a dedicated thread into

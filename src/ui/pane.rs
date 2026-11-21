@@ -131,6 +131,10 @@ pub fn render(
     let cursor_line = document.line_of_char(pane.cursor);
 
     let buffer = frame.buffer_mut();
+    let visible = line_count
+        .saturating_sub(pane.scroll_top)
+        .min(text_area.height as usize);
+    let highlight = document.syntax_spans_range(pane.scroll_top, visible);
     for row in 0..text_area.height as usize {
         let line_index = pane.scroll_top + row;
         if line_index >= line_count {
@@ -157,7 +161,7 @@ pub fn render(
         }
         let text = document.line_text(line_index);
         let line_start = document.char_of_line(line_index);
-        let spans = document.syntax_spans(line_index, &text);
+        let spans = highlight.get(row).map(Vec::as_slice).unwrap_or(&[]);
         draw_text_line(
             buffer,
             text_area.x.saturating_add(gutter),
@@ -170,7 +174,7 @@ pub fn render(
             &selection,
             row_style,
             selected,
-            &spans,
+            spans,
             &theme,
             match_starts,
             match_len,

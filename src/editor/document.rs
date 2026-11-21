@@ -8,20 +8,25 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use ropey::Rope;
+use tree_sitter::{InputEdit, Point};
 
 use crate::error::{Error, Result};
 use crate::state::DocumentId;
+use crate::syntax::tree::Highlighter;
 use crate::syntax::{self, Language, LexState, Span};
 
 use super::history::History;
 
 /// Derived highlighting state: the lexer state at the start of each line whose
-/// start has been computed. Cleared from the edited line onward, so only the
-/// lines a frame needs are ever re-lexed after an edit.
+/// start has been computed, plus the tree-sitter parse tree for grammars that
+/// have one. The lexer memo is cleared from the edited line onward; the tree is
+/// updated with `InputEdit`s and reparsed lazily.
 #[derive(Debug, Default)]
 pub(crate) struct SyntaxCache {
     language: Language,
     states: Vec<LexState>,
+    /// Parse tree for grammars supported by `syntax::tree`.
+    tree: Highlighter,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -175,8 +180,76 @@ impl Document {
             .truncate(line.saturating_add(1));
     }
 
+    /// Spans for a contiguous run of lines. Uses tree-sitter when the language
+    /// has a grammar and falls back to the lexer otherwise.
+    pub fn syntax_spans_range(&self, first: usize, count: usize) -> Vec<Vec<Span>> {
+        let line_count = self.line_count();
+        if count == 0 {
+            return Vec::new();
+        }
+        let first = first.min(line_count.saturating_sub(1));
+        let count = count.min(line_count - first);
+        let language = Language::from_path(self.path.as_deref());
+        if crate::syntax::tree::supports(language) {
+            let mut cache = self.syntax.borrow_mut();
+            if cache.language != language {
+                cache.language = language;
+                cache.states.clear();
+                cache.tree.invalidate();
+            }
+            if let Some(spans) = cache.tree.spans(&self.rope, language, first, count) {
+                return spans;
+            }
+        }
+        (first..first + count)
+            .map(|line| {
+                let text = self.line_text(line);
+                self.syntax_spans(line, &text)
+            })
+            .collect()
+    }
+
     fn reset_syntax(&mut self) {
-        self.syntax.get_mut().states.clear();
+        let cache = self.syntax.get_mut();
+        cache.states.clear();
+        cache.tree.invalidate();
+    }
+
+    /// Describe an edit to the parse tree. Positions use the rope before the
+    /// edit; `inserted` is the text that will replace `start..end`.
+    fn input_edit(&self, start: usize, end: usize, inserted: &str) -> InputEdit {
+        let start_byte = self.rope.char_to_byte(start);
+        let start_row = self.rope.char_to_line(start);
+        let start_point = Point {
+            row: start_row,
+            column: start_byte - self.rope.line_to_byte(start_row),
+        };
+        let old_end_byte = self.rope.char_to_byte(end);
+        let old_end_row = self.rope.char_to_line(end);
+        let old_end_point = Point {
+            row: old_end_row,
+            column: old_end_byte - self.rope.line_to_byte(old_end_row),
+        };
+        let rows = inserted.matches('\n').count();
+        let new_end_point = if rows == 0 {
+            Point {
+                row: start_row,
+                column: start_point.column + inserted.len(),
+            }
+        } else {
+            Point {
+                row: start_row + rows,
+                column: inserted.rsplit('\n').next().unwrap_or("").len(),
+            }
+        };
+        InputEdit {
+            start_byte,
+            old_end_byte,
+            new_end_byte: start_byte + inserted.len(),
+            start_position: start_point,
+            old_end_position: old_end_point,
+            new_end_position: new_end_point,
+        }
     }
 
     pub fn insert(
@@ -188,11 +261,13 @@ impl Document {
     ) {
         let char_idx = char_idx.min(self.len_chars());
         let line = self.line_of_char(char_idx);
+        let edit = self.input_edit(char_idx, char_idx, text);
         self.rope.insert(char_idx, text);
         self.history
             .record_insert(char_idx, text, cursor_before, scroll_before);
         self.dirty = self.history.is_modified();
         self.invalidate_syntax(line);
+        self.syntax.get_mut().tree.apply_edit(edit);
     }
 
     pub fn remove(
@@ -208,11 +283,13 @@ impl Document {
         }
         let line = self.line_of_char(start);
         let text: String = self.rope.slice(start..end).to_string();
+        let edit = self.input_edit(start, end, "");
         self.rope.remove(start..end);
         self.history
             .record_remove(start, &text, cursor_before, scroll_before);
         self.dirty = self.history.is_modified();
         self.invalidate_syntax(line);
+        self.syntax.get_mut().tree.apply_edit(edit);
         text
     }
 
@@ -429,6 +506,97 @@ mod tests {
             spans.iter().any(|span| span.kind == TokenKind::Comment),
             "undo restores the comment state"
         );
+    }
+
+    #[test]
+    fn structural_spans_cover_multiline_rust_raw_strings() {
+        use crate::syntax::{Span, TokenKind};
+
+        let mut document = Document::empty(DocumentId(1), Some(PathBuf::from("/tmp/raw.rs")));
+        document.rope = Rope::from_str("let s = r#\"alpha\nbeta\"#;\n");
+        let spans = document.syntax_spans_range(0, 2);
+        assert_eq!(
+            spans[1].first(),
+            Some(&Span {
+                start: 0,
+                end: 6,
+                kind: TokenKind::String,
+            }),
+            "the raw string survives the line break"
+        );
+    }
+
+    #[test]
+    fn structural_spans_cover_shell_heredocs() {
+        use crate::syntax::{Span, TokenKind};
+
+        let mut document = Document::empty(DocumentId(1), Some(PathBuf::from("/tmp/run.sh")));
+        document.rope = Rope::from_str("cat <<EOF > out\nhello\nEOF\necho done\n");
+        let spans = document.syntax_spans_range(1, 1);
+        assert_eq!(
+            spans[0],
+            [Span {
+                start: 0,
+                end: 5,
+                kind: TokenKind::String,
+            }]
+        );
+    }
+
+    #[test]
+    fn spans_highlight_constructs_starting_above_the_viewport() {
+        use crate::syntax::{Span, TokenKind};
+
+        let mut document = Document::empty(DocumentId(1), Some(PathBuf::from("/tmp/scroll.rs")));
+        document.rope = Rope::from_str("let s = r#\"\nalpha\nbeta\ngamma\"#;\nlet n = 1;\n");
+        let spans = document.syntax_spans_range(2, 2);
+        assert_eq!(
+            spans[0],
+            [Span {
+                start: 0,
+                end: 4,
+                kind: TokenKind::String,
+            }]
+        );
+        assert_eq!(
+            spans[1],
+            [
+                Span {
+                    start: 0,
+                    end: 7,
+                    kind: TokenKind::String,
+                },
+                Span {
+                    start: 7,
+                    end: 8,
+                    kind: TokenKind::Punctuation,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn edits_update_the_parse_tree() {
+        use crate::syntax::TokenKind;
+
+        let mut document = Document::empty(DocumentId(1), Some(PathBuf::from("/tmp/edit.rs")));
+        document.rope = Rope::from_str("let a = 1;\nlet b = 2;\n");
+        let spans = document.syntax_spans_range(0, 2);
+        assert!(spans[0].iter().any(|span| span.kind == TokenKind::Keyword));
+
+        document.insert(0, "/*", 0, (0, 0));
+        let end = document.len_chars();
+        document.insert(end, "*/\n", end, (0, 0));
+
+        let spans = document.syntax_spans_range(0, 3);
+        assert!(spans[0].iter().any(|span| span.kind == TokenKind::Comment));
+        assert!(spans[1].iter().any(|span| span.kind == TokenKind::Comment));
+
+        document.undo();
+        document.undo();
+        let spans = document.syntax_spans_range(0, 2);
+        assert!(!spans[0].iter().any(|span| span.kind == TokenKind::Comment));
+        assert!(spans[0].iter().any(|span| span.kind == TokenKind::Keyword));
     }
 
     #[test]

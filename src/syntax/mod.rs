@@ -1,5 +1,7 @@
 //! Syntax highlighting tokens.
 
+pub mod tree;
+
 use std::path::Path;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -53,7 +55,7 @@ pub enum Quote {
     Backtick,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum Language {
     Rust,
     Python,
