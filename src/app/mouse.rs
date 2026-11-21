@@ -25,6 +25,9 @@ pub struct Drag {
 
 impl App {
     pub(crate) fn handle_mouse(&mut self, mouse: MouseEvent) {
+        if self.drag.is_none() && self.forward_shell_mouse(mouse) {
+            return;
+        }
         match mouse.kind {
             MouseEventKind::Down(MouseButton::Left) => self.on_left_click(mouse),
             MouseEventKind::Drag(MouseButton::Left) => {
@@ -39,6 +42,33 @@ impl App {
             MouseEventKind::ScrollRight => self.on_horizontal_wheel(mouse.column, mouse.row, 1),
             _ => {}
         }
+    }
+
+    /// Send a mouse event to the shell program when it asked for mouse
+    /// reporting. The panel body is the area inside its border; coordinates
+    /// become zero-based before encoding.
+    fn forward_shell_mouse(&mut self, mouse: MouseEvent) -> bool {
+        let Some(inner) = shell_inner(self.state.ui.shell) else {
+            return false;
+        };
+        if !contains(inner, mouse.column, mouse.row) {
+            return false;
+        }
+        let Some(shell) = self.state.shell.as_ref() else {
+            return false;
+        };
+        if !shell.reports_mouse() {
+            return false;
+        }
+        if matches!(mouse.kind, MouseEventKind::Down(_)) {
+            self.state.focus = Focus::Shell;
+        }
+        let column = mouse.column.saturating_sub(inner.x);
+        let row = mouse.row.saturating_sub(inner.y);
+        self.state
+            .shell
+            .as_mut()
+            .is_some_and(|shell| shell.send_mouse(mouse, column, row))
     }
 
     fn on_left_click(&mut self, mouse: MouseEvent) {
@@ -334,6 +364,19 @@ fn contains(rect: Rect, column: u16, row: u16) -> bool {
         && column < rect.x.saturating_add(rect.width)
         && row >= rect.y
         && row < rect.y.saturating_add(rect.height)
+}
+
+/// Body of the terminal panel: the area inside its one-cell border.
+fn shell_inner(area: Rect) -> Option<Rect> {
+    if area.width <= 2 || area.height <= 2 {
+        return None;
+    }
+    Some(Rect::new(
+        area.x.saturating_add(1),
+        area.y.saturating_add(1),
+        area.width - 2,
+        area.height - 2,
+    ))
 }
 
 fn hit(separator: &Separator, column: u16, row: u16) -> bool {

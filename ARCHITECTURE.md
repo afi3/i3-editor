@@ -133,9 +133,10 @@ each draw. `vt100::Parser` turns bytes into a screen grid; rendering maps cells
 (colors, bold, underline, inverse) onto the theme and places the terminal cursor
 when the panel has focus. Resizing recomputes both the PTY size and the parser
 grid, and the panel reserves rows before panes are laid out, so the minimum pane
-size still holds. Dropping `ShellPanel` kills the child. Mouse reporting is not
-forwarded into the shell — clicks only focus the panel, and the wheel scrolls the
-model's scrollback.
+size still holds. Dropping `ShellPanel` kills the child. The parser also tracks
+the program's mouse protocol mode and encoding; while active, mouse events inside
+the panel body are forwarded as SGR, UTF-8, or X10 reports gated by that mode, and
+the wheel no longer scrolls the local scrollback.
 
 **Nothing modified is discarded without an explicit choice.** `Ctrl+Q` with
 modified documents opens a prompt offering save-all/discard-all (discard only for

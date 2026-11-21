@@ -7,8 +7,10 @@ use std::sync::mpsc::{self, Receiver};
 use std::thread;
 
 use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
-use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use vt100::Parser;
+use ratatui::crossterm::event::{
+    KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+};
+use vt100::{MouseProtocolEncoding, MouseProtocolMode, Parser};
 
 use crate::error::{Error, Result};
 
@@ -136,6 +138,30 @@ impl ShellPanel {
         self.write(&encode_key(key));
     }
 
+    /// True when the program in the PTY enabled mouse reporting
+    /// (`DECSET 1000`/`1002`/`1003`), as tracked by the vt100 screen.
+    pub fn reports_mouse(&self) -> bool {
+        self.parser.screen().mouse_protocol_mode() != MouseProtocolMode::None
+    }
+
+    /// Forward a mouse event to the program behind the PTY. `column` and `row`
+    /// are zero-based inside the panel body. Returns false when the program did
+    /// not ask for this event, in which case the caller keeps its own handling.
+    pub fn send_mouse(&mut self, mouse: MouseEvent, column: u16, row: u16) -> bool {
+        let (mode, encoding) = {
+            let screen = self.parser.screen();
+            (
+                screen.mouse_protocol_mode(),
+                screen.mouse_protocol_encoding(),
+            )
+        };
+        let Some(bytes) = encode_mouse(mouse, mode, encoding, column, row) else {
+            return false;
+        };
+        self.write(&bytes);
+        true
+    }
+
     /// Scroll the visible window into scrollback. Returns true on change.
     pub fn scroll(&mut self, delta: isize) -> bool {
         let next = (self.scrollback as isize + delta).clamp(0, 2000) as usize;
@@ -222,6 +248,110 @@ pub fn encode_key(key: KeyEvent) -> Vec<u8> {
     out
 }
 
+fn button_number(button: MouseButton) -> u8 {
+    match button {
+        MouseButton::Left => 0,
+        MouseButton::Middle => 1,
+        MouseButton::Right => 2,
+    }
+}
+
+/// Encode a mouse event the way a terminal reports it to a program. `column`
+/// and `row` are zero-based inside the panel body. Returns `None` when the
+/// program's protocol mode does not ask for this event.
+pub fn encode_mouse(
+    mouse: MouseEvent,
+    mode: MouseProtocolMode,
+    encoding: MouseProtocolEncoding,
+    column: u16,
+    row: u16,
+) -> Option<Vec<u8>> {
+    let (code, release) = mouse_report(mouse, mode)?;
+    Some(encode_report(code, release, encoding, column, row))
+}
+
+/// Button number plus modifier and motion bits for an event the protocol mode
+/// reports, along with whether it is a release.
+fn mouse_report(mouse: MouseEvent, mode: MouseProtocolMode) -> Option<(u8, bool)> {
+    let release = matches!(mouse.kind, MouseEventKind::Up(_));
+    let motion = matches!(mouse.kind, MouseEventKind::Drag(_) | MouseEventKind::Moved);
+    let wanted = match mode {
+        MouseProtocolMode::None => false,
+        // X10 reports presses only; the wheel counts as a press.
+        MouseProtocolMode::Press => !release && !motion,
+        MouseProtocolMode::PressRelease => !motion,
+        MouseProtocolMode::ButtonMotion => !matches!(mouse.kind, MouseEventKind::Moved),
+        MouseProtocolMode::AnyMotion => true,
+    };
+    if !wanted {
+        return None;
+    }
+
+    let button = match mouse.kind {
+        MouseEventKind::Down(button)
+        | MouseEventKind::Up(button)
+        | MouseEventKind::Drag(button) => button_number(button),
+        MouseEventKind::Moved => 3,
+        MouseEventKind::ScrollUp => 64,
+        MouseEventKind::ScrollDown => 65,
+        MouseEventKind::ScrollLeft => 66,
+        MouseEventKind::ScrollRight => 67,
+    };
+    let mut code = button;
+    if motion {
+        code += 32;
+    }
+    if mouse.modifiers.contains(KeyModifiers::SHIFT) {
+        code += 4;
+    }
+    if mouse.modifiers.contains(KeyModifiers::ALT) {
+        code += 8;
+    }
+    if mouse.modifiers.contains(KeyModifiers::CONTROL) {
+        code += 16;
+    }
+    Some((code, release))
+}
+
+fn encode_report(
+    code: u8,
+    release: bool,
+    encoding: MouseProtocolEncoding,
+    column: u16,
+    row: u16,
+) -> Vec<u8> {
+    let x = column.saturating_add(1);
+    let y = row.saturating_add(1);
+    match encoding {
+        MouseProtocolEncoding::Sgr => {
+            let terminator = if release { 'm' } else { 'M' };
+            format!("\x1b[<{code};{x};{y}{terminator}").into_bytes()
+        }
+        MouseProtocolEncoding::Utf8 => {
+            let mut out = b"\x1b[M".to_vec();
+            // X10 has one release code (3); SGR keeps the button number.
+            let button = if release { 3 } else { code };
+            for value in [button as u32 + 32, x as u32 + 32, y as u32 + 32] {
+                let ch = char::from_u32(value).unwrap_or('?');
+                let mut buffer = [0u8; 4];
+                out.extend_from_slice(ch.encode_utf8(&mut buffer).as_bytes());
+            }
+            out
+        }
+        MouseProtocolEncoding::Default => {
+            let button = if release { 3 } else { code };
+            vec![
+                0x1b,
+                b'[',
+                b'M',
+                button + 32,
+                x.saturating_add(32).min(255) as u8,
+                y.saturating_add(32).min(255) as u8,
+            ]
+        }
+    }
+}
+
 fn nonzero(value: u16) -> NonZeroU16 {
     NonZeroU16::new(value.max(1)).expect("terminal dimensions are at least 1")
 }
@@ -296,6 +426,132 @@ mod tests {
     fn configured_shell_beats_the_environment() {
         assert_eq!(resolve_shell(Some(" /bin/sh ")), "/bin/sh");
         assert!(!resolve_shell(Some("  ")).is_empty());
+    }
+
+    #[test]
+    fn encodes_sgr_mouse_reports() {
+        let sgr = MouseProtocolEncoding::Sgr;
+        let mode = MouseProtocolMode::PressRelease;
+        assert_eq!(
+            encode_mouse(
+                mouse_event(MouseEventKind::Down(MouseButton::Left), KeyModifiers::NONE),
+                mode,
+                sgr,
+                4,
+                2
+            ),
+            Some(b"\x1b[<0;5;3M".to_vec())
+        );
+        assert_eq!(
+            encode_mouse(
+                mouse_event(MouseEventKind::Up(MouseButton::Left), KeyModifiers::NONE),
+                mode,
+                sgr,
+                4,
+                2
+            ),
+            Some(b"\x1b[<0;5;3m".to_vec())
+        );
+        assert_eq!(
+            encode_mouse(
+                mouse_event(
+                    MouseEventKind::Drag(MouseButton::Left),
+                    KeyModifiers::CONTROL
+                ),
+                MouseProtocolMode::ButtonMotion,
+                sgr,
+                4,
+                2
+            ),
+            Some(b"\x1b[<48;5;3M".to_vec())
+        );
+        assert_eq!(
+            encode_mouse(
+                mouse_event(MouseEventKind::ScrollUp, KeyModifiers::NONE),
+                MouseProtocolMode::Press,
+                sgr,
+                0,
+                0
+            ),
+            Some(b"\x1b[<64;1;1M".to_vec())
+        );
+        assert_eq!(
+            encode_mouse(
+                mouse_event(
+                    MouseEventKind::Down(MouseButton::Right),
+                    KeyModifiers::ALT | KeyModifiers::SHIFT
+                ),
+                mode,
+                sgr,
+                9,
+                0
+            ),
+            Some(b"\x1b[<14;10;1M".to_vec())
+        );
+    }
+
+    #[test]
+    fn protocol_mode_gates_events() {
+        let sgr = MouseProtocolEncoding::Sgr;
+        let up = mouse_event(MouseEventKind::Up(MouseButton::Left), KeyModifiers::NONE);
+        assert_eq!(encode_mouse(up, MouseProtocolMode::Press, sgr, 0, 0), None);
+        assert!(encode_mouse(up, MouseProtocolMode::PressRelease, sgr, 0, 0).is_some());
+
+        let drag = mouse_event(MouseEventKind::Drag(MouseButton::Left), KeyModifiers::NONE);
+        assert_eq!(
+            encode_mouse(drag, MouseProtocolMode::PressRelease, sgr, 0, 0),
+            None
+        );
+        assert!(encode_mouse(drag, MouseProtocolMode::ButtonMotion, sgr, 0, 0).is_some());
+
+        let moved = mouse_event(MouseEventKind::Moved, KeyModifiers::NONE);
+        assert_eq!(
+            encode_mouse(moved, MouseProtocolMode::ButtonMotion, sgr, 0, 0),
+            None
+        );
+        assert_eq!(
+            encode_mouse(moved, MouseProtocolMode::None, sgr, 0, 0),
+            None
+        );
+        assert_eq!(
+            encode_mouse(moved, MouseProtocolMode::AnyMotion, sgr, 0, 0),
+            Some(b"\x1b[<35;1;1M".to_vec())
+        );
+    }
+
+    #[test]
+    fn legacy_encodings_use_single_release_code() {
+        let up = mouse_event(MouseEventKind::Up(MouseButton::Left), KeyModifiers::NONE);
+        assert_eq!(
+            encode_mouse(
+                up,
+                MouseProtocolMode::PressRelease,
+                MouseProtocolEncoding::Default,
+                4,
+                2
+            ),
+            Some(vec![0x1b, b'[', b'M', 35, 37, 35])
+        );
+        let down = mouse_event(MouseEventKind::Down(MouseButton::Left), KeyModifiers::NONE);
+        assert_eq!(
+            encode_mouse(
+                down,
+                MouseProtocolMode::Press,
+                MouseProtocolEncoding::Utf8,
+                200,
+                5
+            ),
+            Some(vec![0x1b, b'[', b'M', 32, 0xc3, 0xa9, 38])
+        );
+    }
+
+    fn mouse_event(kind: MouseEventKind, modifiers: KeyModifiers) -> MouseEvent {
+        MouseEvent {
+            kind,
+            column: 0,
+            row: 0,
+            modifiers,
+        }
     }
 
     #[test]

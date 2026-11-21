@@ -67,6 +67,9 @@ Delivered:
   range. TOML, JSON, and Markdown keep the stateful lexer.
 - Bottom terminal panel running a real shell (`portable-pty` + `vt100`), opened
   and closed from the palette, with theme-aware rendering and scrollback.
+- Terminal mouse reporting: when the shell program enables `DECSET 1000/1002/1003`,
+  clicks, drags, and wheel events in the panel body are forwarded with the
+  requested encoding (SGR, UTF-8, or X10), gated by its protocol mode.
 - Runtime theme switching from the palette (`select_theme`, `next_theme`,
   `prev_theme`), persisted back into `config.toml` without disturbing other keys.
 - Live find: the prompt lists matching lines with line numbers, `Up`/`Down`
@@ -96,7 +99,7 @@ Delivered:
 - Keymap presets and capability handling.
 - Unicode width/grapheme handling with tests.
 - Error handling through a single `Error` type; status-bar messages.
-- 187 unit and integration tests, `TestBackend` render tests.
+- 191 unit and integration tests, `TestBackend` render tests.
 - `install.sh` one-liner with `--update` and `--uninstall` (checksum-verified
   release download, version comparison, Cargo fallback) and a tag-driven release
   workflow for macOS/Linux on x86_64 and aarch64.
@@ -105,7 +108,7 @@ Delivered:
 
 Not delivered yet:
 
-- Terminal panel limits: no mouse reporting into shell programs, one panel only.
+- Terminal panel limits: one panel only.
 - TOML, JSON, and Markdown still use the lexical highlighter; code inside a
   Markdown fence is highlighted per line without grammar state.
 
@@ -119,4 +122,4 @@ cargo clippy --all-targets --all-features
 cargo run -- --dump-keymap
 ```
 
-Last recorded run: `cargo test` → 187 passed, `cargo clippy` → 0 warnings.
+Last recorded run: `cargo test` → 191 passed, `cargo clippy` → 0 warnings.

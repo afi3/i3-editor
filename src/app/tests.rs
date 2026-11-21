@@ -538,6 +538,47 @@ fn wheel_over_the_explorer_moves_the_selection() {
 }
 
 #[test]
+fn shell_mouse_reports_reach_the_program() {
+    use crate::shell::ShellPanel;
+    use ratatui::crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+
+    let (mut app, dir) = fixture("note\n");
+    app.state.ui.shell = ratatui::layout::Rect::new(0, 10, 60, 7);
+    let mut panel = ShellPanel::spawn_shell(&dir, 5, 58, "/bin/sh", 2000).expect("shell");
+    panel.write(b"printf '\\033[?1000h\\033[?1006h'; cat -v\n");
+    for _ in 0..100 {
+        panel.pump();
+        if panel.reports_mouse() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert!(panel.reports_mouse(), "shell enabled mouse reporting");
+    app.state.shell = Some(panel);
+
+    // Body starts at (1, 11); (6, 12) is one-based (6, 2).
+    app.handle_mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: 6,
+        row: 12,
+        modifiers: KeyModifiers::NONE,
+    });
+
+    let mut screen = String::new();
+    for _ in 0..100 {
+        app.pump_shell();
+        screen = app.state.shell.as_ref().expect("shell").screen().contents();
+        if screen.contains("^[[<0;6;2M") {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert!(screen.contains("^[[<0;6;2M"), "screen: {screen:?}");
+    assert_eq!(app.state.focus, Focus::Shell);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn clicking_an_explorer_row_selects_and_double_click_opens() {
     use ratatui::crossterm::event::KeyModifiers;
 

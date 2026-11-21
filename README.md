@@ -334,8 +334,11 @@ same command closes it, which kills the shell process.
   `/bin/sh`; it starts in the explorer root.
 - While the panel has focus, every key is forwarded to the shell except `Ctrl+Q`,
   `F1`, and the terminal toggle itself.
-- Click the panel to focus it; the wheel scrolls `[terminal] scrollback` lines
-  (default 2000).
+- Click the panel to focus it. When the program in the shell enables mouse
+  reporting (`DECSET 1000`, `1002`, or `1003`), clicks, drags, and wheel events
+  inside the panel are sent to it using the encoding it asked for (SGR, UTF-8,
+  or X10); the protocol mode gates presses, releases, and motion. Otherwise the
+  wheel scrolls `[terminal] scrollback` lines (default 2000).
 - The panel height comes from `[terminal] height`; panes keep their minimum size,
   so the panel shrinks instead of squeezing them out.
 - Output is parsed with `vt100` (colors, bold, underline, inverse, cursor) and
@@ -470,5 +473,4 @@ every check.
   depends on the terminal.
 - Startup probes keyboard enhancement support; terminals that never answer the
   query add a short delay to startup.
-- Terminal panel: one shell at a time, and mouse input is not reported into shell
-  programs; the wheel scrolls the panel instead.
+- Terminal panel: one shell at a time.
