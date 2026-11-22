@@ -7,6 +7,7 @@ pub mod mouse;
 pub mod prompt;
 pub mod search;
 pub mod shell_ops;
+pub mod watch_ops;
 pub mod workspace_ops;
 
 #[cfg(test)]
@@ -30,6 +31,8 @@ impl App {
             terminal,
             drag: None,
             last_explorer_click: None,
+            watcher: None,
+            quick_open_files: None,
         }
     }
 }
@@ -60,6 +63,10 @@ pub struct App {
     pub(crate) drag: Option<mouse::Drag>,
     /// Last explorer row click, for double-click detection.
     pub(crate) last_explorer_click: Option<(usize, std::time::Instant)>,
+    /// Recursive watcher on the workspace root; `None` when unavailable.
+    pub(crate) watcher: Option<crate::watch::Watcher>,
+    /// Quick-open paths with the explorer revision they were scanned at.
+    pub(crate) quick_open_files: Option<(u64, Vec<String>)>,
 }
 
 impl App {
@@ -121,6 +128,15 @@ impl App {
             let session_warnings = crate::session::restore(&mut state);
             state.warnings.extend(session_warnings);
         }
+        let watcher = match crate::watch::Watcher::new(&state.explorer.root) {
+            Ok(watcher) => Some(watcher),
+            Err(error) => {
+                state
+                    .warnings
+                    .push(format!("file watching disabled: {error}"));
+                None
+            }
+        };
         state.ui.message = state.warnings.first().cloned().unwrap_or_default();
 
         let mut app = Self {
@@ -128,6 +144,8 @@ impl App {
             terminal: setup.terminal,
             drag: None,
             last_explorer_click: None,
+            watcher,
+            quick_open_files: None,
         };
         if let Some(path) = file {
             app.open_document(path)?;
@@ -138,6 +156,7 @@ impl App {
     pub fn run(mut self) -> Result<()> {
         while !self.state.should_quit {
             self.pump_shell();
+            self.pump_watcher();
             self.draw()?;
             let timeout = if !self.state.terminals.is_empty() && self.state.focus == Focus::Shell {
                 Duration::from_millis(30)

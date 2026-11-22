@@ -89,6 +89,11 @@ Delivered:
 - Saves replace the file atomically (temp file + rename) with permissions and
   symlinks preserved; Save As confirms before replacing another file. A save after
   an external change asks to overwrite or reload instead of clobbering it.
+- File watching with `notify`: one recursive watcher on the workspace root feeds
+  the event loop. Create/rename/delete refreshes the explorer while preserving
+  the selected path, a clean buffer reloads when another program writes it, a
+  modified buffer only reports the change, and the quick-open list is scanned
+  once and invalidated by the same events.
 - Session persistence: workspaces, layouts, pane tabs, cursor, and scroll are
   written to `session.toml` and restored when launched without a path in the same
   directory; untitled buffers are skipped and broken sessions are ignored.
@@ -103,7 +108,7 @@ Delivered:
 - Keymap presets and capability handling.
 - Unicode width/grapheme handling with tests.
 - Error handling through a single `Error` type; status-bar messages.
-- 199 unit and integration tests, `TestBackend` render tests.
+- 203 unit and integration tests, `TestBackend` render tests.
 - `install.sh` one-liner with `--update` and `--uninstall` (checksum-verified
   release download, version comparison, Cargo fallback) and a tag-driven release
   workflow for macOS/Linux on x86_64 and aarch64.
@@ -124,4 +129,4 @@ cargo clippy --all-targets --all-features
 cargo run -- --dump-keymap
 ```
 
-Last recorded run: `cargo test` → 199 passed, `cargo clippy` → 0 warnings.
+Last recorded run: `cargo test` → 203 passed, `cargo clippy` → 0 warnings.

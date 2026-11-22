@@ -279,7 +279,23 @@ impl App {
         self.state.mode = InputMode::Prompt(prompt);
     }
 
-    fn quick_open_candidates(&self) -> Vec<String> {
+    fn quick_open_candidates(&mut self) -> Vec<String> {
+        // Without a watcher the list cannot be invalidated, so keep rescanning.
+        if self.watcher.is_none() {
+            return self.scan_quick_open();
+        }
+        let revision = self.state.explorer.revision;
+        if let Some((cached, files)) = &self.quick_open_files
+            && *cached == revision
+        {
+            return files.clone();
+        }
+        let files = self.scan_quick_open();
+        self.quick_open_files = Some((revision, files.clone()));
+        files
+    }
+
+    fn scan_quick_open(&self) -> Vec<String> {
         let root = self.state.explorer.root.clone();
         let mut out = Vec::new();
         let show_all = self.state.explorer.show_hidden;

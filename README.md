@@ -163,7 +163,8 @@ Mouse: click a pane to focus it, drag a pane border to resize the split.
 scored by [Nucleo](https://github.com/helix-editor/nucleo): the query is a
 subsequence of the candidate, with bonuses at path separators, underscores, and
 word boundaries, and smart case (an uppercase letter in the query makes matching
-case-sensitive).
+case-sensitive). The file list is scanned once and kept current by the
+filesystem watcher; quick open no longer walks the project on every invocation.
 
 | Query | Result |
 |---|---|
@@ -314,6 +315,10 @@ theme file were read.
   target: a crash or full disk during the write cannot truncate the original.
   Existing permissions are preserved and symlinks are resolved, so the link stays.
 - `F2` Save As asks for confirmation before replacing a different existing file.
+- The workspace root is watched recursively. A clean buffer reloads when
+  another program writes its file; a modified buffer is left alone and the status
+  bar reports the change, so `Ctrl+S` still asks before anything is written.
+  Explorer rows refresh on create, rename, and delete without pressing refresh.
 - If another program changed the file since it was loaded, `Ctrl+S` asks first:
   `Overwrite with the buffer` or `Reload from disk`. Nothing is written until you
   choose, so an external edit is never clobbered silently.
@@ -470,8 +475,9 @@ every check.
 
 - Syntax highlighting is structural for every supported language. An unknown
   fence language stays plain text.
-- Filesystem watching (Notify) is not implemented; quick open rescans the project
-  on every invocation and caps the list at 5000 files.
+- Only the workspace root is watched. A document saved outside it is not
+  reloaded automatically, and quick open still caps its cached list at 5000
+  files.
 - `--update` uses the unauthenticated GitHub API (60 requests per hour per IP)
   and trusts the checksum published in the same release; there is no signature.
 - Saving replaces the file by rename, so an extra hard link keeps pointing at the

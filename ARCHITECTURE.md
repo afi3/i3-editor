@@ -204,6 +204,16 @@ bonuses); `keep_selection` preserves an arrow-key choice while the query narrows
 While a prompt is active it consumes every key except the quit binding, so a
 dialog cannot leak input into a document.
 
+**Watching is one recursive notify watcher.** `watch::Watcher` owns the
+recommended backend and a channel. The event loop drains that channel once per
+frame, drops `Access` events, and coalesces the rest: a visible path rebuilds the
+explorer with its selection preserved by path, and each open document whose file
+appears in the batch is checked with `disk_changed` — clean buffers reload, dirty
+buffers only get a status message. The same batch clears the quick-open cache, so
+the project is scanned once instead of once per prompt. Ignored paths still
+produce notify events because the backend cannot skip them, but they never
+rebuild the tree, which keeps build output from causing churn.
+
 **Rendering is read-only.** `ui::render` takes `&AppState`. The only mutation
 before a draw is `compute_layout`, which fills the rect cache.
 

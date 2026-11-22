@@ -1175,3 +1175,110 @@ fn overwrite_after_an_external_change_writes_the_buffer() {
     assert!(!app.state.active_document().expect("doc").dirty);
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[test]
+fn watcher_reloads_a_clean_buffer_and_refreshes_the_explorer() {
+    use std::time::{Duration, Instant};
+
+    let (mut app, dir) = fixture("one\n");
+    let path = app
+        .state
+        .active_document()
+        .and_then(|document| document.path.clone())
+        .expect("path");
+    app.watcher = Some(crate::watch::Watcher::new(&dir).expect("watch"));
+
+    // Warm the quick-open cache so the assertions below prove invalidation.
+    app.open_prompt(crate::input::PromptKind::QuickOpen);
+    let InputMode::Prompt(prompt) = &app.state.mode else {
+        panic!("quick-open prompt missing")
+    };
+    assert!(
+        !prompt
+            .candidates
+            .iter()
+            .any(|candidate| candidate == "new.txt")
+    );
+    app.state.mode = InputMode::Normal;
+
+    std::fs::write(&path, "two\n").expect("external write");
+    std::fs::write(dir.join("new.txt"), "x\n").expect("new file");
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let (mut reloaded, mut listed) = (false, false);
+    while Instant::now() < deadline && !(reloaded && listed) {
+        app.pump_watcher();
+        reloaded = text(&app) == "two\n";
+        listed = app
+            .state
+            .explorer
+            .rows
+            .iter()
+            .any(|row| row.name == "new.txt");
+        if !(reloaded && listed) {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+    assert!(reloaded, "buffer did not reload: {:?}", text(&app));
+    assert!(listed, "explorer did not refresh");
+    assert!(
+        app.state.ui.message.contains("reloaded from disk"),
+        "{}",
+        app.state.ui.message
+    );
+
+    app.open_prompt(crate::input::PromptKind::QuickOpen);
+    let InputMode::Prompt(prompt) = &app.state.mode else {
+        panic!("quick-open prompt missing")
+    };
+    assert!(
+        prompt
+            .candidates
+            .iter()
+            .any(|candidate| candidate == "new.txt")
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn external_change_to_a_dirty_buffer_is_reported_not_reloaded() {
+    let (mut app, dir) = fixture("one\n");
+    let path = app
+        .state
+        .active_document()
+        .and_then(|document| document.path.clone())
+        .expect("path");
+    app.dispatch(Command::InsertText("two ".to_string()))
+        .expect("type");
+    std::fs::write(&path, "outside\n").expect("external write");
+
+    app.handle_external_change(&path);
+    assert_eq!(text(&app), "two one\n", "dirty buffer must survive");
+    assert!(app.state.active_document().expect("doc").dirty);
+    assert!(
+        app.state.ui.message.contains("changed on disk"),
+        "{}",
+        app.state.ui.message
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn deleting_an_open_file_is_reported() {
+    let (mut app, dir) = fixture("one\n");
+    let path = app
+        .state
+        .active_document()
+        .and_then(|document| document.path.clone())
+        .expect("path");
+    std::fs::remove_file(&path).expect("remove");
+
+    app.handle_external_change(&path);
+    assert_eq!(text(&app), "one\n");
+    assert!(
+        app.state.ui.message.contains("deleted on disk"),
+        "{}",
+        app.state.ui.message
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}

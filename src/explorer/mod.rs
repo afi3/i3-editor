@@ -27,6 +27,8 @@ pub struct ExplorerState {
     pub show_hidden: bool,
     expanded: HashSet<PathBuf>,
     ignore: Option<Gitignore>,
+    /// Bumped on every rebuild; quick open caches its list against this.
+    pub revision: u64,
 }
 
 impl ExplorerState {
@@ -42,6 +44,7 @@ impl ExplorerState {
             show_hidden,
             expanded: HashSet::new(),
             ignore: build_ignore(&root),
+            revision: 0,
         };
         state.rebuild();
         Ok(state)
@@ -55,6 +58,7 @@ impl ExplorerState {
         if self.selected >= self.rows.len() {
             self.selected = self.rows.len().saturating_sub(1);
         }
+        self.revision = self.revision.wrapping_add(1);
     }
 
     fn walk(&self, dir: &Path, depth: usize, out: &mut Vec<Row>) {
@@ -87,7 +91,9 @@ impl ExplorerState {
         paths
     }
 
-    fn is_visible(&self, path: &Path) -> bool {
+    /// Whether the explorer would show `path`. File watching uses the same
+    /// rules so ignored build output never rebuilds the tree.
+    pub fn is_visible(&self, path: &Path) -> bool {
         // Showing hidden files also reveals entries hidden by `.gitignore`, so
         // a file such as `.env` becomes reachable with one toggle.
         if self.show_hidden {
