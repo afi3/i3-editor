@@ -79,7 +79,6 @@ pub struct Document {
 }
 
 impl Document {
-    #[cfg(test)]
     pub fn empty(id: DocumentId, path: Option<PathBuf>) -> Self {
         Self {
             id,

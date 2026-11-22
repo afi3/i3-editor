@@ -12,7 +12,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::config;
 use crate::editor::document::Document;
-use crate::error::{Error, Result};
 use crate::state::{AppState, DocumentId, Focus, Pane, PaneId};
 use crate::workspace::layout::{LayoutNode, MAX_CHILDREN, MAX_TABS, MAX_WEIGHT, SplitMode};
 use crate::workspace::{SplitAxis, Workspace};
@@ -38,6 +37,8 @@ struct WorkspaceSession {
     name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     root: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    terminal_dir: Option<PathBuf>,
     focus: usize,
     panes: Vec<PaneSession>,
     layout: Node,
@@ -120,14 +121,6 @@ impl From<Mode> for SplitMode {
 
 pub fn default_path() -> Option<PathBuf> {
     config::config_dir().map(|dir| dir.join("session.toml"))
-}
-
-/// Write the current session, if one can be resolved.
-pub fn persist(state: &AppState) -> Result<()> {
-    let Some(path) = default_path() else {
-        return Ok(());
-    };
-    save_to(&path, state).map_err(|error| Error::io("write session", &path, error))
 }
 
 /// Restore the session for this directory. Warnings are returned for the status
@@ -224,6 +217,7 @@ fn snapshot(state: &AppState) -> Option<Session> {
         workspaces.push(WorkspaceSession {
             name: workspace.name.clone(),
             root: Some(workspace.root.clone()),
+            terminal_dir: Some(workspace.terminal_dir.clone()),
             focus: pane_indices.get(&workspace.focus).copied().unwrap_or(0),
             panes,
             layout,
@@ -360,11 +354,17 @@ fn restore_workspaces(session: &Session, state: &mut AppState, documents: &[Opti
             .unwrap_or(pane_ids[0]);
         let id = state.ids.workspace();
         let root = workspace_root(workspace, &session.root);
+        let terminal_dir = workspace
+            .terminal_dir
+            .clone()
+            .filter(|dir| dir.is_dir())
+            .unwrap_or_else(|| root.clone());
         state.workspaces.workspaces.push(Workspace {
             id,
             name: workspace.name.clone(),
             layout,
             focus,
+            terminal_dir,
             root,
         });
     }
@@ -552,6 +552,7 @@ mod tests {
             hover: None,
             git_marks: HashMap::new(),
             git_diff: None,
+            help: None,
             plugin_status: Vec::new(),
             fullscreen: None,
             moving: false,
@@ -601,6 +602,9 @@ mod tests {
             .split_pane(first, SplitAxis::LeftRight, second);
 
         let session_path = dir.join("session.toml");
+        let terminal_dir = dir.join("terminal");
+        std::fs::create_dir_all(&terminal_dir).expect("terminal dir");
+        state.workspaces.active_mut().terminal_dir = terminal_dir.clone();
         save_to(&session_path, &state).expect("save session");
 
         let mut restored = state_with(&dir);
@@ -609,6 +613,7 @@ mod tests {
         assert_eq!(restored.documents.len(), 2);
         assert_eq!(restored.panes.len(), 2);
         assert_eq!(restored.workspaces.active().name, "main");
+        assert_eq!(restored.workspaces.active().terminal_dir, terminal_dir);
         assert_eq!(restored.workspaces.active().layout.leaves().len(), 2);
 
         let pane = restored.panes.get(&first_pane_id(&restored)).expect("pane");

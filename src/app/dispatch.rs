@@ -51,8 +51,10 @@ impl App {
         match command {
             Command::Quit => self.request_quit()?,
             Command::Save => self.save()?,
+            Command::NewScratch => self.new_scratch()?,
             Command::CloseDocument => self.close_document()?,
             Command::ToggleExplorer => self.toggle_explorer(),
+            Command::Help => self.open_help(),
             other => return Ok(Some(other)),
         }
         Ok(None)
@@ -215,6 +217,7 @@ impl App {
         match command {
             Command::NewWorkspace => self.new_workspace()?,
             Command::SetWorkspaceRoot => self.open_prompt(PromptKind::WorkspaceRoot),
+            Command::SetWorkspaceTerminalDir => self.open_prompt(PromptKind::WorkspaceTerminalDir),
             Command::RenameWorkspace => self.open_prompt(PromptKind::RenameWorkspace),
             Command::CloseWorkspace => self.close_workspace()?,
             Command::SwitchWorkspace(index) => self.switch_workspace(index)?,

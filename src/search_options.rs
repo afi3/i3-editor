@@ -3,11 +3,13 @@
 use std::ops::Range;
 
 use regex::Regex;
+use serde::{Deserialize, Serialize};
 
 /// Matches after which a search stops collecting; the UI stays bounded.
 pub const MAX_MATCHES: usize = 10_000;
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Options {
     pub regex: bool,
     pub whole_word: bool,

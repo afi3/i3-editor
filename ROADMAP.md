@@ -206,6 +206,24 @@ Shipped on 2026-11-22 without a version bump.
 Verification: `cargo test` (322), `cargo fmt --check`,
 `cargo clippy --all-targets --all-features`.
 
+## Post-v0.1.3 — polish pass: done
+
+Shipped on 2026-11-22 without a version bump.
+
+- The `help` command opens a scrollable overlay built from the active global,
+  editing, and explorer keymaps plus the palette-only commands.
+- Search history stores the last 50 queries per surface and the shared search
+  options in `history.toml`; `Alt+Up` / `Alt+Down` cycle the list.
+- `session.toml` autosaves every five seconds and on exit. Scratch buffers
+  (`new_scratch`) are ordinary pathless documents saved through Save As.
+- `workspace_terminal_dir` sets the starting directory for new terminal tabs
+  per workspace; the value is stored in `session.toml`.
+- Tests cover help contents/scrolling, history cycling/persistence, autosave,
+  scratch Save As, terminal directory spawning, and session round trips.
+
+Verification: `cargo test` (329), `cargo fmt --check`,
+`cargo clippy --all-targets --all-features`.
+
 Policy that applied during the cycle:
 
 - `Cargo.toml` stayed at `0.1.2` until every workstream below passed acceptance.
@@ -495,10 +513,7 @@ platform archives with their checksums.
 Recorded so the next planning session does not rescan. These are **not** part of
 v0.1.3 unless explicitly promoted into a workstream above.
 
-- Terminal polish: per-workspace starting directory.
-- Help/keybinding overlay and palette hints showing the active binding.
-- Session autosave and scratch buffers (if crash recovery in 0.1.5 is not enough).
-- Search history and per-surface option persistence.
+- Palette hints showing the active binding.
 
 ## Verification commands
 
@@ -510,4 +525,4 @@ cargo clippy --all-targets --all-features
 cargo run -- --dump-keymap
 ```
 
-Last recorded run: `cargo test` → 322 passed, `cargo clippy` → 0 warnings.
+Last recorded run: `cargo test` → 329 passed, `cargo clippy` → 0 warnings.

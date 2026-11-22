@@ -8,6 +8,7 @@ pub mod editing;
 pub mod file_ops;
 pub mod folds;
 pub mod git_ops;
+pub mod help;
 pub mod lines;
 pub mod lsp_ops;
 pub mod mouse;
@@ -57,6 +58,10 @@ impl App {
             block_anchor: None,
             git_status_entries: Vec::new(),
             last_git: std::time::Instant::now(),
+            search_history: Default::default(),
+            history_path: None,
+            session_path: None,
+            last_session_save: std::time::Instant::now(),
         }
     }
 }
@@ -80,6 +85,8 @@ use crate::state::{AppState, DocumentId, Focus, Ids, InputMode, Pane, PaneId};
 use crate::terminal::Setup;
 use crate::ui;
 use crate::workspace::{Workspace, WorkspaceManager};
+
+const SESSION_AUTOSAVE: Duration = Duration::from_secs(5);
 
 pub struct App {
     pub state: AppState,
@@ -117,6 +124,12 @@ pub struct App {
     pub(crate) git_status_entries: Vec<crate::git::StatusEntry>,
     /// Time of the last git marker refresh.
     pub(crate) last_git: std::time::Instant,
+    /// Persistent search queries and options.
+    pub(crate) search_history: crate::search_history::SearchHistory,
+    pub(crate) history_path: Option<PathBuf>,
+    /// Session file used by periodic autosave and graceful exit.
+    pub(crate) session_path: Option<PathBuf>,
+    pub(crate) last_session_save: std::time::Instant,
 }
 
 impl App {
@@ -146,6 +159,8 @@ impl App {
             active: 0,
         };
         let config_path = crate::config::default_path();
+        let history_path = crate::config::history_path();
+        let search_history = crate::search_history::SearchHistory::load(history_path.as_deref());
         let (keymap, key_warnings) = KeyMap::from_config(&config.keys, enhanced);
         if std::env::var_os("I3_EDITOR_DEBUG").is_some() {
             log_keymap(config_path.as_deref(), &keymap, enhanced);
@@ -170,13 +185,14 @@ impl App {
             warnings,
             clipboard: String::new(),
             search: None,
-            search_options: crate::search_options::Options::default(),
+            search_options: search_history.options,
             project_search: None,
             lsp_diagnostics: std::collections::HashMap::new(),
             completions: None,
             hover: None,
             git_marks: std::collections::HashMap::new(),
             git_diff: None,
+            help: None,
             plugin_status: Vec::new(),
             fullscreen: None,
             moving: false,
@@ -213,6 +229,10 @@ impl App {
             block_anchor: None,
             git_status_entries: Vec::new(),
             last_git: std::time::Instant::now(),
+            search_history,
+            history_path,
+            session_path: crate::session::default_path(),
+            last_session_save: std::time::Instant::now(),
         };
         if let Err(error) = app.apply_active_root() {
             app.state
@@ -306,6 +326,7 @@ impl App {
             self.refresh_git_if_due();
             self.autosave_swaps();
             self.draw()?;
+            self.autosave_session();
             let timeout = if !self.state.terminals.is_empty() && self.state.focus == Focus::Shell {
                 Duration::from_millis(30)
             } else if !self.state.terminals.is_empty() {
@@ -332,7 +353,7 @@ impl App {
         if let Some(dir) = &self.swap_dir {
             crate::recovery::clear_all(dir);
         }
-        crate::session::persist(&self.state)?;
+        self.save_session()?;
         Ok(())
     }
 
@@ -388,6 +409,9 @@ impl App {
         }
         if self.state.mode.is_prompt() {
             self.handle_prompt_key(combo);
+            return;
+        }
+        if self.handle_help_key(combo) {
             return;
         }
         if self.handle_diff_key(combo) {
@@ -474,6 +498,24 @@ impl App {
 
     pub(crate) fn notify(&mut self, message: impl Into<String>) {
         self.state.ui.message = message.into();
+    }
+
+    fn save_session(&self) -> Result<()> {
+        let Some(path) = &self.session_path else {
+            return Ok(());
+        };
+        crate::session::save_to(path, &self.state)
+            .map_err(|error| Error::io("write session", path, error))
+    }
+
+    fn autosave_session(&mut self) {
+        if self.last_session_save.elapsed() < SESSION_AUTOSAVE {
+            return;
+        }
+        self.last_session_save = std::time::Instant::now();
+        if let Err(error) = self.save_session() {
+            self.notify(error.to_string());
+        }
     }
 
     pub(crate) fn open_document(&mut self, path: PathBuf) -> Result<()> {

@@ -168,6 +168,13 @@ Mouse: click a pane to focus it, drag a pane border to resize the split.
   directory), wheel moves the selection three rows at a time.
 - Container tab strip: click a tab to activate it.
 
+### Help overlay
+
+`help` from the palette opens a read-only list built from the active keymap:
+global, editing, explorer, and palette-only commands with their descriptions.
+`Up`/`Down`, `PageUp`/`PageDown`, and `Home`/`End` scroll; `Esc` or `q` closes.
+The list reflects `config.toml` overrides and the safe preset.
+
 ### Quick open and command palette
 
 `Ctrl+P` lists project files and `F1` lists commands; `Ctrl+O` takes a typed
@@ -203,6 +210,9 @@ the title), and the cursor jumps to the selected match.
   title shows the active flags (`.*`, `W`, `Aa`), and the same options apply to
   Find, Replace, Find in Files, and Replace in Files. Literal queries ignore
   case until `Alt+C`; regex replacements expand `$1` groups.
+- `Alt+Up` / `Alt+Down` cycle the last 50 submitted queries for the current
+  surface. Queries and search options persist in
+  `<config>/i3-editor/history.toml`.
 
 ### Find in files
 
@@ -295,6 +305,9 @@ Each workspace owns its explorer root and a recursive watcher for that root:
   their parent directory, so external saves still reload clean buffers and warn
   on dirty ones.
 - `rename_workspace` from the palette prompts for a new workspace-tab name.
+- `workspace_terminal_dir` sets where new terminal tabs for the active workspace
+  start; the directory is stored in `session.toml`. Changing the workspace root
+  updates it only while it still equals the old root.
 - `session.toml` stores each workspace root, so a restored session keeps the
   independent environments.
 
@@ -562,6 +575,9 @@ quickest way to confirm a config and theme file were read.
 - A save writes a sibling temporary file, flushes it, and renames it over the
   target: a crash or full disk during the write cannot truncate the original.
   Existing permissions are preserved and symlinks are resolved, so the link stays.
+- `new_scratch` from the palette opens an empty untitled buffer. `Ctrl+S` or
+  `F2` saves it through Save As; scratch buffers are not written to
+  `session.toml` or crash recovery.
 - `F2` Save As asks for confirmation before replacing a different existing file.
 - The workspace root is watched recursively. A clean buffer reloads when
   another program writes its file; a modified buffer is left alone and the status
@@ -573,13 +589,14 @@ quickest way to confirm a config and theme file were read.
 
 ### Sessions
 
-On exit the editor writes `<config>/i3-editor/session.toml`: workspaces, layout
-trees, pane tabs (saved files only), cursor, and scroll. Launching without a path
-argument in the same directory restores it; launching with a path starts fresh.
-Untitled buffers are not persisted, files that no longer exist are skipped with a
-status-bar warning, and closing every document removes the session file. The
-session is validated (version, counts, layout invariants) before it can replace
-the default workspace; a broken session is reported and ignored.
+On exit and at most once every five seconds while running, the editor writes
+`<config>/i3-editor/session.toml`: workspaces, layout trees, pane tabs (saved
+files only), cursor, and scroll. Launching without a path argument in the same
+directory restores it; launching with a path starts fresh. Untitled buffers are
+not persisted, files that no longer exist are skipped with a status-bar warning,
+and closing every document removes the session file. The session is validated
+(version, counts, layout invariants) before it can replace the default
+workspace; a broken session is reported and ignored.
 
 ## Terminal panel
 
@@ -593,7 +610,8 @@ same command closes the panel and kills every shell in it.
   marks the active one as `[2* /bin/zsh]`.
 - `rename_terminal` (palette) renames the active tab for the current run.
 - The shell comes from `[terminal] shell`, otherwise `$SHELL`, otherwise
-  `/bin/sh`; new tabs start in the explorer root, except a tab opened by
+  `/bin/sh`; new tabs start in the active workspace's terminal directory
+  (`workspace_terminal_dir`, default: the explorer root), except a tab opened by
   `reveal_in_terminal`, which starts in the revealed directory.
 - While the panel has focus, every key is forwarded to the shell except `Ctrl+Q`,
   `F1`, the terminal toggle, and the terminal-tab commands.

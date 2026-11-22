@@ -29,6 +29,7 @@ pub enum PromptKind {
     GoToLine,
     Symbols,
     WorkspaceRoot,
+    WorkspaceTerminalDir,
     RenameWorkspace,
     TerminalRename,
     Recovery,
@@ -86,6 +87,7 @@ impl PromptKind {
                 | PromptKind::Rename
                 | PromptKind::Delete
                 | PromptKind::WorkspaceRoot
+                | PromptKind::WorkspaceTerminalDir
         )
     }
 
@@ -125,6 +127,7 @@ impl PromptKind {
             PromptKind::Rename => "Rename",
             PromptKind::Delete => "Delete",
             PromptKind::WorkspaceRoot => "Workspace Root",
+            PromptKind::WorkspaceTerminalDir => "Terminal Directory",
             _ => "",
         }
     }
@@ -186,6 +189,14 @@ impl AsRef<str> for Candidate<'_> {
     }
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PromptHistory {
+    /// Previous queries for this search surface, newest first.
+    pub entries: Vec<String>,
+    /// Position while cycling `entries`; cleared by a manual edit.
+    pub index: Option<usize>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PromptState {
     pub kind: PromptKind,
@@ -197,6 +208,7 @@ pub struct PromptState {
     pub selected: usize,
     pub target: Option<PathBuf>,
     pub document: Option<DocumentId>,
+    pub history: Box<PromptHistory>,
     /// Set when the user moves the selection with arrows, so typing keeps that
     /// candidate instead of jumping back to the best match.
     keep_selection: bool,
@@ -216,6 +228,7 @@ impl PromptState {
             selected: 0,
             target: None,
             document: None,
+            history: Box::default(),
             keep_selection: false,
             symbols: Vec::new(),
         }

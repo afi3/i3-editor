@@ -268,6 +268,13 @@ pub struct DiffView {
     pub scroll: usize,
 }
 
+/// Scrollable keybinding overlay.
+#[derive(Clone, Debug)]
+pub struct HelpView {
+    pub lines: Vec<String>,
+    pub scroll: usize,
+}
+
 /// Completion rows rendered above the prompt layer.
 #[derive(Clone, Debug, Default)]
 pub struct CompletionPopup {
@@ -316,6 +323,8 @@ pub struct AppState {
     pub git_marks: HashMap<DocumentId, Vec<Option<crate::git::Change>>>,
     /// Read-only diff overlay.
     pub git_diff: Option<DiffView>,
+    /// Keybinding overlay.
+    pub help: Option<HelpView>,
     /// Statusline strings produced by Lua plugins.
     pub plugin_status: Vec<String>,
     /// Pane temporarily occupying the whole pane area.

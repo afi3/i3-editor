@@ -57,6 +57,15 @@ impl App {
         Ok(())
     }
 
+    pub(crate) fn new_scratch(&mut self) -> Result<()> {
+        let id = self.state.ids.document();
+        self.state.documents.insert(id, Document::empty(id, None));
+        self.activate_document(id)?;
+        self.notify("new scratch buffer");
+        self.plugin_event("open");
+        Ok(())
+    }
+
     pub(crate) fn save_document(&mut self, id: DocumentId) -> Result<()> {
         let document = self
             .state

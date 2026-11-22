@@ -27,7 +27,7 @@ impl App {
 
     /// Spawn another shell in the panel and focus it.
     pub(crate) fn open_terminal(&mut self) {
-        self.open_terminal_at(self.state.explorer.root.clone());
+        self.open_terminal_at(self.state.workspaces.active().terminal_dir.clone());
     }
 
     /// Spawn a shell in `cwd`, push it as a new tab, and focus the panel.

@@ -190,11 +190,18 @@ impl App {
             return Err(Error::InvalidPath(root));
         }
         let id = self.state.workspaces.active().id;
+        let old_root = self.state.workspaces.active().root.clone();
         if self.state.workspaces.active().root == root {
             self.notify("workspace already uses that root");
             return Ok(());
         }
-        self.state.workspaces.active_mut().root = root.clone();
+        {
+            let workspace = self.state.workspaces.active_mut();
+            if workspace.terminal_dir == old_root {
+                workspace.terminal_dir = root.clone();
+            }
+            workspace.root = root.clone();
+        }
         self.apply_active_root()?;
         self.replace_watcher(id, &root);
         self.state.workspaces.active_mut().name = root
@@ -202,6 +209,18 @@ impl App {
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_else(|| root.display().to_string());
         self.notify(format!("workspace root: {}", root.display()));
+        Ok(())
+    }
+
+    pub(crate) fn set_workspace_terminal_dir(&mut self, path: PathBuf) -> Result<()> {
+        let path = path
+            .canonicalize()
+            .map_err(|error| Error::io("resolve", &path, error))?;
+        if !path.is_dir() {
+            return Err(Error::InvalidPath(path));
+        }
+        self.state.workspaces.active_mut().terminal_dir = path.clone();
+        self.notify(format!("terminal directory: {}", path.display()));
         Ok(())
     }
 

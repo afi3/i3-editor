@@ -160,12 +160,13 @@ clears the syntax memo, and clamps cursors in every pane showing that document.
 
 **Sessions are validated snapshots.** `src/session.rs` serializes workspaces,
 layout trees (axis, tiling/tabbed mode, active child, weights), pane tabs, cursor,
-and scroll to `session.toml`. Restore only runs without a CLI path when the saved
-root matches the current directory. The snapshot is capped and validated first
-(version, workspace/pane/document counts, split child and weight ranges, every
-pane referenced exactly once); a failure is reported and the default workspace
-stays. Only files on disk are restored, so untitled buffers never appear as empty
-documents.
+and scroll to `session.toml`. The run loop writes the same snapshot every five
+seconds and on exit, so a crash loses at most the last few seconds of layout.
+Restore only runs without a CLI path when the saved root matches the current
+directory. The snapshot is capped and validated first (version, workspace/pane/
+document counts, split child and weight ranges, every pane referenced exactly
+once); a failure is reported and the default workspace stays. Only files on disk
+are restored, so untitled and scratch buffers never appear as empty documents.
 
 **Self-update follows the release contract.** `--update` queries the latest
 release, refuses to move backwards, downloads the platform archive plus its
@@ -317,6 +318,28 @@ refreshes the tree, copying a path never renames anything, and reveal starts a
 shell in the target directory without changing the workspace root. Workspace
 names persist in `session.toml`; terminal titles live on `ShellPanel` and reset
 with the shell.
+
+**Search history is per surface and lives outside config.** `SearchHistory`
+stores the last 50 submitted queries for Find, Find in Files, Replace, and
+Replace in Files plus the shared search options in `history.toml`. Prompt state
+copies the list for its surface; a successful submit pushes the query, and
+`Alt+Up`/`Alt+Down` walks it. The list is boxed in `PromptState` so `InputMode`
+stays small.
+
+**Help is derived from the resolved keymap.** `help` walks the global, editing,
+and explorer binding maps and the palette command list at open time, so it shows
+`config.toml` overrides and the safe preset without a second source of truth.
+
+**Scratch buffers are ordinary documents without a path.** `new_scratch` creates
+`Document::empty(id, None)`, so editing, undo, Save As, and lua hooks all use the
+existing paths; session snapshots and crash recovery skip documents without a
+path. Session autosave keeps a path and a five-second clock on `App` and reuses
+`session::save_to` for both autosave and exit.
+
+**Terminal directories are separate from workspace roots.** `Workspace` stores
+`terminal_dir`, initialized to the root, changed by `workspace_terminal_dir`, and
+persisted in `session.toml`. A root change follows into `terminal_dir` only when
+the terminal directory still pointed at the old root.
 
 **Each workspace owns a root and a watcher.** `Workspace.root` is persisted in
 `session.toml`. `AppState` keeps one explorer for the active workspace; switching

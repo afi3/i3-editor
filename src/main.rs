@@ -13,6 +13,7 @@ mod lsp;
 mod plugins;
 mod project_search;
 mod recovery;
+mod search_history;
 mod search_options;
 mod session;
 mod shell;

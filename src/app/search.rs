@@ -1,11 +1,67 @@
 //! Find, replace, and go to line.
 
+use ratatui::crossterm::event::{KeyCode, KeyModifiers};
+
 use crate::error::{Error, Result};
-use crate::state::{AppState, Focus, Search};
+use crate::input::{KeyCombo, PromptKind};
+use crate::state::{AppState, Focus, InputMode, Search};
 
 use super::App;
 
 impl App {
+    /// Move the search field through previously submitted queries.
+    pub(crate) fn handle_search_history(&mut self, combo: KeyCombo) -> bool {
+        if !combo.mods.contains(KeyModifiers::ALT)
+            || !matches!(combo.code, KeyCode::Up | KeyCode::Down)
+        {
+            return false;
+        }
+        let changed = {
+            let InputMode::Prompt(prompt) = &mut self.state.mode else {
+                return false;
+            };
+            if !matches!(
+                prompt.kind,
+                PromptKind::Find
+                    | PromptKind::FindInFiles
+                    | PromptKind::Replace
+                    | PromptKind::ReplaceInFiles
+            ) || prompt.history.entries.is_empty()
+            {
+                return false;
+            }
+            let last = prompt.history.entries.len() - 1;
+            let next = match combo.code {
+                KeyCode::Up => prompt
+                    .history
+                    .index
+                    .map_or(0, |index| (index + 1).min(last)),
+                _ => prompt
+                    .history
+                    .index
+                    .map_or(0, |index| index.saturating_sub(1)),
+            };
+            prompt.history.index = Some(next);
+            prompt.set_input(prompt.history.entries[next].clone());
+            true
+        };
+        if changed {
+            self.refresh_prompt_preview();
+        }
+        changed
+    }
+
+    pub(crate) fn remember_search(&mut self, kind: PromptKind, query: &str) {
+        self.search_history.remember(kind, query);
+        self.save_search_history();
+    }
+
+    pub(crate) fn save_search_history(&mut self) {
+        if let Err(error) = self.search_history.save(self.history_path.as_deref()) {
+            self.notify(format!("search history not saved: {error}"));
+        }
+    }
+
     /// Recompute matches while the Find prompt is open and preview the first one.
     pub(crate) fn preview_search(&mut self, query: String) {
         if query.is_empty() {

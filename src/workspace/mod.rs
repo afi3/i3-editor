@@ -16,6 +16,8 @@ pub struct Workspace {
     pub focus: PaneId,
     /// Explorer root and watcher scope for this workspace.
     pub root: std::path::PathBuf,
+    /// Directory new terminal tabs start in.
+    pub terminal_dir: std::path::PathBuf,
 }
 
 impl Workspace {
@@ -30,6 +32,7 @@ impl Workspace {
             name: name.into(),
             layout: LayoutNode::Pane(pane),
             focus: pane,
+            terminal_dir: root.clone(),
             root,
         }
     }

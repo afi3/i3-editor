@@ -256,6 +256,7 @@ pub fn render(frame: &mut Frame, state: &AppState) {
     }
     overlay::render_diff(frame, state);
     overlay::render_popups(frame, state);
+    overlay::render_help(frame, state);
     if let InputMode::Prompt(prompt) = &state.mode {
         overlay::render_prompt(frame, state, prompt);
     }
@@ -459,6 +460,7 @@ mod tests {
             hover: None,
             git_marks: HashMap::new(),
             git_diff: None,
+            help: None,
             plugin_status: Vec::new(),
             fullscreen: None,
             moving: false,
@@ -639,6 +641,21 @@ mod tests {
             "secondary caret uses reverse video"
         );
 
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn help_overlay_renders_keybindings() {
+        use crate::state::HelpView;
+
+        let (mut state, dir) = state("x\n");
+        state.help = Some(HelpView {
+            lines: vec!["Global".to_string(), "Ctrl+Q quit".to_string()],
+            scroll: 0,
+        });
+        let screen = draw(&mut state, 80, 24);
+        assert!(screen.contains("Keybindings"), "{screen}");
+        assert!(screen.contains("Ctrl+Q"), "{screen}");
         std::fs::remove_dir_all(&dir).ok();
     }
 

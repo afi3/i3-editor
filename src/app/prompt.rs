@@ -20,6 +20,9 @@ impl App {
         if self.toggle_search_option(combo) {
             return;
         }
+        if self.handle_search_history(combo) {
+            return;
+        }
         match combo.code {
             KeyCode::Esc => {
                 self.cancel_prompt();
@@ -119,6 +122,9 @@ impl App {
             }
             _ => {}
         }
+        if edited {
+            prompt.history.index = None;
+        }
         edited
     }
 
@@ -178,6 +184,8 @@ impl App {
             )
         };
         self.state.search_options = options;
+        self.search_history.options = options;
+        self.save_search_history();
         self.notify(options.summary());
         match kind {
             PromptKind::Find | PromptKind::Replace => self.preview_search(query),
@@ -234,7 +242,15 @@ impl App {
         ) {
             return self.submit_git_prompt(prompt);
         }
-        match prompt.kind {
+        let history = matches!(
+            prompt.kind,
+            PromptKind::Find
+                | PromptKind::FindInFiles
+                | PromptKind::Replace
+                | PromptKind::ReplaceInFiles
+        )
+        .then(|| (prompt.kind, prompt.fields[0].clone()));
+        let result = match prompt.kind {
             PromptKind::CommandPalette => {
                 let Some(name) = prompt.selected_candidate() else {
                     return Ok(());
@@ -284,7 +300,13 @@ impl App {
                 self.goto_line(line.saturating_sub(1))
             }
             _ => Ok(()),
+        };
+        if result.is_ok()
+            && let Some((kind, query)) = history
+        {
+            self.remember_search(kind, &query);
         }
+        result
     }
 
     fn submit_palette(&mut self, name: &str) -> Result<()> {
@@ -322,6 +344,7 @@ impl App {
             | PromptKind::NewFile
             | PromptKind::NewDir
             | PromptKind::WorkspaceRoot
+            | PromptKind::WorkspaceTerminalDir
             | PromptKind::Rename => self.submit_path_prompt(prompt),
             _ => self.submit_dialog_prompt(prompt),
         }
@@ -350,6 +373,10 @@ impl App {
                 self.dispatch(Command::CreateDir(path))
             }
             PromptKind::WorkspaceRoot => self.submit_workspace_root(&prompt.fields[0]),
+            PromptKind::WorkspaceTerminalDir => {
+                let path = resolve(&self.state.explorer.root, &prompt.fields[0])?;
+                self.set_workspace_terminal_dir(path)
+            }
             PromptKind::Rename => {
                 let name = prompt.fields[0].clone();
                 self.dispatch(Command::RenameTo(PathBuf::from(name)))
@@ -502,11 +529,13 @@ impl App {
                 prompt.set_candidates(self.state.warnings.clone());
             }
             PromptKind::Find | PromptKind::Replace => {
+                prompt.history.entries = self.search_history.list(kind).to_vec();
                 if let Some(search) = &self.state.search {
                     prompt.set_input(search.query.clone());
                 }
             }
             PromptKind::FindInFiles | PromptKind::ReplaceInFiles => {
+                prompt.history.entries = self.search_history.list(kind).to_vec();
                 if let Some(search) = &self.state.project_search {
                     prompt.set_input(search.query.clone());
                 }
@@ -601,6 +630,14 @@ impl App {
             PromptKind::WorkspaceRoot => {
                 prompt.set_input(self.state.explorer.root.to_string_lossy().into_owned())
             }
+            PromptKind::WorkspaceTerminalDir => prompt.set_input(
+                self.state
+                    .workspaces
+                    .active()
+                    .terminal_dir
+                    .to_string_lossy()
+                    .into_owned(),
+            ),
             PromptKind::Rename => {
                 if let Some(row) = self.state.explorer.selected_row() {
                     prompt.set_input(row.name.clone());

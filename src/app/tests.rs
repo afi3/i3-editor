@@ -74,6 +74,7 @@ fn fixture(text: &str) -> (App, PathBuf) {
         hover: None,
         git_marks: std::collections::HashMap::new(),
         git_diff: None,
+        help: None,
         plugin_status: Vec::new(),
         fullscreen: None,
         moving: false,
@@ -2855,5 +2856,158 @@ end)
     app.reload_plugins();
     assert!(app.plugin_command_names().is_empty());
     assert!(app.state.plugin_status.is_empty());
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn help_lists_active_bindings_and_closes_with_escape() {
+    use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    let (mut app, dir) = fixture("x\n");
+    app.dispatch(Command::Help).expect("help");
+    let help = app.state.help.as_ref().expect("help overlay");
+    assert!(
+        help.lines
+            .iter()
+            .any(|line| line.contains("Ctrl+Q") && line.contains("quit")),
+        "{:?}",
+        help.lines
+    );
+    assert!(help.lines.iter().any(|line| line == "Global"));
+
+    app.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    assert_eq!(app.state.help.as_ref().expect("help").scroll, 1);
+    app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    assert!(app.state.help.is_none());
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn search_history_cycles_and_persists() {
+    use crate::input::{KeyCombo, PromptKind};
+    use ratatui::crossterm::event::{KeyCode, KeyModifiers};
+
+    let (mut app, dir) = fixture("alpha beta\n");
+    let history_path = dir.join("history.toml");
+    app.history_path = Some(history_path.clone());
+    for query in ["alpha", "beta"] {
+        app.open_prompt(PromptKind::Find);
+        if let InputMode::Prompt(prompt) = &mut app.state.mode {
+            prompt.set_input(query);
+        }
+        app.submit_prompt().expect("search");
+    }
+
+    app.open_prompt(PromptKind::Find);
+    if let InputMode::Prompt(prompt) = &mut app.state.mode {
+        assert_eq!(
+            prompt.history.entries,
+            vec!["beta".to_string(), "alpha".to_string()]
+        );
+        prompt.set_input("");
+        prompt.history.index = None;
+    } else {
+        panic!("find prompt missing");
+    }
+
+    let previous = KeyCombo {
+        code: KeyCode::Up,
+        mods: KeyModifiers::ALT,
+    };
+    app.handle_prompt_key(previous);
+    assert_eq!(prompt_input(&app), "beta");
+    app.handle_prompt_key(previous);
+    assert_eq!(prompt_input(&app), "alpha");
+    app.handle_prompt_key(KeyCombo {
+        code: KeyCode::Down,
+        mods: KeyModifiers::ALT,
+    });
+    assert_eq!(prompt_input(&app), "beta");
+
+    let saved = std::fs::read_to_string(&history_path).expect("history file");
+    assert!(saved.contains("beta"), "{saved}");
+    app.cancel_prompt();
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+fn prompt_input(app: &App) -> String {
+    match &app.state.mode {
+        InputMode::Prompt(prompt) => prompt.input().to_string(),
+        InputMode::Normal => panic!("prompt closed"),
+    }
+}
+
+#[test]
+fn session_autosave_writes_the_current_layout() {
+    use std::time::{Duration, Instant};
+
+    let (mut app, dir) = fixture("x\n");
+    let path = dir.join("session.toml");
+    app.session_path = Some(path.clone());
+    app.last_session_save = Instant::now()
+        .checked_sub(Duration::from_secs(10))
+        .expect("instant");
+    app.autosave_session();
+
+    let saved = std::fs::read_to_string(&path).expect("session file");
+    assert!(saved.contains("note.txt"), "{saved}");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn scratch_buffer_can_be_saved_as_a_file() {
+    let (mut app, dir) = fixture("x\n");
+    app.dispatch(Command::NewScratch).expect("new scratch");
+    let document = app.state.active_document().expect("scratch");
+    assert!(document.path.is_none());
+    assert_eq!(document.display_name(), "[No Name]");
+
+    app.dispatch(Command::InsertText("hello".to_string()))
+        .expect("type");
+    assert!(app.state.active_document().expect("scratch").dirty);
+
+    let path = dir.join("scratch.txt");
+    app.dispatch(Command::SavePrompt).expect("save as");
+    if let InputMode::Prompt(prompt) = &mut app.state.mode {
+        prompt.fields[0] = path.to_string_lossy().into_owned();
+    }
+    app.submit_prompt().expect("save scratch");
+
+    let document = app.state.active_document().expect("scratch");
+    assert_eq!(document.path.as_deref(), Some(path.as_path()));
+    assert_eq!(
+        std::fs::read_to_string(&path).expect("scratch file"),
+        "hello"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn workspace_terminal_directory_controls_new_shells() {
+    use crate::input::PromptKind;
+
+    let (mut app, dir) = fixture("x\n");
+    let terminal_dir = dir.join("terminal");
+    std::fs::create_dir_all(&terminal_dir).expect("terminal dir");
+
+    app.dispatch(Command::SetWorkspaceTerminalDir)
+        .expect("terminal directory prompt");
+    let InputMode::Prompt(prompt) = &mut app.state.mode else {
+        panic!("terminal directory prompt missing")
+    };
+    assert_eq!(prompt.kind, PromptKind::WorkspaceTerminalDir);
+    prompt.fields[0] = terminal_dir.to_string_lossy().into_owned();
+    app.submit_prompt().expect("set terminal directory");
+    assert_eq!(
+        app.state.workspaces.active().terminal_dir,
+        terminal_dir.canonicalize().expect("canonical")
+    );
+
+    app.dispatch(Command::TerminalNew).expect("new terminal");
+    assert_eq!(
+        app.state.terminals.active().expect("shell").cwd(),
+        terminal_dir.canonicalize().expect("canonical").as_path()
+    );
+    app.state.terminals = crate::shell::Terminals::default();
     std::fs::remove_dir_all(&dir).ok();
 }

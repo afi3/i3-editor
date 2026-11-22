@@ -254,6 +254,10 @@ pub fn default_path() -> Option<PathBuf> {
     config_dir().map(|dir| dir.join("config.toml"))
 }
 
+pub fn history_path() -> Option<PathBuf> {
+    config_dir().map(|dir| dir.join("history.toml"))
+}
+
 pub fn load() -> (AppConfig, Vec<String>) {
     match default_path() {
         Some(path) => load_from(&path),
