@@ -249,7 +249,10 @@ them from the end while recording every remove/insert in one `History` batch, so
 undo and redo cover the whole multi-cursor edit. `cursors_after` computes the
 post-edit positions; single-range edits still take the incremental
 `insert`/`remove`/`replace` path so tree-sitter updates stay minimal. Mouse
-Alt-drag builds one selection per line through `Pane::column_selection`.
+Alt-drag builds one selection per line through `Pane::column_selection`. Every
+caret is rendered: the terminal owns one hardware cursor for the primary caret,
+while `ui::pane` paints each secondary caret with reverse video at the same
+visual row/column mapping used for clicks and wrapped movement.
 
 **Soft wrap is a pure line-to-row mapping.** `text::wrap_ranges` splits a line by
 display cells with a word-boundary preference; `text::visual_rows` maps document
@@ -298,6 +301,11 @@ text and emits `didOpen`/`didChange`/`didClose`; positions convert between char
 offsets and UTF-16 columns at the boundary. Diagnostics are stored per document
 id and rendered by the gutter and status bar. A server that fails to spawn is
 marked failed and reported once, so edits never wait on a language server.
+Pending requests carry a send timestamp: an unanswered `initialize` fails the
+server after 60 s, and other requests are dropped after 15 s. Changing the
+workspace root or the `[lsp.*]` tables calls `LspManager::restart`, which drops
+the old children and reopens the documents against the new root/config on the
+next pump.
 
 **Each workspace owns a root and a watcher.** `Workspace.root` is persisted in
 `session.toml`. `AppState` keeps one explorer for the active workspace; switching

@@ -321,6 +321,11 @@ extensions = ["py", "pyi"]
 - Sync is full-text on every change; positions convert between char offsets and
   LSP's UTF-16 columns. Server failures and protocol errors surface through the
   status bar once per server.
+- Changing the workspace root or any `[lsp.*]` table restarts every configured
+  server against the new root/config; open documents are reopened. Requests that
+  never answer are dropped: 60 s for `initialize`, 15 s for
+  completion/hover/definition. A timed-out `initialize` marks that server failed
+  for the current root/config.
 
 None of the commands has a default key. Bind one under `[keys.editing]` if the
 terminal can emit it, for example `"ctrl+space" = "lsp_completion"`.
@@ -349,6 +354,9 @@ All five commands are palette-only; bind them under `[keys.editing]` if wanted.
 
 - `add_cursor_below` / `add_cursor_above` (palette) add secondary cursors at the
   same column on the next/previous line. `clear_cursors` removes them.
+- Every caret is drawn: the primary caret is the terminal cursor, and each
+  secondary caret is a reverse-video block. Secondary selections use the normal
+  selection color.
 - Typing, `Enter`, `Tab`, `Backspace`, `Delete`, paste, `Copy`, and `Cut` apply
   to every cursor. Each multi-cursor edit is one undo step, and undoing it drops
   the secondary cursors back to the primary.
@@ -685,7 +693,7 @@ in the palette lists all of them.
 ```bash
 cargo fmt --check
 cargo check
-cargo test              # 231 unit + integration tests, no terminal required
+cargo test              # unit + integration tests, no terminal required
 cargo clippy --all-targets --all-features
 python3 scripts/make_demo.py   # regenerate docs/demo.gif (needs pyte + Pillow)
 ```
@@ -732,15 +740,12 @@ every check.
   The API is v1 only and config changes do not reload existing plugin code until
   the plugin directory changes or the editor restarts.
 - Soft wrap maps rows by rescanning the document for `Up`/`Down`; very large
-  files can make those keys slower. Secondary carets are edited and copied
-  together but only the primary caret is drawn as a cursor.
+  files can make those keys slower.
 - Git shows only the current worktree's `HEAD` diff: no branch, log, push/pull,
   hunk staging, or conflict UI. Untracked files are marked as all-added; binary
   files have no line markers, and markers can lag by up to one second.
-- The LSP client keeps the root captured at startup and has no request timeout;
-  a server that starts but never answers leaves its requests pending. Full-text
-  sync is used instead of incremental ranges, and shutdown/restart on config or
-  workspace-root changes is not implemented.
+- The LSP client uses full-text sync instead of incremental ranges; timed-out
+  interactive requests are dropped rather than retried.
 - `--update` uses the unauthenticated GitHub API (60 requests per hour per IP)
   and trusts the checksum published in the same release; there is no signature.
 - Saving replaces the file by rename, so an extra hard link keeps pointing at the

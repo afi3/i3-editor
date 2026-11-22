@@ -62,14 +62,14 @@ impl Default for GitConfig {
 
 /// Language servers, keyed by a short name (`rust`, `python`, ...). The key is
 /// also the default language match when `extensions` is empty.
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct LspConfig {
     #[serde(flatten)]
     pub servers: BTreeMap<String, LspServerConfig>,
 }
 
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct LspServerConfig {
     pub command: String,

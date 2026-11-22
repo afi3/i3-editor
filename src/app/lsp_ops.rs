@@ -8,6 +8,16 @@ use crate::state::{CompletionPopup, DocumentId};
 use super::App;
 
 impl App {
+    /// Drop LSP state and start servers again for the current root/config.
+    pub(crate) fn restart_lsp(&mut self) {
+        if let Some(manager) = self.lsp.as_mut() {
+            manager.restart(&self.state.config.lsp, self.state.explorer.root.clone());
+        }
+        self.state.lsp_diagnostics.clear();
+        self.state.completions = None;
+        self.state.hover = None;
+    }
+
     /// Drain server messages and update diagnostics and popups.
     pub(crate) fn pump_lsp(&mut self) {
         let Some(manager) = self.lsp.as_mut() else {

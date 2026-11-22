@@ -157,6 +157,22 @@ Release record:
 - Version `0.1.3`, tag `v0.1.3`, and the four platform assets are the release
   milestone; `main` remains the development branch.
 
+## Post-v0.1.3 — correctness pass: done
+
+Shipped on 2026-11-22 without a version bump.
+
+- Secondary carets are rendered with reverse video using the same visual-row
+  mapping as the primary cursor; secondary selections keep the normal selection
+  color.
+- LSP servers restart when the workspace root or any `[lsp.*]` table changes.
+  Unanswered `initialize` requests time out after 60 s and fail that server;
+  completion, hover, and definition requests time out after 15 s.
+- README, ARCHITECTURE, and this roadmap no longer claim that only the primary
+  caret is drawn or that the LSP client has no timeout.
+
+Verification: `cargo test` (314), `cargo fmt --check`,
+`cargo clippy --all-targets --all-features`.
+
 Policy that applied during the cycle:
 
 - `Cargo.toml` stayed at `0.1.2` until every workstream below passed acceptance.
@@ -463,4 +479,4 @@ cargo clippy --all-targets --all-features
 cargo run -- --dump-keymap
 ```
 
-Last recorded run: `cargo test` → 308 passed, `cargo clippy` → 0 warnings.
+Last recorded run: `cargo test` → 314 passed, `cargo clippy` → 0 warnings.

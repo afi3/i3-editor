@@ -2306,6 +2306,60 @@ fn lsp_diagnostics_completion_hover_and_definition_reach_the_ui() {
 }
 
 #[test]
+fn workspace_root_change_restarts_lsp() {
+    use crate::config::{LspConfig, LspServerConfig};
+    use crate::lsp::LspManager;
+
+    let (mut app, dir) = fixture("x\n");
+    let mut config = LspConfig::default();
+    config.servers.insert(
+        "fake".to_string(),
+        LspServerConfig {
+            command: "fake".to_string(),
+            args: Vec::new(),
+            extensions: vec!["rs".to_string()],
+        },
+    );
+    app.state.config.lsp = config.clone();
+    app.lsp = Some(LspManager::new(&config, dir.clone()));
+    let id = app.state.active_document_id().expect("doc");
+    app.state.lsp_diagnostics.insert(id, Vec::new());
+
+    let root = dir.join("other");
+    std::fs::create_dir_all(&root).expect("root");
+    app.set_workspace_root(root.clone()).expect("set root");
+
+    let manager = app.lsp.as_ref().expect("lsp");
+    assert_eq!(
+        manager.root_for_test(),
+        root.canonicalize().expect("canonical root").as_path()
+    );
+    assert!(app.state.lsp_diagnostics.is_empty());
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn config_reload_restarts_lsp_with_new_servers() {
+    use crate::config::LspConfig;
+    use crate::lsp::LspManager;
+
+    let (mut app, dir) = fixture("x\n");
+    let config_path = dir.join("config.toml");
+    std::fs::write(
+        &config_path,
+        "[lsp.fake]\ncommand = \"fake\"\nextensions = [\"rs\"]\n",
+    )
+    .expect("config");
+    app.state.config_path = Some(config_path);
+    app.lsp = Some(LspManager::new(&LspConfig::default(), dir.clone()));
+    assert!(!app.lsp.as_ref().expect("lsp").is_configured());
+
+    app.reload_config();
+    assert!(app.lsp.as_ref().expect("lsp").is_configured());
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn git_markers_diff_staging_and_commit_work() {
     use std::process::Command as Process;
 

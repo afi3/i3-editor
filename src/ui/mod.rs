@@ -610,6 +610,39 @@ mod tests {
     }
 
     #[test]
+    fn renders_secondary_carets() {
+        use crate::state::Cursor;
+        use ratatui::style::Modifier;
+
+        let (mut state, dir) = state("abc\ndef\n");
+        let pane_id = PaneId(1);
+        state.focus = Focus::Pane(pane_id);
+        {
+            let pane = state.panes.get_mut(&pane_id).expect("pane");
+            pane.cursor = 1;
+            pane.extra.push(Cursor {
+                cursor: 5,
+                anchor: None,
+            });
+        }
+
+        let buffer = draw_buffer(&mut state, 80, 24);
+        let rect = state.ui.pane_rects[&pane_id];
+        let geometry = {
+            let pane = state.panes.get(&pane_id).expect("pane");
+            let document = state.documents.get(&DocumentId(1)).expect("document");
+            crate::ui::pane::text_geometry(&state, pane, document, rect).expect("geometry")
+        };
+        let secondary = &buffer[(geometry.area.x + geometry.gutter + 1, geometry.area.y + 1)];
+        assert!(
+            secondary.modifier.contains(Modifier::REVERSED),
+            "secondary caret uses reverse video"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
     fn prompt_uses_theme_colors() {
         use crate::theme::Theme;
 

@@ -199,15 +199,72 @@ pub fn render(
     }
 
     if focused {
-        let (visible_row, column) = cursor_visual_row(&rows, pane, document, wrap, tab_width);
-        let x = text_area
-            .x
-            .saturating_add(gutter)
-            .saturating_add(column.saturating_sub(if wrap { 0 } else { pane.scroll_left }));
-        let y = text_area.y.saturating_add(visible_row as u16);
-        if visible_row < text_area.height as usize && x < text_area.x + text_area.width {
+        if let Some((visible_row, column)) =
+            cursor_visual_row(&rows, pane.cursor, document, wrap, tab_width)
+            && let Some((x, y)) = caret_cell(
+                text_area,
+                gutter,
+                column,
+                visible_row,
+                pane.scroll_left,
+                wrap,
+            )
+        {
             frame.set_cursor_position((x, y));
         }
+        draw_extra_carets(
+            frame, pane, document, &rows, text_area, gutter, wrap, tab_width,
+        );
+    }
+}
+
+fn caret_cell(
+    text_area: Rect,
+    gutter: u16,
+    column: u16,
+    row: usize,
+    scroll_left: u16,
+    wrap: bool,
+) -> Option<(u16, u16)> {
+    if row >= text_area.height as usize {
+        return None;
+    }
+    let column = if wrap {
+        column
+    } else {
+        column.checked_sub(scroll_left)?
+    };
+    let x = text_area.x.saturating_add(gutter).saturating_add(column);
+    let edge = text_area.x.saturating_add(text_area.width);
+    (x < edge).then_some((x, text_area.y.saturating_add(row as u16)))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_extra_carets(
+    frame: &mut Frame,
+    pane: &Pane,
+    document: &Document,
+    rows: &[textutil::VisualRow],
+    text_area: Rect,
+    gutter: u16,
+    wrap: bool,
+    tab_width: usize,
+) {
+    if pane.extra.is_empty() {
+        return;
+    }
+    let caret = Style::default().add_modifier(Modifier::REVERSED);
+    let positions: Vec<(u16, u16)> = pane
+        .extra
+        .iter()
+        .filter_map(|extra| {
+            let (row, column) = cursor_visual_row(rows, extra.cursor, document, wrap, tab_width)?;
+            caret_cell(text_area, gutter, column, row, pane.scroll_left, wrap)
+        })
+        .collect();
+    let buffer = frame.buffer_mut();
+    for (x, y) in positions {
+        buffer[(x, y)].set_style(caret);
     }
 }
 
@@ -347,33 +404,30 @@ fn row_spans(
 
 fn cursor_visual_row(
     rows: &[textutil::VisualRow],
-    pane: &Pane,
+    cursor: usize,
     document: &crate::editor::document::Document,
     wrap: bool,
     tab_width: usize,
-) -> (usize, u16) {
-    let line = document.line_of_char(pane.cursor);
-    let column = pane.cursor.saturating_sub(document.char_of_line(line));
+) -> Option<(usize, u16)> {
+    let line = document.line_of_char(cursor);
+    let column = cursor.saturating_sub(document.char_of_line(line));
     if wrap {
         let full = document.line_text(line);
-        let row = rows
+        let (index, row) = rows
             .iter()
             .enumerate()
             .rev()
-            .find(|(_, row)| row.line == line && column >= row.start);
-        if let Some((index, row)) = row {
-            let prefix: String = full
-                .chars()
-                .skip(row.start)
-                .take(column - row.start)
-                .collect();
-            return (index, textutil::cells(&prefix, tab_width, 0));
-        }
-        return (0, 0);
+            .find(|(_, row)| row.line == line && column >= row.start)?;
+        let prefix: String = full
+            .chars()
+            .skip(row.start)
+            .take(column - row.start)
+            .collect();
+        return Some((index, textutil::cells(&prefix, tab_width, 0)));
     }
-    let index = rows.iter().position(|row| row.line == line).unwrap_or(0);
+    let index = rows.iter().position(|row| row.line == line)?;
     let text = document.line_text(line);
-    (index, textutil::cells_prefix(&text, column, tab_width))
+    Some((index, textutil::cells_prefix(&text, column, tab_width)))
 }
 
 fn render_tabs(frame: &mut Frame, state: &AppState, pane: &Pane, area: Rect) {

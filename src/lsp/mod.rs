@@ -11,6 +11,7 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{self, Receiver};
+use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 
@@ -20,6 +21,12 @@ use crate::state::DocumentId;
 
 /// Largest JSON-RPC body accepted from a server.
 const MAX_MESSAGE_BYTES: usize = 8 << 20;
+
+/// Interactive requests that never answer are dropped after this long.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// Startup may be slower (indexing); keep the server alive longer.
+const INITIALIZE_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Severity {
@@ -73,11 +80,24 @@ enum ReplyKind {
     Definition,
 }
 
+fn timeout_for(kind: ReplyKind) -> Duration {
+    match kind {
+        ReplyKind::Initialize => INITIALIZE_TIMEOUT,
+        _ => REQUEST_TIMEOUT,
+    }
+}
+
 struct QueuedRequest {
     key: String,
     method: &'static str,
     params: Value,
     kind: ReplyKind,
+}
+
+struct PendingRequest {
+    method: &'static str,
+    kind: ReplyKind,
+    sent: Instant,
 }
 
 struct OpenDocument {
@@ -92,7 +112,7 @@ struct Server {
     child: Option<Child>,
     next_id: i64,
     initialized: bool,
-    pending: HashMap<i64, ReplyKind>,
+    pending: HashMap<i64, PendingRequest>,
 }
 
 impl Server {
@@ -147,7 +167,7 @@ impl Server {
         }
     }
 
-    fn request(&mut self, method: &str, params: Value, kind: ReplyKind) -> Option<i64> {
+    fn request(&mut self, method: &'static str, params: Value, kind: ReplyKind) -> Option<i64> {
         let id = self.next_id;
         self.next_id += 1;
         write_frame(
@@ -155,7 +175,14 @@ impl Server {
             &json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}),
         )
         .ok()?;
-        self.pending.insert(id, kind);
+        self.pending.insert(
+            id,
+            PendingRequest {
+                method,
+                kind,
+                sent: Instant::now(),
+            },
+        );
         Some(id)
     }
 
@@ -240,6 +267,12 @@ impl LspManager {
         !self.configs.is_empty()
     }
 
+    /// Drop every server and start over against a new root or configuration.
+    /// Open documents are reopened by the next `pump`.
+    pub fn restart(&mut self, config: &LspConfig, root: PathBuf) {
+        *self = Self::new(config, root);
+    }
+
     /// Sync open documents and dispatch every queued server message.
     pub fn pump(&mut self, documents: &HashMap<DocumentId, Document>) -> Vec<Event> {
         let mut events = Vec::new();
@@ -302,7 +335,38 @@ impl LspManager {
         for key in keys {
             self.drain(&key, &mut events);
         }
+        self.expire(&mut events);
         events
+    }
+
+    fn expire(&mut self, events: &mut Vec<Event>) {
+        self.expire_at(Instant::now(), events);
+    }
+
+    fn expire_at(&mut self, now: Instant, events: &mut Vec<Event>) {
+        let mut expired: Vec<(String, &'static str, ReplyKind)> = Vec::new();
+        for (key, server) in &mut self.servers {
+            server.pending.retain(|_, pending| {
+                if now.saturating_duration_since(pending.sent) < timeout_for(pending.kind) {
+                    return true;
+                }
+                expired.push((key.clone(), pending.method, pending.kind));
+                false
+            });
+        }
+        let mut failed = Vec::new();
+        for (key, method, kind) in expired {
+            if kind == ReplyKind::Initialize {
+                failed.push(key.clone());
+            }
+            events.push(Event::Warning(format!("LSP {key}: {method} timed out")));
+        }
+        for key in failed {
+            self.servers.remove(&key);
+            self.failed.insert(key.clone());
+            self.queued.retain(|request| request.key != key);
+            self.opened.retain(|_, open| open.key != key);
+        }
     }
 
     fn ensure_server(&mut self, key: &str, events: &mut Vec<Event>) {
@@ -356,10 +420,10 @@ impl LspManager {
                     }
                     continue;
                 };
-                let Some(kind) = server.pending.remove(&id) else {
+                let Some(pending) = server.pending.remove(&id) else {
                     continue;
                 };
-                match kind {
+                match pending.kind {
                     ReplyKind::Initialize => {
                         initialized = true;
                         server.initialized = true;
@@ -461,6 +525,9 @@ impl LspManager {
             None => {
                 let mut events = Vec::new();
                 self.ensure_server(&key, &mut events);
+                if self.failed.contains(&key) {
+                    return Err(format!("LSP {key}: server unavailable"));
+                }
                 self.queued.push(QueuedRequest {
                     key,
                     method,
@@ -805,6 +872,10 @@ impl LspManager {
     pub(crate) fn config_for_test(&self, key: &str) -> bool {
         self.configs.iter().any(|(name, _)| name == key)
     }
+
+    pub(crate) fn root_for_test(&self) -> &Path {
+        &self.root
+    }
 }
 
 #[cfg(test)]
@@ -1008,6 +1079,107 @@ mod tests {
         );
         assert_eq!(definition.line, 0);
         assert_eq!(definition.character, 3);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn restart_drops_servers_and_uses_new_root() {
+        let mut manager = manager();
+        let (stream, _peer) = UnixStream::pair().expect("pair");
+        manager.attach_for_test("fake", stream).expect("attach");
+        assert_eq!(manager.servers.len(), 1);
+
+        let root = std::env::temp_dir().join(format!("i3-lsp-root-{}", std::process::id()));
+        let config = LspConfig {
+            servers: manager.configs.iter().cloned().collect(),
+        };
+        manager.restart(&config, root.clone());
+        assert_eq!(manager.root, root);
+        assert!(manager.servers.is_empty());
+        assert!(manager.failed.is_empty());
+        assert!(manager.opened.is_empty());
+        assert!(manager.queued.is_empty());
+    }
+
+    #[test]
+    fn unanswered_initialize_marks_the_server_failed_and_drops_queued_work() {
+        let dir = std::env::temp_dir().join(format!("i3-lsp-init-timeout-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let (_, document) = document(&dir);
+        let mut manager = manager();
+        let (stream, _peer) = UnixStream::pair().expect("pair");
+        manager.attach_for_test("fake", stream).expect("attach");
+        manager.completion(&document, 0).expect("queued completion");
+        assert_eq!(manager.queued.len(), 1);
+
+        let stale = Instant::now()
+            .checked_sub(INITIALIZE_TIMEOUT + Duration::from_secs(1))
+            .expect("instant");
+        for pending in manager
+            .servers
+            .get_mut("fake")
+            .expect("server")
+            .pending
+            .values_mut()
+        {
+            pending.sent = stale;
+        }
+        let mut events = Vec::new();
+        manager.expire_at(Instant::now(), &mut events);
+
+        assert!(
+            events.iter().any(|event| matches!(
+                event,
+                Event::Warning(message) if message.contains("initialize") && message.contains("timed out")
+            )),
+            "{events:?}"
+        );
+        assert!(manager.servers.is_empty());
+        assert!(manager.failed.contains("fake"));
+        assert!(manager.queued.is_empty());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn unanswered_feature_request_is_dropped() {
+        let dir = std::env::temp_dir().join(format!("i3-lsp-req-timeout-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let (id, document) = document(&dir);
+        let mut manager = manager();
+        let (stream, _peer) = UnixStream::pair().expect("pair");
+        manager.attach_for_test("fake", stream).expect("attach");
+        manager.servers.get_mut("fake").expect("server").initialized = true;
+        manager.completion(&document, 0).expect("completion");
+
+        let stale = Instant::now()
+            .checked_sub(REQUEST_TIMEOUT + Duration::from_secs(1))
+            .expect("instant");
+        for pending in manager
+            .servers
+            .get_mut("fake")
+            .expect("server")
+            .pending
+            .values_mut()
+        {
+            pending.sent = stale;
+        }
+        let mut documents = HashMap::new();
+        documents.insert(id, document);
+        let events = manager.pump(&documents);
+
+        assert!(
+            events.iter().any(|event| matches!(
+                event,
+                Event::Warning(message) if message.contains("completion") && message.contains("timed out")
+            )),
+            "{events:?}"
+        );
+        assert!(
+            manager.servers["fake"]
+                .pending
+                .values()
+                .all(|pending| pending.method != "textDocument/completion")
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 

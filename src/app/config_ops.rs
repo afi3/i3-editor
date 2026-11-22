@@ -22,9 +22,13 @@ impl App {
             self.state.explorer.show_hidden = config.explorer.show_hidden;
             self.state.explorer.refresh();
         }
+        let lsp_changed = config.lsp != self.state.config.lsp;
         self.state.config = config;
         self.state.keymap = keymap;
         self.state.theme = theme;
+        if lsp_changed {
+            self.restart_lsp();
+        }
         self.state.ui.message = if warnings.is_empty() {
             "config reloaded".to_string()
         } else {

@@ -253,6 +253,7 @@ impl App {
         self.state.explorer = explorer;
         self.quick_open_files = None;
         self.state.project_search = None;
+        self.restart_lsp();
         Ok(())
     }
 
