@@ -105,6 +105,13 @@ static MARKDOWN_HTML: LazyLock<Option<Grammar>> = LazyLock::new(|| {
     Some(Grammar { language, query })
 });
 
+/// YAML front matter (`--- ... ---`) at the top of a Markdown document.
+static MARKDOWN_YAML: LazyLock<Option<Grammar>> = LazyLock::new(|| {
+    let language: tree_sitter::Language = tree_sitter_yaml::LANGUAGE.into();
+    let query = Query::new(&language, tree_sitter_yaml::HIGHLIGHTS_QUERY).ok()?;
+    Some(Grammar { language, query })
+});
+
 fn grammars() -> &'static HashMap<Language, Grammar> {
     &GRAMMARS
 }
@@ -134,6 +141,7 @@ struct Injected {
     inline: HashMap<usize, Tree>,
     fences: HashMap<usize, Tree>,
     html: HashMap<usize, Tree>,
+    front_matter: HashMap<usize, Tree>,
 }
 
 impl Injected {
@@ -145,6 +153,7 @@ impl Injected {
         self.inline.clear();
         self.fences.clear();
         self.html.clear();
+        self.front_matter.clear();
     }
 
     fn parse(&mut self, text: &str, language: &tree_sitter::Language) -> Option<Tree> {
@@ -383,10 +392,18 @@ fn paint(out: &mut Output<'_>, start_byte: usize, end_byte: usize, kind: TokenKi
     }
 }
 
+/// Nodes in the visible Markdown block tree that need a second parser.
+#[derive(Default)]
+struct MarkdownParts {
+    inline: Vec<Range<usize>>,
+    fences: Vec<(Range<usize>, Language)>,
+    html: Vec<Range<usize>>,
+    metadata: Vec<Range<usize>>,
+}
+
 /// Highlight the parts of Markdown that live in other trees: inline content
-/// (emphasis, links, code spans) with the inline grammar, fenced code with the
-/// language named by the fence info string, and HTML blocks/tags with the HTML
-/// grammar.
+/// (emphasis, links, code spans), fenced code, HTML blocks/tags, and YAML front
+/// matter.
 fn markdown_spans(
     tree: &Tree,
     injected: &mut Injected,
@@ -396,21 +413,11 @@ fn markdown_spans(
     out: &mut Output<'_>,
 ) {
     let rope = out.rope;
-    let mut inline_nodes = Vec::new();
-    let mut fences = Vec::new();
-    let mut html_blocks = Vec::new();
-    collect_markdown(
-        tree.root_node(),
-        rope,
-        start_byte,
-        end_byte,
-        &mut inline_nodes,
-        &mut fences,
-        &mut html_blocks,
-    );
+    let mut parts = MarkdownParts::default();
+    collect_markdown(tree.root_node(), rope, start_byte, end_byte, &mut parts);
 
     if let Some(inline) = MARKDOWN_INLINE.as_ref() {
-        for range in inline_nodes {
+        for range in parts.inline {
             paint_subtree(
                 cursor,
                 injected,
@@ -438,7 +445,7 @@ fn markdown_spans(
         }
     }
 
-    for (range, language) in fences {
+    for (range, language) in parts.fences {
         let Some(grammar) = grammars().get(&language) else {
             continue;
         };
@@ -446,8 +453,14 @@ fn markdown_spans(
     }
 
     if let Some(html) = MARKDOWN_HTML.as_ref() {
-        for range in html_blocks {
+        for range in parts.html {
             paint_subtree(cursor, injected, SubKind::Html, html, range, out);
+        }
+    }
+
+    if let Some(yaml) = MARKDOWN_YAML.as_ref() {
+        for range in parts.metadata {
+            paint_subtree(cursor, injected, SubKind::FrontMatter, yaml, range, out);
         }
     }
 }
@@ -457,6 +470,7 @@ enum SubKind {
     Inline,
     Fence,
     Html,
+    FrontMatter,
 }
 
 impl Injected {
@@ -465,6 +479,7 @@ impl Injected {
             SubKind::Inline => &mut self.inline,
             SubKind::Fence => &mut self.fences,
             SubKind::Html => &mut self.html,
+            SubKind::FrontMatter => &mut self.front_matter,
         }
     }
 }
@@ -496,38 +511,34 @@ fn paint_subtree(
     }
 }
 
-fn collect_markdown(
-    node: Node,
-    rope: &Rope,
-    start: usize,
-    end: usize,
-    inline: &mut Vec<Range<usize>>,
-    fences: &mut Vec<(Range<usize>, Language)>,
-    html: &mut Vec<Range<usize>>,
-) {
+fn collect_markdown(node: Node, rope: &Rope, start: usize, end: usize, parts: &mut MarkdownParts) {
     if node.end_byte() <= start || node.start_byte() >= end {
         return;
     }
     match node.kind() {
         "inline" => {
-            inline.push(node.byte_range());
+            parts.inline.push(node.byte_range());
             return;
         }
         "fenced_code_block" => {
             if let Some(fence) = fence(node, rope) {
-                fences.push(fence);
+                parts.fences.push(fence);
             }
             return;
         }
         "html_block" => {
-            html.push(node.byte_range());
+            parts.html.push(node.byte_range());
+            return;
+        }
+        "minus_metadata" => {
+            parts.metadata.push(node.byte_range());
             return;
         }
         _ => {}
     }
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
-        collect_markdown(child, rope, start, end, inline, fences, html);
+        collect_markdown(child, rope, start, end, parts);
     }
 }
 
@@ -648,6 +659,7 @@ mod tests {
         assert!(!supports(Language::Unknown));
         assert!(MARKDOWN_INLINE.is_some(), "inline markdown query");
         assert!(MARKDOWN_HTML.is_some(), "html markdown query");
+        assert!(MARKDOWN_YAML.is_some(), "yaml front matter query");
     }
 
     #[test]

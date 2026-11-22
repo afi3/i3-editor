@@ -65,9 +65,9 @@ Delivered:
   Shell, TOML, JSON, and Markdown: each document keeps its parse tree, every edit
   becomes an `InputEdit` for an incremental reparse, and the highlight query runs
   over the visible byte range. Markdown adds the inline grammar per visible
-  inline node, the HTML grammar for HTML blocks and inline tags, and parses each
-  fenced block with the language from its info string; those sub-trees are cached
-  and cleared on edit.
+  inline node, the HTML grammar for HTML blocks and inline tags, the YAML grammar
+  for `---` front matter, and parses each fenced block with the language from its
+  info string; those sub-trees are cached and cleared on edit.
 - Bottom terminal panel running real shells (`portable-pty` + `vt100`) in tabs,
   opened and closed from the palette (`F5` new, `F11` close), with theme-aware
   rendering, per-tab scrollback, and `Ctrl+PageUp/PageDown` cycling.
@@ -102,7 +102,7 @@ Delivered:
 - Keymap presets and capability handling.
 - Unicode width/grapheme handling with tests.
 - Error handling through a single `Error` type; status-bar messages.
-- 197 unit and integration tests, `TestBackend` render tests.
+- 198 unit and integration tests, `TestBackend` render tests.
 - `install.sh` one-liner with `--update` and `--uninstall` (checksum-verified
   release download, version comparison, Cargo fallback) and a tag-driven release
   workflow for macOS/Linux on x86_64 and aarch64.
@@ -111,7 +111,7 @@ Delivered:
 
 Not delivered yet:
 
-- YAML/TOML front matter in Markdown is not highlighted, and an unknown fence
+- TOML front matter (`+++`) in Markdown is not highlighted, and an unknown fence
   language stays plain text.
 
 ## Verification commands
@@ -124,4 +124,4 @@ cargo clippy --all-targets --all-features
 cargo run -- --dump-keymap
 ```
 
-Last recorded run: `cargo test` → 197 passed, `cargo clippy` → 0 warnings.
+Last recorded run: `cargo test` → 198 passed, `cargo clippy` → 0 warnings.

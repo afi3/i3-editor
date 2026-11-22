@@ -1107,6 +1107,8 @@ fn config_visibility_is_applied_at_startup() {
 
     let mut config = AppConfig::default();
     config.explorer.visible = false;
+    let dir = std::env::temp_dir().join(format!("i3-config-vis-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("temp dir");
     let app = App::new(
         Setup {
             terminal,
@@ -1114,10 +1116,11 @@ fn config_visibility_is_applied_at_startup() {
         },
         config,
         Vec::new(),
-        Some(std::env::temp_dir()),
+        Some(dir.clone()),
     )
     .expect("app");
     assert!(!app.state.explorer.visible);
+    std::fs::remove_dir_all(&dir).ok();
 }
 
 #[test]
