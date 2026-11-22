@@ -123,8 +123,9 @@ Captures map to `TokenKind` by capture-name prefix, and numbers captured as
 `constant.builtin` (Rust literals) stay `TokenKind::Number`. Markdown's block tree
 is supplemented by the inline grammar for each visible `(inline)` node, the HTML
 grammar for `html_block` nodes and inline `html_tag` nodes, the YAML grammar for
-`minus_metadata`, and the grammar named in each visible fence's info string;
-those sub-trees are cached by byte offset and cleared on every edit.
+`minus_metadata`, the TOML grammar for `plus_metadata`, and the grammar named in
+each visible fence's info string; those sub-trees are cached by byte offset and
+cleared on every edit.
 `SyntaxCache` also keeps the lexer's
 per-line state as a fallback when a grammar or query is unavailable; filling
 either during rendering is derived work and never changes document content.

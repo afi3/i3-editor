@@ -697,6 +697,37 @@ mod tests {
     }
 
     #[test]
+    fn structural_spans_cover_toml_front_matter() {
+        use crate::syntax::TokenKind;
+
+        let mut document = Document::empty(DocumentId(1), Some(PathBuf::from("/tmp/front.md")));
+        document.rope =
+            Rope::from_str("+++\ntitle = \"Hello\"\ndraft = true\ncount = 3\n+++\n# Body\n");
+        let spans = document.syntax_spans_range(0, 6);
+
+        assert!(
+            spans[1].iter().any(|span| span.kind == TokenKind::String),
+            "toml string: {:?}",
+            spans[1]
+        );
+        assert!(
+            spans[2].iter().any(|span| span.kind == TokenKind::Constant),
+            "toml boolean: {:?}",
+            spans[2]
+        );
+        assert!(
+            spans[3].iter().any(|span| span.kind == TokenKind::Number),
+            "toml number: {:?}",
+            spans[3]
+        );
+        assert!(
+            spans[5].iter().any(|span| span.kind == TokenKind::TypeName),
+            "markdown heading after front matter: {:?}",
+            spans[5]
+        );
+    }
+
+    #[test]
     fn markdown_injections_follow_edits() {
         use crate::syntax::TokenKind;
 

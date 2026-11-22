@@ -398,12 +398,13 @@ struct MarkdownParts {
     inline: Vec<Range<usize>>,
     fences: Vec<(Range<usize>, Language)>,
     html: Vec<Range<usize>>,
-    metadata: Vec<Range<usize>>,
+    yaml_metadata: Vec<Range<usize>>,
+    toml_metadata: Vec<Range<usize>>,
 }
 
 /// Highlight the parts of Markdown that live in other trees: inline content
-/// (emphasis, links, code spans), fenced code, HTML blocks/tags, and YAML front
-/// matter.
+/// (emphasis, links, code spans), fenced code, HTML blocks/tags, and YAML or
+/// TOML front matter.
 fn markdown_spans(
     tree: &Tree,
     injected: &mut Injected,
@@ -459,8 +460,16 @@ fn markdown_spans(
     }
 
     if let Some(yaml) = MARKDOWN_YAML.as_ref() {
-        for range in parts.metadata {
+        for range in parts.yaml_metadata {
             paint_subtree(cursor, injected, SubKind::FrontMatter, yaml, range, out);
+        }
+    }
+
+    // The TOML parser reports the `+++` delimiters as error nodes; the pairs
+    // between them still parse and highlight.
+    if let Some(toml) = grammars().get(&Language::Toml) {
+        for range in parts.toml_metadata {
+            paint_subtree(cursor, injected, SubKind::FrontMatter, toml, range, out);
         }
     }
 }
@@ -531,7 +540,11 @@ fn collect_markdown(node: Node, rope: &Rope, start: usize, end: usize, parts: &m
             return;
         }
         "minus_metadata" => {
-            parts.metadata.push(node.byte_range());
+            parts.yaml_metadata.push(node.byte_range());
+            return;
+        }
+        "plus_metadata" => {
+            parts.toml_metadata.push(node.byte_range());
             return;
         }
         _ => {}
