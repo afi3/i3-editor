@@ -114,17 +114,18 @@ rendering stays read-only. Text styles always set both foreground and background
 Ratatui writes the style it is given per cell, so a `Style::default()` span would
 erase a themed background.
 
-**Syntax highlighting is structural where a grammar exists.** `syntax::tree`
-owns a tree-sitter parser per document: Rust, Python, JavaScript/TypeScript, Go,
-C, and Shell each load their highlight query once in a `LazyLock`. `Document`
-hands every insert and removal to the tree as an `InputEdit`, so the next frame
-reparses only the changed region; the query cursor is bounded to the visible byte
-range. Captures map to `TokenKind` by capture-name prefix, and numbers captured as
-`constant.builtin` (Rust literals) stay `TokenKind::Number`. TOML, JSON, and
-Markdown fall back to `syntax::line_spans`, the stateful lexer that carries block
-comments, triple-quoted strings, template literals, and fences across lines.
-`SyntaxCache` holds both the tree and the lexer's per-line state; filling either
-during rendering is derived work and never changes document content.
+**Syntax highlighting is structural.** `syntax::tree` owns a tree-sitter parser
+per document; Rust, Python, JavaScript/TypeScript, Go, C, Shell, TOML, JSON, and
+Markdown load their highlight queries once in a `LazyLock`. `Document` hands every
+insert and removal to the tree as an `InputEdit`, so the next frame reparses only
+the changed region; the query cursor is bounded to the visible byte range.
+Captures map to `TokenKind` by capture-name prefix, and numbers captured as
+`constant.builtin` (Rust literals) stay `TokenKind::Number`. Markdown's block tree
+is supplemented by the inline grammar for each visible `(inline)` node and by the
+grammar named in each visible fence's info string; those sub-trees are cached by
+byte offset and cleared on every edit. `SyntaxCache` also keeps the lexer's
+per-line state as a fallback when a grammar or query is unavailable; filling
+either during rendering is derived work and never changes document content.
 
 **The terminal panel is a real PTY plus a VT100 model.** `shell::ShellPanel`
 spawns `$SHELL` through `portable-pty`, reads the master in a dedicated thread into

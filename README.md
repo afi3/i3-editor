@@ -271,25 +271,26 @@ Colors accept `#rgb`, `#rrggbb`, `indexed:0..255`, or names such as `reset`,
 
 ### Syntax highlighting
 
-Rust, Python, JavaScript/TypeScript, Go, C, and Shell are highlighted from a
-tree-sitter parse tree. The grammar's highlight query decides the token kind, so
-Rust raw strings, shell heredocs, nested block comments, and template literals
-keep their color across line breaks, and identifiers are classified by their role
-in the tree rather than by naming convention. Each document keeps its tree and
-hands every edit to it as an `InputEdit`; the next frame reparses only the changed
-region and runs the query over the visible lines instead of the whole file.
+Rust, Python, JavaScript/TypeScript, Go, C, Shell, TOML, JSON, and Markdown are
+highlighted from tree-sitter parse trees. The grammar's highlight query decides
+the token kind, so Rust raw strings, shell heredocs, nested block comments, and
+template literals keep their color across line breaks, and identifiers are
+classified by their role in the tree rather than by naming convention. Each
+document keeps its tree and hands every edit to it as an `InputEdit`; the next
+frame reparses only the changed region and runs the query over the visible lines
+instead of the whole file.
 
-TOML, JSON, and Markdown use the built-in stateful lexer: a `/* */` block (nested
-in Rust), a Python `"""` / `'''` block, and a JavaScript template literal keep
-their comment or string color until the closing delimiter. Markdown fenced blocks
-(backticks or tildes) are tracked as well, and their body is highlighted with the
-named language when it is one of the supported ones.
+Markdown uses two grammars: the block grammar highlights headings, fences, and
+links, and visible inline content is parsed with the inline grammar for emphasis,
+links, and code spans. Each fenced block is parsed with the language named in its
+info string, so Rust, Python, Shell, TOML, JSON, and the other supported
+languages are highlighted structurally inside the fence. These secondary trees are
+cached by byte offset and dropped on edit.
 
 Files with other extensions render in the theme foreground.
 
-Known limits: TOML, JSON, and Markdown are still lexical, and code inside a
-Markdown fence is highlighted line by line, without carrying grammar state across
-the fence.
+Known limits: Markdown HTML blocks and YAML/TOML front matter are not
+highlighted, and an unknown fence language stays plain text.
 
 The terminal backend honors `NO_COLOR`: when that variable is set, color
 sequences are suppressed and the theme has no visible effect. `--dump-keymap`
@@ -460,9 +461,9 @@ every check.
 
 ## Known limitations
 
-- Syntax highlighting is structural for Rust, Python, JavaScript/TypeScript, Go,
-  C, and Shell. TOML, JSON, and Markdown still use the lexical highlighter, so
-  code inside a Markdown fence is colored per line without grammar state.
+- Syntax highlighting is structural for every supported language. Markdown HTML
+  blocks and YAML/TOML front matter are not highlighted, and an unknown fence
+  language stays plain text.
 - Filesystem watching (Notify) is not implemented; quick open rescans the project
   on every invocation and caps the list at 5000 files.
 - `--update` uses the unauthenticated GitHub API (60 requests per hour per IP)

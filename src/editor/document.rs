@@ -576,6 +576,80 @@ mod tests {
     }
 
     #[test]
+    fn structural_spans_cover_json_and_toml() {
+        use crate::syntax::TokenKind;
+
+        let mut json = Document::empty(DocumentId(1), Some(PathBuf::from("/tmp/data.json")));
+        json.rope = Rope::from_str("{\"n\": 42, \"ok\": true}\n");
+        let spans = json.syntax_spans_range(0, 1);
+        assert!(
+            spans[0].iter().any(|span| span.kind == TokenKind::Number),
+            "{:?}",
+            spans[0]
+        );
+        assert!(spans[0].iter().any(|span| span.kind == TokenKind::Constant));
+        assert!(spans[0].iter().any(|span| span.kind == TokenKind::String));
+
+        let mut toml = Document::empty(DocumentId(2), Some(PathBuf::from("/tmp/data.toml")));
+        toml.rope = Rope::from_str("enabled = true\ncount = 3\n");
+        let spans = toml.syntax_spans_range(0, 2);
+        assert!(spans[0].iter().any(|span| span.kind == TokenKind::Constant));
+        assert!(spans[1].iter().any(|span| span.kind == TokenKind::Number));
+    }
+
+    #[test]
+    fn structural_spans_cover_markdown_and_fenced_code() {
+        use crate::syntax::TokenKind;
+
+        let mut document = Document::empty(DocumentId(1), Some(PathBuf::from("/tmp/notes.md")));
+        document.rope = Rope::from_str(
+            "# Title\n\nText with `code` and [link](https://x.test).\n\n```rust\nfn main() {\n    // note\n}\n```\n",
+        );
+        let spans = document.syntax_spans_range(0, 9);
+
+        assert!(
+            spans[0].iter().any(|span| span.kind == TokenKind::TypeName),
+            "heading: {:?}",
+            spans[0]
+        );
+        assert!(
+            spans[2].iter().any(|span| span.kind == TokenKind::String),
+            "inline code: {:?}",
+            spans[2]
+        );
+        assert!(
+            spans[5].iter().any(|span| span.kind == TokenKind::Keyword),
+            "fenced rust keyword: {:?}",
+            spans[5]
+        );
+        assert!(
+            spans[6].iter().any(|span| span.kind == TokenKind::Comment),
+            "fenced rust comment: {:?}",
+            spans[6]
+        );
+        assert!(
+            !spans[6].iter().any(|span| span.kind == TokenKind::String),
+            "fence content is not a blanket literal: {:?}",
+            spans[6]
+        );
+    }
+
+    #[test]
+    fn markdown_injections_follow_edits() {
+        use crate::syntax::TokenKind;
+
+        let mut document = Document::empty(DocumentId(1), Some(PathBuf::from("/tmp/edit.md")));
+        document.rope = Rope::from_str("```rust\nlet x = 1;\n```\n");
+        let spans = document.syntax_spans_range(1, 1);
+        assert!(spans[0].iter().any(|span| span.kind == TokenKind::Keyword));
+
+        document.insert(8, "// ", 8, (0, 0));
+        let spans = document.syntax_spans_range(1, 1);
+        assert!(spans[0].iter().any(|span| span.kind == TokenKind::Comment));
+        assert!(!spans[0].iter().any(|span| span.kind == TokenKind::Keyword));
+    }
+
+    #[test]
     fn edits_update_the_parse_tree() {
         use crate::syntax::TokenKind;
 

@@ -61,10 +61,12 @@ Delivered:
   unknown keys are reported instead of ignored.
 - Theme presets (`default`, `dark`, `light`, `high-contrast`) and theme files
   loaded by name from `<config>/i3-editor/themes/`, with `base` inheritance.
-- Tree-sitter highlighting for Rust, Python, JavaScript/TypeScript, Go, C, and
-  Shell: each document keeps its parse tree, every edit becomes an `InputEdit`
-  for an incremental reparse, and the highlight query runs over the visible byte
-  range. TOML, JSON, and Markdown keep the stateful lexer.
+- Tree-sitter highlighting for Rust, Python, JavaScript/TypeScript, Go, C,
+  Shell, TOML, JSON, and Markdown: each document keeps its parse tree, every edit
+  becomes an `InputEdit` for an incremental reparse, and the highlight query runs
+  over the visible byte range. Markdown adds the inline grammar per visible
+  inline node and parses each fenced block with the language from its info
+  string; those sub-trees are cached and cleared on edit.
 - Bottom terminal panel running a real shell (`portable-pty` + `vt100`), opened
   and closed from the palette, with theme-aware rendering and scrollback.
 - Terminal mouse reporting: when the shell program enables `DECSET 1000/1002/1003`,
@@ -78,10 +80,9 @@ Delivered:
 - Fuzzy finder for quick open and the command palette, scored by Nucleo with
   smart case and path-boundary bonuses; arrow selections survive a narrowing
   query and otherwise the best match stays selected.
-- Stateful lexer: cross-line block comments (nested for Rust), Python
-  triple-quoted strings, JavaScript template literals, Go raw strings, and
-  Markdown fences whose body is highlighted with the named language. Per-line
-  lexer states are memoized on the document and invalidated from the edited line.
+- Stateful lexer retained as a fallback when a grammar or query is unavailable:
+  cross-line block comments, triple-quoted strings, template literals, and
+  Markdown fences. Per-line lexer states are memoized per document.
 - Saves replace the file atomically (temp file + rename) with permissions and
   symlinks preserved; Save As confirms before replacing another file. A save after
   an external change asks to overwrite or reload instead of clobbering it.
@@ -99,7 +100,7 @@ Delivered:
 - Keymap presets and capability handling.
 - Unicode width/grapheme handling with tests.
 - Error handling through a single `Error` type; status-bar messages.
-- 191 unit and integration tests, `TestBackend` render tests.
+- 194 unit and integration tests, `TestBackend` render tests.
 - `install.sh` one-liner with `--update` and `--uninstall` (checksum-verified
   release download, version comparison, Cargo fallback) and a tag-driven release
   workflow for macOS/Linux on x86_64 and aarch64.
@@ -109,8 +110,8 @@ Delivered:
 Not delivered yet:
 
 - Terminal panel limits: one panel only.
-- TOML, JSON, and Markdown still use the lexical highlighter; code inside a
-  Markdown fence is highlighted per line without grammar state.
+- Markdown HTML blocks and YAML/TOML front matter are not highlighted, and an
+  unknown fence language stays plain text.
 
 ## Verification commands
 
@@ -122,4 +123,4 @@ cargo clippy --all-targets --all-features
 cargo run -- --dump-keymap
 ```
 
-Last recorded run: `cargo test` → 191 passed, `cargo clippy` → 0 warnings.
+Last recorded run: `cargo test` → 194 passed, `cargo clippy` → 0 warnings.
