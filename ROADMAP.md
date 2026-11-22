@@ -140,22 +140,29 @@ Known MVP limit (not a blocker):
 
 - An unknown fence language stays plain text, as documented in `README.md`.
 
-## Planned release v0.1.3 — all remaining features
+## Release v0.1.3 — shipped
 
-MVP shipped as `v0.1.2` on 2026-11-22. Every feature previously spread across
-v0.1.3–v0.1.9 is now planned for a single release, **v0.1.3**. There are no
-intermediate tags in this cycle.
+Shipped as `v0.1.3` on 2026-11-22. Every feature previously spread across
+v0.1.3–v0.1.9 shipped in this single release; there are no intermediate tags.
 
-Policy:
+Release record:
 
-- `Cargo.toml` stays at the released version (0.1.2) until every workstream
-  below passes acceptance. Do not bump, tag, or push a release before then.
-- Commit per workstream and keep `main` green. The single release tag is the
-  only external milestone; individual features are reviewed through commits.
-- If a workstream has to ship early for safety, that requires an explicit
-  decision to split the release; the default is one tag.
-- Keep this section current: tick the progress list and update the test count as
-  work lands, so a new session does not rescan the codebase.
+- The six follow-up workstreams share `state.rs`, `command.rs`, `app/mod.rs`, and
+  the prompt/UI files, so they were committed together with the earlier
+  search/navigation work as one green feature commit. The version bump and this
+  release record are a separate commit.
+- `cargo fmt --check`, `cargo check`, `cargo test` (308), and
+  `cargo clippy --all-targets --all-features` are clean; `forgeguard gate
+  --changed` reports 0 errors and 0 warnings.
+- Version `0.1.3`, tag `v0.1.3`, and the four platform assets are the release
+  milestone; `main` remains the development branch.
+
+Policy that applied during the cycle:
+
+- `Cargo.toml` stayed at `0.1.2` until every workstream below passed acceptance.
+- The version was bumped only after the overall checklist below was satisfied.
+- Keep this section current: the progress list and test count are updated as work
+  lands, so a new session does not rescan the codebase.
 
 Delivery order (dependencies only, not separate releases):
 
@@ -427,12 +434,12 @@ first release, keep host capabilities narrow, and do not call Lua per frame.
 
 ### Overall acceptance for v0.1.3
 
-- Every workstream acceptance above passes.
-- `cargo fmt --check`, `cargo check`, `cargo test`,
-  `cargo clippy --all-targets --all-features` are clean.
-- `forgeguard gate --changed` reports no errors or warnings.
-- README, ARCHITECTURE, and this roadmap reflect the shipped features.
-- Only then: bump to 0.1.3, tag `v0.1.3`, push, and verify four release assets.
+Shipped: every workstream acceptance passes; `cargo fmt --check`,
+`cargo check`, `cargo test` (308), and `cargo clippy --all-targets
+--all-features` are clean; `forgeguard gate --changed` reports no errors or
+warnings; README, ARCHITECTURE, and this roadmap reflect the shipped features.
+Version `0.1.3` is tagged `v0.1.3`, and the release workflow publishes the four
+platform archives with their checksums.
 
 ### Unscoped backlog
 
