@@ -2589,6 +2589,43 @@ fn git_stage_hunk_stages_and_unstages_only_the_selected_hunk() {
 }
 
 #[test]
+fn git_log_overlay_shows_branch_branches_and_commits() {
+    use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use std::process::Command as Process;
+
+    if Process::new("git").arg("--version").output().is_err() {
+        return;
+    }
+    let (mut app, dir) = fixture("one\n");
+    let git = |args: &[&str]| {
+        let status = Process::new("git")
+            .args(args)
+            .current_dir(&dir)
+            .status()
+            .expect("git");
+        assert!(status.success(), "git {args:?}");
+    };
+    git(&["init", "-q"]);
+    git(&["config", "user.email", "test@example.com"]);
+    git(&["config", "user.name", "Test"]);
+    git(&["add", "."]);
+    git(&["commit", "-q", "-m", "base"]);
+    git(&["branch", "topic"]);
+
+    app.dispatch(Command::GitLog).expect("git log");
+    let view = app.state.git_diff.as_ref().expect("git log overlay");
+    assert!(view.title.contains("branches and log"), "{}", view.title);
+    let text = view.lines.join("\n");
+    assert!(text.contains("Branch:"), "{text}");
+    assert!(text.contains("topic"), "{text}");
+    assert!(text.contains("base"), "{text}");
+
+    app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    assert!(app.state.git_diff.is_none());
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn git_markers_diff_staging_and_commit_work() {
     use std::process::Command as Process;
 

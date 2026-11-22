@@ -41,6 +41,51 @@ pub fn discover(binary: &str, start: &Path) -> Option<PathBuf> {
     root.is_dir().then_some(root)
 }
 
+/// Current branch, `detached at <sha>`, or `unborn` before the first commit.
+pub fn branch(binary: &str, repo: &Path) -> Result<String, String> {
+    if let Ok(branch) = run(binary, repo, &["symbolic-ref", "--short", "-q", "HEAD"]) {
+        return Ok(branch.trim().to_string());
+    }
+    match run(binary, repo, &["rev-parse", "--short", "HEAD"]) {
+        Ok(sha) => Ok(format!("detached at {}", sha.trim())),
+        Err(_) => Ok("unborn".to_string()),
+    }
+}
+
+/// Local branches, one per line, prefixed with `*` for the current branch.
+pub fn branches(binary: &str, repo: &Path) -> Result<Vec<String>, String> {
+    let output = run(
+        binary,
+        repo,
+        &["branch", "--format=%(HEAD)%(refname:short)"],
+    )?;
+    Ok(output
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| {
+            let (marker, name) = line.split_at(1);
+            format!("{} {}", if marker == "*" { "*" } else { " " }, name.trim())
+        })
+        .collect())
+}
+
+/// Recent commits as `hash  date  author  subject`.
+pub fn log(binary: &str, repo: &Path, limit: usize) -> Result<Vec<String>, String> {
+    let count = format!("-{limit}");
+    let output = run(
+        binary,
+        repo,
+        &[
+            "log",
+            "--no-color",
+            "--date=short",
+            "--pretty=format:%h  %ad  %an  %s",
+            &count,
+        ],
+    )?;
+    Ok(output.lines().map(str::to_string).collect())
+}
+
 /// Per-line markers for `path`: compare the worktree (including the index)
 /// against `HEAD`. Untracked files are reported as entirely added.
 pub fn line_marks(binary: &str, repo: &Path, path: &Path) -> Result<Vec<Option<Change>>, String> {
@@ -457,6 +502,31 @@ mod tests {
                 .trim()
                 .is_empty()
         );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn branch_list_and_log_report_the_current_state() {
+        let dir = repo("branchlog");
+        let file = dir.join("a.txt");
+        std::fs::write(&file, "one\n").expect("seed");
+        git(&dir, &["add", "."]);
+        git(&dir, &["commit", "-q", "-m", "base"]);
+        git(&dir, &["branch", "topic"]);
+
+        let current = branch("git", &dir).expect("branch");
+        assert!(!current.is_empty());
+        let branches = branches("git", &dir).expect("branches");
+        assert!(
+            branches.iter().any(|line| line.contains(&current)),
+            "{branches:?}"
+        );
+        assert!(
+            branches.iter().any(|line| line.trim() == "topic"),
+            "{branches:?}"
+        );
+        let log = log("git", &dir, 10).expect("log");
+        assert!(log.iter().any(|line| line.contains("base")), "{log:?}");
         std::fs::remove_dir_all(&dir).ok();
     }
 

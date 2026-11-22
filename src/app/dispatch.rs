@@ -125,6 +125,7 @@ impl App {
         match command {
             Command::GitStatus => self.git_status()?,
             Command::GitDiff => self.git_diff()?,
+            Command::GitLog => self.git_log()?,
             Command::GitStage => self.git_stage()?,
             Command::GitUnstage => self.git_unstage()?,
             Command::GitStageHunk => self.git_hunk_picker(true)?,

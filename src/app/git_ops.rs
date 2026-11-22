@@ -85,6 +85,40 @@ impl App {
         Ok(())
     }
 
+    pub(crate) fn git_log(&mut self) -> Result<()> {
+        let binary = self.state.config.git.binary.clone();
+        let repo = git::discover(&binary, &self.state.explorer.root)
+            .ok_or_else(|| Error::Git("not a git repository".to_string()))?;
+        let branch = git::branch(&binary, &repo).map_err(Error::Git)?;
+        let branches = git::branches(&binary, &repo).map_err(Error::Git)?;
+        let commits = match git::log(&binary, &repo, 50) {
+            Ok(commits) => commits,
+            Err(error) if error.contains("does not have any commits") => Vec::new(),
+            Err(error) => return Err(Error::Git(error)),
+        };
+
+        let mut text = format!("Branch: {branch}\n\nBranches\n");
+        if branches.is_empty() {
+            text.push_str("(no branches yet)\n");
+        } else {
+            for branch in branches {
+                text.push_str(&branch);
+                text.push('\n');
+            }
+        }
+        text.push_str("\nRecent commits\n");
+        if commits.is_empty() {
+            text.push_str("(no commits yet)\n");
+        } else {
+            for commit in commits {
+                text.push_str(&commit);
+                text.push('\n');
+            }
+        }
+        self.show_git_diff("Git branches and log".to_string(), &text);
+        Ok(())
+    }
+
     pub(crate) fn git_stage(&mut self) -> Result<()> {
         let (repo, relative) = self.active_git_file()?;
         let binary = self.state.config.git.binary.clone();

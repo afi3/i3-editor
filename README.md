@@ -379,6 +379,9 @@ no library dependency. The active workspace root must be inside a work tree.
 - `git_diff` shows the active file's unstaged diff (falling back to the staged
   diff when the worktree is clean). The overlay scrolls with `Up`/`Down`,
   `PageUp`/`PageDown`, `Home`/`End`; `Esc` or `q` closes it. It never writes.
+- `git_log` opens the same read-only overlay with the current branch, local
+  branches, and the latest 50 commits (`hash  date  author  subject`). It works
+  even before the first commit, reporting `unborn` and `(no commits yet)`.
 - `git_stage` and `git_unstage` act on the active file. `git_commit` prompts for
   a message and commits the staged index.
 - `git_stage_hunk` and `git_unstage_hunk` open a hunk picker for the active file:
@@ -788,9 +791,9 @@ every check.
   the plugin directory changes or the editor restarts.
 - Soft wrap computes rows from the cursor's line and its neighbours instead of
   rescanning the document, so `Up`/`Down` stay bounded by the viewport.
-- Git shows only the current worktree's `HEAD` diff: no branch, log, push/pull,
-  or conflict UI. Untracked files are marked as all-added; binary files have no
-  line markers, and markers can lag by up to one second.
+- Git is read-only beyond the index: no push/pull or conflict UI. Untracked
+  files are marked as all-added; binary files have no line markers, and markers
+  can lag by up to one second.
 - The LSP client uses full-text sync instead of incremental ranges; timed-out
   interactive requests are dropped rather than retried.
 - `--update` uses the unauthenticated GitHub API (60 requests per hour per IP)

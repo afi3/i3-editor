@@ -273,12 +273,15 @@ four platform assets are the release milestone.
 - The hunk picker overlay shows the selected hunk, switches hunks with
   `Up`/`Down`, scrolls with `PageUp`/`PageDown`, applies with `Enter`, and closes
   with `Esc`/`q`.
-- Tests cover a two-hunk stage/unstage round trip and the rendered picker.
+- `git_log` shows the current branch, local branches, and the latest 50 commits
+  in the read-only overlay, including the unborn/no-commit state.
+- Tests cover a two-hunk stage/unstage round trip, the rendered picker, branch
+  and log helpers, and the app overlay.
 
-Verification: `cargo test` (334), `cargo fmt --check`,
+Verification: `cargo test` (336), `cargo fmt --check`,
 `cargo clippy --all-targets --all-features`.
 
-Remaining Git depth: branch/log overlay, pull/push, and conflict UI.
+Remaining Git depth: pull/push and conflict UI.
 
 Policy that applied during the cycle:
 
@@ -581,4 +584,4 @@ cargo clippy --all-targets --all-features
 cargo run -- --dump-keymap
 ```
 
-Last recorded run: `cargo test` → 334 passed, `cargo clippy` → 0 warnings.
+Last recorded run: `cargo test` → 336 passed, `cargo clippy` → 0 warnings.
