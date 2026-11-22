@@ -1996,6 +1996,43 @@ fn watcher_reloads_a_clean_buffer_and_refreshes_the_explorer() {
 }
 
 #[test]
+fn external_documents_are_watched_outside_the_workspace_root() {
+    use std::time::{Duration, Instant};
+
+    let (mut app, dir) = fixture("one\n");
+    let outside = std::env::temp_dir().join(format!("i3-external-watch-{}", std::process::id()));
+    std::fs::remove_dir_all(&outside).ok();
+    std::fs::create_dir_all(&outside).expect("outside");
+    let external = outside.join("external.txt");
+    std::fs::write(&external, "one\n").expect("external file");
+
+    app.open_document(external.clone()).expect("open external");
+    app.pump_watcher();
+    assert!(app.external_watcher.is_some());
+    assert!(
+        app.external_watch_dirs
+            .contains(&outside.canonicalize().expect("canonical")),
+        "{:?}",
+        app.external_watch_dirs
+    );
+
+    std::fs::write(&external, "two\n").expect("external write");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline && text(&app) != "two\n" {
+        app.pump_watcher();
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert_eq!(text(&app), "two\n");
+
+    app.dispatch(Command::CloseDocument).expect("close");
+    app.pump_watcher();
+    assert!(app.external_watch_dirs.is_empty());
+    assert!(app.external_watcher.is_none());
+    std::fs::remove_dir_all(&dir).ok();
+    std::fs::remove_dir_all(&outside).ok();
+}
+
+#[test]
 fn external_change_to_a_dirty_buffer_is_reported_not_reloaded() {
     let (mut app, dir) = fixture("one\n");
     let path = app
@@ -2644,6 +2681,63 @@ fn wrapped_cursor_movement_and_click_use_visual_rows() {
         cursor - document.char_of_line(0) > 20,
         "click landed on the first visual row"
     );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn wrapped_movement_crosses_lines_and_skips_folds() {
+    let source = format!(
+        "{}\n{}\n{}\n",
+        "a".repeat(100),
+        "b".repeat(100),
+        "c".repeat(100)
+    );
+    let (mut app, dir) = fixture(&source);
+    app.state.config.editor.word_wrap = true;
+    let pane_id = app.state.focused_pane_id().expect("pane");
+    let document_id = app.state.active_document_id().expect("doc");
+    let start = {
+        let document = app.state.documents.get(&document_id).expect("doc");
+        document.char_of_line(0) + 100
+    };
+    {
+        let pane = app.state.panes.get_mut(&pane_id).expect("pane");
+        pane.cursor = start;
+        pane.target_col = None;
+    }
+
+    app.dispatch(Command::MoveCursor(crate::command::Move::Down))
+        .expect("down");
+    {
+        let document = app.state.documents.get(&document_id).expect("doc");
+        let cursor = app.state.panes[&pane_id].cursor;
+        assert_eq!(document.line_of_char(cursor), 1);
+        assert!(cursor > document.char_of_line(1));
+    }
+
+    app.dispatch(Command::MoveCursor(crate::command::Move::Up))
+        .expect("up");
+    let cursor = app.state.panes[&pane_id].cursor;
+    let document = app.state.documents.get(&document_id).expect("doc");
+    assert_eq!(document.line_of_char(cursor), 0);
+    assert!(cursor > document.char_of_line(0));
+
+    // Folding line 1 must make Down jump from line 0 to line 2.
+    app.state
+        .documents
+        .get_mut(&document_id)
+        .expect("doc")
+        .folded = std::iter::once(0..1).collect();
+    {
+        let pane = app.state.panes.get_mut(&pane_id).expect("pane");
+        pane.cursor = start;
+        pane.target_col = None;
+    }
+    app.dispatch(Command::MoveCursor(crate::command::Move::Down))
+        .expect("down across fold");
+    let cursor = app.state.panes[&pane_id].cursor;
+    let document = app.state.documents.get(&document_id).expect("doc");
+    assert_eq!(document.line_of_char(cursor), 2);
     std::fs::remove_dir_all(&dir).ok();
 }
 

@@ -75,23 +75,55 @@ fn wrapped_vertical(
     step: isize,
     target_col: Option<usize>,
 ) -> Option<(usize, Option<usize>)> {
-    let line = rope.char_to_line(cursor);
-    let rows = textutil::visual_rows(document, 0, width, tab_width, usize::MAX);
-    if rows.is_empty() {
-        return None;
-    }
-    let current = cursor.saturating_sub(rope.line_to_char(line));
-    let index = rows
+    let mut line = rope.char_to_line(cursor);
+    let mut ranges = textutil::wrap_ranges(&document.line_text(line), width, tab_width);
+    let column = cursor.saturating_sub(document.char_of_line(line));
+    let mut index = ranges
         .iter()
-        .rposition(|row| row.line == line && current >= row.start)?;
-    let target_index = (index as isize + step).clamp(0, rows.len() as isize - 1) as usize;
-    let target = rows[target_index];
-    let desired = target_col.unwrap_or(current.saturating_sub(rows[index].start));
-    let column = desired.min(target.end - target.start);
-    Some((
-        rope.line_to_char(target.line) + target.start + column,
-        Some(desired),
-    ))
+        .rposition(|(start, _)| column >= *start)
+        .unwrap_or(0);
+    let desired = target_col.unwrap_or(column.saturating_sub(ranges[index].0));
+
+    for _ in 0..step.unsigned_abs() {
+        if step > 0 {
+            if index + 1 < ranges.len() {
+                index += 1;
+            } else {
+                let Some(next) = next_visible_line(document, line) else {
+                    break;
+                };
+                line = next;
+                ranges = textutil::wrap_ranges(&document.line_text(line), width, tab_width);
+                index = 0;
+            }
+        } else if index > 0 {
+            index -= 1;
+        } else {
+            let Some(previous) = previous_visible_line(document, line) else {
+                break;
+            };
+            line = previous;
+            ranges = textutil::wrap_ranges(&document.line_text(line), width, tab_width);
+            index = ranges.len().saturating_sub(1);
+        }
+    }
+
+    let (start, end) = ranges[index];
+    let column = desired.min(end - start);
+    Some((document.char_of_line(line) + start + column, Some(desired)))
+}
+
+fn next_visible_line(document: &crate::editor::document::Document, line: usize) -> Option<usize> {
+    ((line + 1)..document.line_count()).find(|candidate| !document.is_hidden(*candidate))
+}
+
+fn previous_visible_line(
+    document: &crate::editor::document::Document,
+    line: usize,
+) -> Option<usize> {
+    (0..line)
+        .rev()
+        .find(|candidate| !document.is_hidden(*candidate))
 }
 
 fn line_content_end(rope: &Rope, line: usize) -> usize {

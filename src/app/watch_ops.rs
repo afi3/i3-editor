@@ -12,7 +12,8 @@ impl App {
     /// Drain queued watcher events, refresh the explorer once, and react to
     /// open buffers whose files changed underneath them.
     pub(crate) fn pump_watcher(&mut self) {
-        if self.watchers.is_empty() {
+        self.sync_external_watcher();
+        if self.watchers.is_empty() && self.external_watcher.is_none() {
             return;
         }
         let active = self.state.workspaces.active().id;
@@ -24,6 +25,9 @@ impl App {
                 active_events = true;
             }
             paths.extend(events);
+        }
+        if let Some(watcher) = &self.external_watcher {
+            paths.extend(drain_watcher(watcher));
         }
         if paths.is_empty() {
             return;
@@ -66,6 +70,87 @@ impl App {
         }
         for path in paths {
             self.handle_external_change(&path);
+        }
+    }
+
+    /// Parent directories of open documents outside every workspace root.
+    fn desired_external_dirs(&self) -> std::collections::HashSet<PathBuf> {
+        let roots: Vec<PathBuf> = self
+            .state
+            .workspaces
+            .workspaces
+            .iter()
+            .map(|workspace| {
+                workspace
+                    .root
+                    .canonicalize()
+                    .unwrap_or_else(|_| workspace.root.clone())
+            })
+            .collect();
+        self.state
+            .documents
+            .values()
+            .filter_map(|document| document.path.as_deref())
+            .filter_map(|path| {
+                let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+                if roots.iter().any(|root| path.starts_with(root)) {
+                    return None;
+                }
+                path.parent().map(Path::to_path_buf)
+            })
+            .collect()
+    }
+
+    /// Keep one non-recursive watcher over the parent directories of open
+    /// documents that live outside every workspace root.
+    fn sync_external_watcher(&mut self) {
+        let desired = self.desired_external_dirs();
+        if desired.is_empty() {
+            self.external_watcher = None;
+            self.external_watch_dirs.clear();
+            return;
+        }
+        if self.external_watcher.is_none() {
+            match crate::watch::Watcher::empty() {
+                Ok(watcher) => self.external_watcher = Some(watcher),
+                Err(error) => {
+                    self.notify(format!(
+                        "file watching disabled for external documents: {error}"
+                    ));
+                    return;
+                }
+            }
+        }
+        let stale: Vec<PathBuf> = self
+            .external_watch_dirs
+            .iter()
+            .filter(|dir| !desired.contains(*dir))
+            .cloned()
+            .collect();
+        for dir in stale {
+            if let Some(watcher) = self.external_watcher.as_mut() {
+                let _ = watcher.unwatch(&dir);
+            }
+            self.external_watch_dirs.remove(&dir);
+        }
+        let added: Vec<PathBuf> = desired
+            .into_iter()
+            .filter(|dir| !self.external_watch_dirs.contains(dir))
+            .collect();
+        for dir in added {
+            let result = self
+                .external_watcher
+                .as_mut()
+                .map(|watcher| watcher.watch(&dir, notify::RecursiveMode::NonRecursive));
+            match result {
+                Some(Ok(())) => {
+                    self.external_watch_dirs.insert(dir);
+                }
+                Some(Err(error)) => {
+                    self.notify(format!("cannot watch {}: {error}", dir.display()));
+                }
+                None => break,
+            }
         }
     }
 

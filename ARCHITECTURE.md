@@ -258,9 +258,11 @@ visual row/column mapping used for clicks and wrapped movement.
 display cells with a word-boundary preference; `text::visual_rows` maps document
 lines to `VisualRow { line, start, end }`, skipping folds. Rendering, cursor
 placement, mouse hit-testing, and vertical movement all consume that same list,
-so wrapped rows cannot disagree between surfaces. Wrapping is enabled per
-document set (`editor.word_wrap`) and horizontal scrolling turns off while it is
-active.
+so wrapped rows cannot disagree between surfaces. Vertical movement does not
+build the list for the whole document: `wrapped_vertical` wraps the cursor's line
+and walks only the adjacent visible lines, one viewport step at a time. Wrapping
+is enabled per document set (`editor.word_wrap`) and horizontal scrolling turns
+off while it is active.
 
 **Line endings are converted as a document edit.** `Document::convert_eol`
 normalizes the rope to the requested ending, records the whole replacement in
@@ -322,6 +324,9 @@ rebuilds it from the target root and clears the quick-open cache. `App.watchers`
 holds one recursive watcher per workspace id; the loop drains all of them,
 coalesces paths, and only rebuilds the explorer when the event came from the
 active workspace. Open buffers react to their own paths regardless of workspace.
+A second non-recursive watcher covers the parent directories of open documents
+outside every workspace root; `sync_external_watcher` adds and removes those
+directories as documents open and close, and drops the watcher when none remain.
 
 **Crash recovery is a swap directory, not a journal.** `recovery::write_to`
 writes each dirty document to `<config>/i3-editor/swap/` through `tempfile` +

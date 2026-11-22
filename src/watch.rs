@@ -16,13 +16,22 @@ pub struct Watcher {
 }
 
 impl Watcher {
+    /// Create a watcher with no paths; callers add paths with `watch`.
+    pub fn empty() -> notify::Result<Self> {
+        let (sender, events) = mpsc::channel();
+        let watcher = notify::recommended_watcher(move |event| {
+            let _ = sender.send(event);
+        })?;
+        Ok(Self {
+            _watcher: watcher,
+            events,
+        })
+    }
+
     /// Watch the workspace root recursively. When `config` is given, its parent
     /// directory is watched non-recursively so atomic config saves are seen.
     pub fn new(root: &Path, config: Option<&Path>) -> notify::Result<Self> {
-        let (sender, events) = mpsc::channel();
-        let mut watcher = notify::recommended_watcher(move |event| {
-            let _ = sender.send(event);
-        })?;
+        let mut watcher = Self::empty()?;
         watcher.watch(root, RecursiveMode::Recursive)?;
         if let Some(parent) = config.and_then(Path::parent) {
             let _ = watcher.watch(parent, RecursiveMode::NonRecursive);
@@ -31,10 +40,15 @@ impl Watcher {
                 let _ = watcher.watch(&plugins, RecursiveMode::NonRecursive);
             }
         }
-        Ok(Self {
-            _watcher: watcher,
-            events,
-        })
+        Ok(watcher)
+    }
+
+    pub fn watch(&mut self, path: &Path, mode: RecursiveMode) -> notify::Result<()> {
+        self._watcher.watch(path, mode)
+    }
+
+    pub fn unwatch(&mut self, path: &Path) -> notify::Result<()> {
+        self._watcher.unwatch(path)
     }
 
     /// Next queued event without blocking, or `None` when the queue is empty.

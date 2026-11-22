@@ -188,6 +188,24 @@ Shipped on 2026-11-22 without a version bump.
 Verification: `cargo test` (320), `cargo fmt --check`,
 `cargo clippy --all-targets --all-features`.
 
+## Post-v0.1.3 — performance pass: done
+
+Shipped on 2026-11-22 without a version bump.
+
+- Wrapped `Up`/`Down`/`PageUp`/`PageDown` no longer build every visual row in the
+  document. `wrapped_vertical` wraps the cursor's line and walks only the
+  next/previous visible line, so the work is bounded by the viewport.
+- Release benchmark (5 000 lines, 50 words each, 200 `Down` presses):
+  **1.18 s → 2.9 ms** (about 400×).
+- Open documents outside every workspace root now get a non-recursive parent
+  directory watcher, added and removed as documents open and close; the last
+  external document drops the watcher.
+- Tests cover cross-line/folded wrapped movement and external-file reload plus
+  watcher cleanup.
+
+Verification: `cargo test` (322), `cargo fmt --check`,
+`cargo clippy --all-targets --all-features`.
+
 Policy that applied during the cycle:
 
 - `Cargo.toml` stayed at `0.1.2` until every workstream below passed acceptance.
@@ -492,4 +510,4 @@ cargo clippy --all-targets --all-features
 cargo run -- --dump-keymap
 ```
 
-Last recorded run: `cargo test` → 320 passed, `cargo clippy` → 0 warnings.
+Last recorded run: `cargo test` → 322 passed, `cargo clippy` → 0 warnings.

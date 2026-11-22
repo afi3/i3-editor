@@ -291,6 +291,9 @@ Each workspace owns its explorer root and a recursive watcher for that root:
   rebuilt for the new root.
 - Every workspace root is watched. File events from an inactive workspace still
   reload open buffers but do not rebuild the active explorer tree.
+- Open documents outside every workspace root get a non-recursive watcher on
+  their parent directory, so external saves still reload clean buffers and warn
+  on dirty ones.
 - `rename_workspace` from the palette prompts for a new workspace-tab name.
 - `session.toml` stores each workspace root, so a restored session keeps the
   independent environments.
@@ -749,9 +752,8 @@ every check.
 
 - Syntax highlighting is structural for every supported language. An unknown
   fence language stays plain text.
-- Only workspace roots are watched. A document saved outside every root is not
-  reloaded automatically, and quick open still caps its cached list at 5000
-  files.
+- Every workspace root is watched, and open documents outside every root watch
+  their parent directory. Quick open still caps its cached list at 5000 files.
 - Folds are per-session and close on the next edit; the editor does not persist
   them. `go_to_symbol` uses a per-language node-kind table rather than each
   grammar's locals query, so unusual definitions can be missing.
@@ -759,8 +761,8 @@ every check.
   API; file/process access is off unless the matching capability is enabled.
   The API is v1 only and config changes do not reload existing plugin code until
   the plugin directory changes or the editor restarts.
-- Soft wrap maps rows by rescanning the document for `Up`/`Down`; very large
-  files can make those keys slower.
+- Soft wrap computes rows from the cursor's line and its neighbours instead of
+  rescanning the document, so `Up`/`Down` stay bounded by the viewport.
 - Git shows only the current worktree's `HEAD` diff: no branch, log, push/pull,
   hunk staging, or conflict UI. Untracked files are marked as all-added; binary
   files have no line markers, and markers can lag by up to one second.

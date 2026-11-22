@@ -43,6 +43,8 @@ impl App {
             drag: None,
             last_explorer_click: None,
             watchers: Vec::new(),
+            external_watcher: None,
+            external_watch_dirs: std::collections::HashSet::new(),
             quick_open_files: None,
             project_task: None,
             selecting: None,
@@ -87,6 +89,10 @@ pub struct App {
     pub(crate) last_explorer_click: Option<(usize, std::time::Instant)>,
     /// Recursive watcher per workspace root; empty when unavailable.
     pub(crate) watchers: Vec<(crate::state::WorkspaceId, crate::watch::Watcher)>,
+    /// Watches parent directories of open documents outside every workspace
+    /// root. One non-recursive watcher covers all of them.
+    pub(crate) external_watcher: Option<crate::watch::Watcher>,
+    pub(crate) external_watch_dirs: std::collections::HashSet<PathBuf>,
     /// Quick-open paths with the explorer revision they were scanned at.
     pub(crate) quick_open_files: Option<(u64, Vec<String>)>,
     /// Running Find in Files scan, if any.
@@ -193,6 +199,8 @@ impl App {
             drag: None,
             last_explorer_click: None,
             watchers: Vec::new(),
+            external_watcher: None,
+            external_watch_dirs: std::collections::HashSet::new(),
             quick_open_files: None,
             project_task: None,
             selecting: None,
