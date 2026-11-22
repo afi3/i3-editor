@@ -94,6 +94,109 @@ impl App {
         Ok(())
     }
 
+    pub(crate) fn git_hunk_picker(&mut self, stage: bool) -> Result<()> {
+        let (repo, relative) = self.active_git_file()?;
+        let binary = self.state.config.git.binary.clone();
+        let hunks = git::hunks(&binary, &repo, &relative, !stage).map_err(Error::Git)?;
+        if hunks.is_empty() {
+            self.notify(if stage {
+                "no unstaged changes"
+            } else {
+                "no staged changes"
+            });
+            return Ok(());
+        }
+        self.state.completions = None;
+        self.state.hover = None;
+        self.state.help = None;
+        self.state.git_diff = None;
+        self.state.hunks = Some(crate::state::HunkPicker {
+            title: format!(
+                " {} hunk: {relative} ",
+                if stage { "Stage" } else { "Unstage" }
+            ),
+            relative,
+            stage,
+            hunks,
+            selected: 0,
+            scroll: 0,
+        });
+        Ok(())
+    }
+
+    pub(crate) fn apply_selected_hunk(&mut self) -> Result<()> {
+        let Some(picker) = self.state.hunks.as_ref() else {
+            return Ok(());
+        };
+        let Some(hunk) = picker.hunks.get(picker.selected).cloned() else {
+            return Ok(());
+        };
+        let stage = picker.stage;
+        let relative = picker.relative.clone();
+        let index = picker.selected + 1;
+        let total = picker.hunks.len();
+        let binary = self.state.config.git.binary.clone();
+        let repo = git::discover(&binary, &self.state.explorer.root)
+            .ok_or_else(|| Error::Git("not a git repository".to_string()))?;
+        let result = if stage {
+            git::stage_hunk(&binary, &repo, &relative, &hunk.patch)
+        } else {
+            git::unstage_hunk(&binary, &repo, &relative, &hunk.patch)
+        };
+        match result {
+            Ok(()) => {
+                self.state.hunks = None;
+                self.notify(format!(
+                    "{} hunk {index}/{total} of {relative}",
+                    if stage { "staged" } else { "unstaged" }
+                ));
+                self.refresh_git_marks();
+            }
+            Err(error) => self.notify(format!("git: {error}")),
+        }
+        Ok(())
+    }
+
+    /// Keys while the hunk picker is open. Enter applies the selected hunk;
+    /// Esc/q closes without changing the index.
+    pub(crate) fn handle_hunk_key(&mut self, combo: crate::input::KeyCombo) -> bool {
+        use ratatui::crossterm::event::KeyCode;
+
+        let mut apply = false;
+        {
+            let Some(picker) = self.state.hunks.as_mut() else {
+                return false;
+            };
+            let last_hunk = picker.hunks.len().saturating_sub(1);
+            let body = picker
+                .hunks
+                .get(picker.selected)
+                .map_or(0, |hunk| hunk.lines.len().saturating_sub(1));
+            match combo.code {
+                KeyCode::Up => {
+                    picker.selected = picker.selected.saturating_sub(1);
+                    picker.scroll = 0;
+                }
+                KeyCode::Down => {
+                    picker.selected = (picker.selected + 1).min(last_hunk);
+                    picker.scroll = 0;
+                }
+                KeyCode::PageUp => picker.scroll = picker.scroll.saturating_sub(10),
+                KeyCode::PageDown => picker.scroll = (picker.scroll + 10).min(body),
+                KeyCode::Home => picker.scroll = 0,
+                KeyCode::End => picker.scroll = body,
+                KeyCode::Enter => apply = true,
+                KeyCode::Esc | KeyCode::Char('q') => self.state.hunks = None,
+                _ => {}
+            }
+        }
+        if apply {
+            let result = self.apply_selected_hunk();
+            self.finish(result);
+        }
+        true
+    }
+
     pub(crate) fn git_unstage(&mut self) -> Result<()> {
         let (repo, relative) = self.active_git_file()?;
         let binary = self.state.config.git.binary.clone();

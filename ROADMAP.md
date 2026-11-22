@@ -3,6 +3,13 @@
 Status of the phases defined in `MASTER.md`. Each phase was implemented and
 verified before the next one started.
 
+## Version policy
+
+- `v0.1.x` is the current hardening and feature-completion line: correctness,
+  daily-driver operations, performance, polish, and Git depth.
+- `v0.2.x` is reserved for AI and MCP features. Do not tag `v0.2.0` until those
+  features land; current-feature work stays inside `v0.1.x`.
+
 ## Phase 1 — Terminal foundation and pane skeleton: done
 
 - Raw mode, alternate screen, bracketed paste, mouse capture, keyboard
@@ -255,6 +262,23 @@ Release record: `cargo fmt --check`, `cargo test` (331), and
 `cargo clippy --all-targets --all-features` are clean; `forgeguard gate
 --changed` reports no errors or warnings. Version `0.1.4`, tag `v0.1.4`, and the
 four platform assets are the release milestone.
+
+## Unreleased v0.1.5 — Git depth
+
+`v0.1.5` stays on the hardening line; `v0.2.x` is still reserved for AI/MCP.
+
+- `git::hunks` splits a single-file diff into independently applicable patches.
+- `git_stage_hunk` applies one hunk to the index with `git apply --cached`;
+  `git_unstage_hunk` reverses it. Untracked files stage as a whole.
+- The hunk picker overlay shows the selected hunk, switches hunks with
+  `Up`/`Down`, scrolls with `PageUp`/`PageDown`, applies with `Enter`, and closes
+  with `Esc`/`q`.
+- Tests cover a two-hunk stage/unstage round trip and the rendered picker.
+
+Verification: `cargo test` (334), `cargo fmt --check`,
+`cargo clippy --all-targets --all-features`.
+
+Remaining Git depth: branch/log overlay, pull/push, and conflict UI.
 
 Policy that applied during the cycle:
 
@@ -557,4 +581,4 @@ cargo clippy --all-targets --all-features
 cargo run -- --dump-keymap
 ```
 
-Last recorded run: `cargo test` → 331 passed, `cargo clippy` → 0 warnings.
+Last recorded run: `cargo test` → 334 passed, `cargo clippy` → 0 warnings.

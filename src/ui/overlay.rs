@@ -466,6 +466,53 @@ pub fn render_help(frame: &mut Frame, state: &AppState) {
     frame.render_widget(Paragraph::new(rows).block(block), rect);
 }
 
+pub fn render_hunks(frame: &mut Frame, state: &AppState) {
+    let Some(picker) = &state.hunks else {
+        return;
+    };
+    let area = frame.area();
+    let width = area.width.saturating_sub(4);
+    let height = area.height.saturating_sub(4);
+    if width < 10 || height < 3 {
+        return;
+    }
+    let rect = Rect::new(area.x + 2, area.y + 2, width, height);
+    frame.render_widget(Clear, rect);
+    let title = format!(
+        "{} [{}/{}]  Up/Down hunk, PgUp/PgDn scroll, Enter applies, Esc closes ",
+        picker.title,
+        picker.selected + 1,
+        picker.hunks.len()
+    );
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(state.theme.prompt_border))
+        .title(title);
+    let inner = block.inner(rect);
+    let Some(hunk) = picker.hunks.get(picker.selected) else {
+        return;
+    };
+    let rows: Vec<Line> = hunk
+        .lines
+        .iter()
+        .skip(picker.scroll)
+        .take(inner.height as usize)
+        .map(|line| {
+            let style = if line.starts_with('+') {
+                Style::default().fg(ratatui::style::Color::Green)
+            } else if line.starts_with('-') {
+                Style::default().fg(ratatui::style::Color::Red)
+            } else if line.starts_with("@@") {
+                Style::default().fg(ratatui::style::Color::Cyan)
+            } else {
+                state.theme.base()
+            };
+            Line::from(Span::styled(line.clone(), style))
+        })
+        .collect();
+    frame.render_widget(Paragraph::new(rows).block(block), rect);
+}
+
 fn prompt_title(state: &AppState, prompt: &PromptState) -> String {
     let global = flags_suffix(state.search_options);
     let query = prompt.fields.first().map(String::as_str).unwrap_or("");

@@ -193,6 +193,7 @@ impl App {
             git_marks: std::collections::HashMap::new(),
             git_diff: None,
             help: None,
+            hunks: None,
             plugin_status: Vec::new(),
             fullscreen: None,
             moving: false,
@@ -412,6 +413,9 @@ impl App {
             return;
         }
         if self.handle_help_key(combo) {
+            return;
+        }
+        if self.handle_hunk_key(combo) {
             return;
         }
         if self.handle_diff_key(combo) {

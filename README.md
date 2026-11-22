@@ -381,10 +381,15 @@ no library dependency. The active workspace root must be inside a work tree.
   `PageUp`/`PageDown`, `Home`/`End`; `Esc` or `q` closes it. It never writes.
 - `git_stage` and `git_unstage` act on the active file. `git_commit` prompts for
   a message and commits the staged index.
+- `git_stage_hunk` and `git_unstage_hunk` open a hunk picker for the active file:
+  `Up`/`Down` selects a hunk, `PageUp`/`PageDown` scrolls its body, `Enter`
+  applies the selected hunk to the index (or removes it with `--reverse`), and
+  `Esc`/`q` closes. An untracked file has no applicable hunk context, so staging
+  a hunk stages the whole file.
 - Every failure (not a repository, nothing staged, git missing) is reported in
   the status bar.
 
-All five commands are palette-only; bind them under `[keys.editing]` if wanted.
+These commands are palette-only; bind them under `[keys.editing]` if wanted.
 
 ### Multi-cursor, wrapping, and line endings
 
@@ -784,8 +789,8 @@ every check.
 - Soft wrap computes rows from the cursor's line and its neighbours instead of
   rescanning the document, so `Up`/`Down` stay bounded by the viewport.
 - Git shows only the current worktree's `HEAD` diff: no branch, log, push/pull,
-  hunk staging, or conflict UI. Untracked files are marked as all-added; binary
-  files have no line markers, and markers can lag by up to one second.
+  or conflict UI. Untracked files are marked as all-added; binary files have no
+  line markers, and markers can lag by up to one second.
 - The LSP client uses full-text sync instead of incremental ranges; timed-out
   interactive requests are dropped rather than retried.
 - `--update` uses the unauthenticated GitHub API (60 requests per hour per IP)

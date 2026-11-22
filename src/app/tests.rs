@@ -75,6 +75,7 @@ fn fixture(text: &str) -> (App, PathBuf) {
         git_marks: std::collections::HashMap::new(),
         git_diff: None,
         help: None,
+        hunks: None,
         plugin_status: Vec::new(),
         fullscreen: None,
         moving: false,
@@ -2523,6 +2524,67 @@ fn config_reload_restarts_lsp_with_new_servers() {
 
     app.reload_config();
     assert!(app.lsp.as_ref().expect("lsp").is_configured());
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn git_stage_hunk_stages_and_unstages_only_the_selected_hunk() {
+    use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use std::process::Command as Process;
+
+    if Process::new("git").arg("--version").output().is_err() {
+        return;
+    }
+    let base: String = (1..=20).map(|number| format!("line {number}\n")).collect();
+    let (mut app, dir) = fixture(&base);
+    let path = dir.join("note.txt");
+    let git = |args: &[&str]| {
+        let status = Process::new("git")
+            .args(args)
+            .current_dir(&dir)
+            .status()
+            .expect("git");
+        assert!(status.success(), "git {args:?}");
+    };
+    let output = |args: &[&str]| {
+        let output = Process::new("git")
+            .args(args)
+            .current_dir(&dir)
+            .output()
+            .expect("git");
+        String::from_utf8_lossy(&output.stdout).into_owned()
+    };
+    git(&["init", "-q"]);
+    git(&["config", "user.email", "test@example.com"]);
+    git(&["config", "user.name", "Test"]);
+    git(&["add", "."]);
+    git(&["commit", "-q", "-m", "base"]);
+    let changed = base
+        .replace("line 2\n", "line 2 changed\n")
+        .replace("line 18\n", "line 18 changed\n");
+    std::fs::write(&path, &changed).expect("edit");
+
+    app.dispatch(Command::GitStageHunk).expect("hunk picker");
+    let picker = app.state.hunks.as_ref().expect("picker");
+    assert_eq!(picker.hunks.len(), 2);
+    assert!(picker.stage);
+    app.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert!(app.state.hunks.is_none());
+
+    let cached = output(&["diff", "--cached", "--no-color"]);
+    assert!(cached.contains("+line 18 changed"), "{cached}");
+    assert!(!cached.contains("+line 2 changed"), "{cached}");
+
+    app.dispatch(Command::GitUnstageHunk)
+        .expect("unstage picker");
+    assert_eq!(app.state.hunks.as_ref().expect("picker").hunks.len(), 1);
+    app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert!(
+        output(&["diff", "--cached", "--no-color"])
+            .trim()
+            .is_empty()
+    );
     std::fs::remove_dir_all(&dir).ok();
 }
 

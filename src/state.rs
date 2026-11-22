@@ -275,6 +275,18 @@ pub struct HelpView {
     pub scroll: usize,
 }
 
+/// Selectable hunk list for partial staging.
+#[derive(Clone, Debug)]
+pub struct HunkPicker {
+    pub title: String,
+    pub relative: String,
+    /// True when the selected hunk will be staged; false unstages it.
+    pub stage: bool,
+    pub hunks: Vec<crate::git::Hunk>,
+    pub selected: usize,
+    pub scroll: usize,
+}
+
 /// Completion rows rendered above the prompt layer.
 #[derive(Clone, Debug, Default)]
 pub struct CompletionPopup {
@@ -325,6 +337,8 @@ pub struct AppState {
     pub git_diff: Option<DiffView>,
     /// Keybinding overlay.
     pub help: Option<HelpView>,
+    /// Partial-staging overlay.
+    pub hunks: Option<HunkPicker>,
     /// Statusline strings produced by Lua plugins.
     pub plugin_status: Vec<String>,
     /// Pane temporarily occupying the whole pane area.

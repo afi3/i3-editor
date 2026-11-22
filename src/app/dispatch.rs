@@ -127,6 +127,8 @@ impl App {
             Command::GitDiff => self.git_diff()?,
             Command::GitStage => self.git_stage()?,
             Command::GitUnstage => self.git_unstage()?,
+            Command::GitStageHunk => self.git_hunk_picker(true)?,
+            Command::GitUnstageHunk => self.git_hunk_picker(false)?,
             Command::GitCommit => self.git_commit_prompt()?,
             other => return Ok(Some(other)),
         }

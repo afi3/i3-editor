@@ -2,8 +2,9 @@
 //! staging. Everything shells out to `git`; no library dependency.
 
 use std::collections::HashSet;
+use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Change {
@@ -20,6 +21,17 @@ pub struct StatusEntry {
     pub code: String,
     pub staged: bool,
     pub unstaged: bool,
+}
+
+/// One hunk of a single-file unified diff, with enough context to apply it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Hunk {
+    /// The `@@ ... @@` line.
+    pub header: String,
+    /// Header plus body, for the preview overlay.
+    pub lines: Vec<String>,
+    /// Complete patch (file header + this hunk) accepted by `git apply`.
+    pub patch: String,
 }
 
 /// Repository root for `start`, when it is inside a work tree.
@@ -199,6 +211,107 @@ pub fn stage(binary: &str, repo: &Path, relative: &str) -> Result<(), String> {
     run(binary, repo, &["add", "--", relative]).map(|_| ())
 }
 
+/// Split a single-file diff into independently applicable hunks.
+pub fn hunks(binary: &str, repo: &Path, relative: &str, staged: bool) -> Result<Vec<Hunk>, String> {
+    let text = diff(binary, repo, relative, staged)?;
+    Ok(parse_hunks(&text))
+}
+
+fn parse_hunks(text: &str) -> Vec<Hunk> {
+    let lines: Vec<&str> = text.lines().collect();
+    let Some(first) = lines.iter().position(|line| line.starts_with("@@ ")) else {
+        return Vec::new();
+    };
+    let header = lines[..first].join("\n");
+    let mut hunks = Vec::new();
+    let mut current: Option<(String, Vec<String>)> = None;
+    for line in &lines[first..] {
+        if line.starts_with("@@ ") {
+            if let Some((hunk_header, body)) = current.take() {
+                hunks.push(make_hunk(&header, hunk_header, body));
+            }
+            current = Some(((*line).to_string(), vec![(*line).to_string()]));
+        } else if let Some((_, body)) = current.as_mut() {
+            body.push((*line).to_string());
+        }
+    }
+    if let Some((hunk_header, body)) = current {
+        hunks.push(make_hunk(&header, hunk_header, body));
+    }
+    hunks
+}
+
+fn make_hunk(header: &str, hunk_header: String, lines: Vec<String>) -> Hunk {
+    let mut patch = String::new();
+    if !header.is_empty() {
+        patch.push_str(header);
+        patch.push('\n');
+    }
+    patch.push_str(&lines.join("\n"));
+    patch.push('\n');
+    Hunk {
+        header: hunk_header,
+        lines,
+        patch,
+    }
+}
+
+/// Stage one hunk from an unstaged diff. Untracked files have no applicable
+/// hunk context, so they fall back to staging the whole file.
+pub fn stage_hunk(binary: &str, repo: &Path, relative: &str, patch: &str) -> Result<(), String> {
+    if is_untracked(binary, repo, relative)? {
+        return stage(binary, repo, relative);
+    }
+    apply_patch(binary, repo, patch, false)
+}
+
+/// Remove one hunk from the index using its staged patch.
+pub fn unstage_hunk(binary: &str, repo: &Path, relative: &str, patch: &str) -> Result<(), String> {
+    let _ = relative;
+    apply_patch(binary, repo, patch, true)
+}
+
+fn apply_patch(binary: &str, repo: &Path, patch: &str, reverse: bool) -> Result<(), String> {
+    let mut args = vec!["apply", "--cached"];
+    if reverse {
+        args.push("--reverse");
+    }
+    let mut child = Command::new(binary)
+        .args(&args)
+        .current_dir(repo)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("LC_ALL", "C")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| format!("{binary}: {error}"))?;
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin
+            .write_all(patch.as_bytes())
+            .map_err(|error| format!("git apply: {error}"))?;
+    }
+    let output = child
+        .wait_with_output()
+        .map_err(|error| format!("git apply: {error}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let detail = stderr.trim();
+        let detail = if detail.is_empty() {
+            stdout.trim()
+        } else {
+            detail
+        };
+        return Err(if detail.is_empty() {
+            format!("git apply exited with {}", output.status)
+        } else {
+            detail.to_string()
+        });
+    }
+    Ok(())
+}
+
 pub fn unstage(binary: &str, repo: &Path, relative: &str) -> Result<(), String> {
     run(binary, repo, &["restore", "--staged", "--", relative]).map(|_| ())
 }
@@ -311,6 +424,39 @@ mod tests {
         unstage("git", &dir, "a.txt").expect("unstage");
         let entries = status("git", &dir).expect("status");
         assert!(!entries[0].staged);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn one_hunk_can_be_staged_and_unstaged() {
+        let dir = repo("hunks");
+        let file = dir.join("a.txt");
+        let base: String = (1..=20).map(|number| format!("line {number}\n")).collect();
+        std::fs::write(&file, &base).expect("seed");
+        git(&dir, &["add", "."]);
+        git(&dir, &["commit", "-q", "-m", "base"]);
+        let changed = base
+            .replace("line 2\n", "line 2 changed\n")
+            .replace("line 18\n", "line 18 changed\n");
+        std::fs::write(&file, &changed).expect("edit");
+
+        let hunks = hunks("git", &dir, "a.txt", false).expect("hunks");
+        assert_eq!(hunks.len(), 2, "{hunks:#?}");
+        stage_hunk("git", &dir, "a.txt", &hunks[1].patch).expect("stage hunk");
+        let cached = diff("git", &dir, "a.txt", true).expect("cached diff");
+        assert!(cached.contains("+line 18 changed"), "{cached}");
+        assert!(!cached.contains("+line 2 changed"), "{cached}");
+        let unstaged = diff("git", &dir, "a.txt", false).expect("unstaged diff");
+        assert!(unstaged.contains("+line 2 changed"), "{unstaged}");
+        assert!(!unstaged.contains("+line 18 changed"), "{unstaged}");
+
+        unstage_hunk("git", &dir, "a.txt", &hunks[1].patch).expect("unstage hunk");
+        assert!(
+            diff("git", &dir, "a.txt", true)
+                .expect("cached diff")
+                .trim()
+                .is_empty()
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 

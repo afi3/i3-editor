@@ -257,6 +257,7 @@ pub fn render(frame: &mut Frame, state: &AppState) {
     overlay::render_diff(frame, state);
     overlay::render_popups(frame, state);
     overlay::render_help(frame, state);
+    overlay::render_hunks(frame, state);
     if let InputMode::Prompt(prompt) = &state.mode {
         overlay::render_prompt(frame, state, prompt);
     }
@@ -461,6 +462,7 @@ mod tests {
             git_marks: HashMap::new(),
             git_diff: None,
             help: None,
+            hunks: None,
             plugin_status: Vec::new(),
             fullscreen: None,
             moving: false,
@@ -657,6 +659,34 @@ mod tests {
         let screen = draw(&mut state, 100, 24);
         assert!(screen.contains("[Ctrl+S]"), "{screen}");
         assert!(screen.contains("explorer_rename"), "{screen}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn hunk_picker_renders_the_selected_hunk() {
+        use crate::git::Hunk;
+        use crate::state::HunkPicker;
+
+        let (mut state, dir) = state("x\n");
+        state.hunks = Some(HunkPicker {
+            title: " Stage hunk: main.rs ".to_string(),
+            relative: "main.rs".to_string(),
+            stage: true,
+            hunks: vec![Hunk {
+                header: "@@ -1 +1 @@".to_string(),
+                lines: vec![
+                    "@@ -1 +1 @@".to_string(),
+                    "-old".to_string(),
+                    "+new".to_string(),
+                ],
+                patch: String::new(),
+            }],
+            selected: 0,
+            scroll: 0,
+        });
+        let screen = draw(&mut state, 80, 24);
+        assert!(screen.contains("Stage hunk"), "{screen}");
+        assert!(screen.contains("+new"), "{screen}");
         std::fs::remove_dir_all(&dir).ok();
     }
 

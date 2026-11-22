@@ -287,10 +287,13 @@ everything atomically. The watcher watches the plugin directory next to
 headers into one marker per new-side line; untracked files are read and marked
 added. `git::status` parses porcelain `XY` codes, `diff` returns unified text for
 the read-only overlay, and stage/unstage/commit call `git add`, `git restore
---staged`, and `git commit`. `App::refresh_git_marks` recomputes only documents
-shown in panes, once per second and after open/save/git actions. Every helper
-returns git's stderr/stdout on failure, which the command path puts in the status
-bar.
+--staged`, and `git commit`. `git::hunks` splits a single-file diff at `@@`
+headers and reuses the file header for each patch; `git_stage_hunk` feeds one
+patch to `git apply --cached`, and `git_unstage_hunk` adds `--reverse`. The hunk
+picker is a selectable overlay over that list. `App::refresh_git_marks`
+recomputes only documents shown in panes, once per second and after
+open/save/git actions. Every helper returns git's stderr/stdout on failure, which
+the command path puts in the status bar.
 
 **LSP is threads and channels, not a runtime.** `lsp::LspManager` owns one
 `Server` per configured language. Spawning pipes a child's stdin/stdout; a reader
