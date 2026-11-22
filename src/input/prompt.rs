@@ -229,6 +229,17 @@ impl PromptState {
         self.cursor = self.input().chars().count();
     }
 
+    /// Insert pasted text at the cursor; prompts stay single-line so callers
+    /// decide whether newlines are meaningful for the field.
+    pub fn insert_text(&mut self, text: &str) {
+        let byte = byte_index(self.input(), self.cursor);
+        if let Some(field) = self.fields.get_mut(self.active) {
+            field.insert_str(byte, text);
+        }
+        self.cursor += text.chars().count();
+        self.refilter();
+    }
+
     pub fn insert_char(&mut self, ch: char) {
         let byte = byte_index(self.input(), self.cursor);
         if let Some(field) = self.fields.get_mut(self.active) {

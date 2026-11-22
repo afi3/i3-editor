@@ -100,7 +100,7 @@ impl App {
         edited
     }
 
-    fn refresh_prompt_preview(&mut self) {
+    pub(crate) fn refresh_prompt_preview(&mut self) {
         let InputMode::Prompt(prompt) = &self.state.mode else {
             return;
         };

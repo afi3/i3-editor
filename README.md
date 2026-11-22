@@ -117,6 +117,10 @@ forced and the status bar names the actions whose default binding needs
 enhancement (`switch_workspace`); `next_workspace` / `prev_workspace` in the
 palette keep every workspace reachable. `Ctrl+C`
 closes an active prompt; with no selection it reports `nothing to copy`.
+Bracketed paste is routed by owner: a prompt field while a prompt is open, the
+PTY while the terminal panel has focus, and the active document otherwise. The
+prompt overlay also captures mouse input, so clicks cannot move the cursor behind
+it.
 
 | Key | Action |
 |---|---|
@@ -473,7 +477,7 @@ silently dropped: a binding may not take a combination reserved for quit.
 ```bash
 cargo fmt --check
 cargo check
-cargo test              # 218 unit + integration tests, no terminal required
+cargo test              # 221 unit + integration tests, no terminal required
 cargo clippy --all-targets --all-features
 python3 scripts/make_demo.py   # regenerate docs/demo.gif (needs pyte + Pillow)
 ```

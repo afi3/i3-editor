@@ -66,6 +66,8 @@ Delivered:
   cannot shadow quit, and `Ctrl+C` cancels an active prompt.
 - `I3_EDITOR_DEBUG=1` writes the resolved keymap to `<config>/i3-editor/keymap.log`
   at startup.
+- Bracketed paste is routed to the prompt field, shell PTY, or document by owner,
+  and an open prompt captures mouse input instead of editing behind it.
 - Theme presets (`default`, `dark`, `light`, `high-contrast`) and theme files
   loaded by name from `<config>/i3-editor/themes/`, with `base` inheritance.
 - Tree-sitter highlighting for Rust, Python, JavaScript/TypeScript, Go, C,
@@ -119,7 +121,7 @@ Delivered:
 - Keymap presets and capability handling.
 - Unicode width/grapheme handling with tests.
 - Error handling through a single `Error` type; status-bar messages.
-- 218 unit and integration tests, `TestBackend` render tests.
+- 221 unit and integration tests, `TestBackend` render tests.
 - `install.sh` one-liner with `--update` and `--uninstall` (checksum-verified
   release download, version comparison, Cargo fallback) and a tag-driven release
   workflow for macOS/Linux on x86_64 and aarch64.
@@ -140,4 +142,4 @@ cargo clippy --all-targets --all-features
 cargo run -- --dump-keymap
 ```
 
-Last recorded run: `cargo test` → 218 passed, `cargo clippy` → 0 warnings.
+Last recorded run: `cargo test` → 221 passed, `cargo clippy` → 0 warnings.

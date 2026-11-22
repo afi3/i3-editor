@@ -197,7 +197,7 @@ impl App {
                 Event::Key(key) => self.handle_key(key),
                 Event::Mouse(mouse) => self.handle_mouse(mouse),
                 Event::Paste(text) => {
-                    let result = self.dispatch(Command::InsertText(text));
+                    let result = self.handle_paste(text);
                     self.finish(result);
                 }
                 _ => {}
@@ -205,6 +205,29 @@ impl App {
         }
         crate::session::persist(&self.state)?;
         Ok(())
+    }
+
+    /// A paste belongs to whichever surface owns input: prompt field, shell
+    /// PTY, or the active document. The explorer has no paste target.
+    fn handle_paste(&mut self, text: String) -> Result<()> {
+        if text.is_empty() {
+            return Ok(());
+        }
+        if self.state.mode.is_prompt() {
+            if let InputMode::Prompt(prompt) = &mut self.state.mode {
+                prompt.insert_text(&text);
+            }
+            self.refresh_prompt_preview();
+            return Ok(());
+        }
+        match self.state.focus {
+            Focus::Shell => {
+                self.paste_to_shell(&text);
+                Ok(())
+            }
+            Focus::Explorer => Ok(()),
+            Focus::Pane(_) => self.insert_text(&text),
+        }
     }
 
     fn draw(&mut self) -> Result<()> {

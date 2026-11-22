@@ -25,6 +25,11 @@ pub struct Drag {
 
 impl App {
     pub(crate) fn handle_mouse(&mut self, mouse: MouseEvent) {
+        // The prompt overlay owns input while it is open; a click must not
+        // change focus or the cursor behind it.
+        if self.state.mode.is_prompt() {
+            return;
+        }
         if self.drag.is_none() && self.forward_shell_mouse(mouse) {
             return;
         }

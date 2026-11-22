@@ -172,6 +172,94 @@ fn find_in_files_opens_the_selected_match() {
 }
 
 #[test]
+fn paste_into_a_prompt_edits_the_field_not_the_document() {
+    let (mut app, dir) = fixture("one\n");
+    app.dispatch(Command::FindPrompt).expect("find");
+    app.handle_paste("needle".to_string()).expect("paste");
+
+    assert_eq!(text(&app), "one\n", "paste must not reach the document");
+    let InputMode::Prompt(prompt) = &app.state.mode else {
+        panic!("prompt closed by paste")
+    };
+    assert_eq!(prompt.input(), "needle");
+    assert_eq!(
+        app.state
+            .search
+            .as_ref()
+            .map(|search| search.query.as_str()),
+        Some("needle"),
+        "find preview must follow the pasted query"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn paste_goes_to_the_focused_shell() {
+    use crate::shell::ShellPanel;
+    use crate::state::Focus;
+    use std::time::Duration;
+
+    let (mut app, dir) = fixture("one\n");
+    let panel = ShellPanel::spawn_shell(&dir, 10, 60, "/bin/sh", 2000).expect("shell");
+    app.state.terminals.push(panel);
+    app.state.focus = Focus::Shell;
+    app.handle_paste("printf 'paste-ok\\n'\n".to_string())
+        .expect("paste");
+
+    let mut visible = String::new();
+    for _ in 0..100 {
+        app.pump_shell();
+        visible = app
+            .state
+            .terminals
+            .active()
+            .expect("shell")
+            .screen()
+            .contents();
+        if visible.contains("paste-ok") {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(visible.contains("paste-ok"), "screen: {visible:?}");
+    assert_eq!(
+        app.state
+            .documents
+            .values()
+            .next()
+            .expect("document")
+            .rope
+            .to_string(),
+        "one\n",
+        "shell paste must not touch the document"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn mouse_is_ignored_while_a_prompt_is_open() {
+    use ratatui::crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+
+    let (mut app, dir) = fixture("one\ntwo\nthree\n");
+    app.dispatch(Command::FindPrompt).expect("find");
+    let pane_id = app.state.focused_pane_id().expect("pane");
+    let cursor = app.state.panes[&pane_id].cursor;
+    let area = app.state.ui.pane_rects[&pane_id];
+
+    app.handle_mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: area.x + 3,
+        row: area.y + 2,
+        modifiers: KeyModifiers::NONE,
+    });
+
+    assert!(app.state.mode.is_prompt(), "prompt must stay open");
+    assert_eq!(app.state.focus, Focus::Pane(pane_id));
+    assert_eq!(app.state.panes[&pane_id].cursor, cursor);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn selection_cut_and_paste_use_the_internal_clipboard() {
     let (mut app, dir) = fixture("abc\n");
     app.dispatch(Command::MoveCursor(crate::command::Move::DocEnd))

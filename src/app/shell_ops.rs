@@ -129,6 +129,12 @@ impl App {
         }
     }
 
+    pub(crate) fn paste_to_shell(&mut self, text: &str) {
+        if let Some(shell) = self.state.terminals.active_mut() {
+            shell.write(text.as_bytes());
+        }
+    }
+
     pub(crate) fn forward_to_shell(&mut self, key: KeyEvent) {
         if let Some(shell) = self.state.terminals.active_mut() {
             shell.send_key(key);
