@@ -937,19 +937,60 @@ fn quit_can_save_every_document_first() {
 }
 
 #[test]
-fn quit_offers_only_discard_for_untitled_buffers() {
+fn new_prompt_creates_a_file_on_disk() {
     let (mut app, dir) = fixture("x\n");
-    app.dispatch(Command::NewPrompt).expect("new buffer");
-    app.dispatch(Command::InsertText("z".to_string()))
-        .expect("type");
-    app.dispatch(Command::Quit).expect("quit");
+    app.dispatch(Command::NewPrompt).expect("new file");
+    let InputMode::Prompt(prompt) = &mut app.state.mode else {
+        panic!("new-file prompt missing")
+    };
+    assert_eq!(prompt.kind, crate::input::PromptKind::NewFile);
+    prompt.fields[0] = "created.txt".to_string();
+    app.submit_prompt().expect("create");
 
-    if let InputMode::Prompt(prompt) = &mut app.state.mode {
-        assert_eq!(prompt.candidates, vec!["Discard all and quit".to_string()]);
-    } else {
-        panic!("expected quit prompt");
-    }
-    app.state.should_quit = true; // do not actually discard in the fixture
+    let path = app
+        .state
+        .active_document()
+        .and_then(|document| document.path.clone())
+        .expect("path");
+    assert!(path.ends_with("created.txt"), "{path:?}");
+    assert_eq!(std::fs::read_to_string(&path).expect("read"), "");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn open_prompt_opens_a_typed_path() {
+    let (mut app, dir) = fixture("x\n");
+    std::fs::write(dir.join("other.txt"), "other\n").expect("file");
+    app.dispatch(Command::OpenPrompt).expect("open");
+    let InputMode::Prompt(prompt) = &mut app.state.mode else {
+        panic!("open prompt missing")
+    };
+    assert_eq!(prompt.kind, crate::input::PromptKind::OpenPath);
+    prompt.fields[0] = "other.txt".to_string();
+    app.submit_prompt().expect("open path");
+
+    let path = app
+        .state
+        .active_document()
+        .and_then(|document| document.path.clone())
+        .expect("path");
+    assert!(path.ends_with("other.txt"), "{path:?}");
+    assert_eq!(text(&app), "other\n");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn oversized_copy_reports_the_internal_clipboard() {
+    let big = "a".repeat(50_000);
+    let (mut app, dir) = fixture(&big);
+    app.dispatch(Command::SelectAll).expect("select");
+    app.dispatch(Command::Copy).expect("copy");
+    assert_eq!(app.state.clipboard, big);
+    assert!(
+        app.state.ui.message.contains("internal clipboard only"),
+        "{}",
+        app.state.ui.message
+    );
     std::fs::remove_dir_all(&dir).ok();
 }
 

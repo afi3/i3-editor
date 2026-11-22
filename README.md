@@ -83,7 +83,7 @@ cargo run                      # open the current directory
 cargo run -- .                 # same, explicit
 cargo run -- src/main.rs       # open a file directly
 cargo run -- --update          # self-update from the latest release
-cargo run -- --dump-keymap     # print the resolved bindings and exit
+cargo run -- --dump-keymap     # probe and print the resolved bindings
 cargo run -- --version         # print the version
 cargo run -- --help            # usage summary
 ```
@@ -127,8 +127,9 @@ it.
 | `Ctrl+Q` | Quit |
 | `Ctrl+S` | Save |
 | `F2` | Save As |
-| `Ctrl+O` / `Ctrl+P` | Quick open |
-| `Ctrl+N` | New buffer |
+| `Ctrl+O` | Open a path |
+| `Ctrl+P` | Quick open |
+| `Ctrl+N` | New file (asks for a path, creates it) |
 | `Ctrl+W` | Close document (prompts when dirty) |
 | `Ctrl+B` | Toggle explorer / focus explorer |
 | `F1` | Command palette |
@@ -169,8 +170,8 @@ Mouse: click a pane to focus it, drag a pane border to resize the split.
 
 ### Quick open and command palette
 
-`Ctrl+P` / `Ctrl+O` list project files and `F1` lists commands. Both match fuzzy,
-scored by [Nucleo](https://github.com/helix-editor/nucleo): the query is a
+`Ctrl+P` lists project files and `F1` lists commands; `Ctrl+O` takes a typed
+path. The two lists match fuzzy, scored by [Nucleo](https://github.com/helix-editor/nucleo): the query is a
 subsequence of the candidate, with bonuses at path separators, underscores, and
 word boundaries, and smart case (an uppercase letter in the query makes matching
 case-sensitive). The file list is scanned once and kept current by the
@@ -226,7 +227,7 @@ cannot distinguish `Ctrl+Shift+F`; run `find_in_files` from the command palette
 
 ### Open two files side by side
 
-1. Open the first file (`Ctrl+O` or `Ctrl+P`).
+1. Open the first file (`Ctrl+O` for a path, or `Ctrl+P` to fuzzy-find).
 2. `F3` (left/right) or `F4` (top/bottom) splits the focused pane; the new pane
    inherits the same file.
 3. Open the second file while that pane is the last one edited — click it, or
@@ -333,14 +334,13 @@ Known limit: an unknown fence language stays plain text.
 
 The terminal backend honors `NO_COLOR`: when that variable is set, color
 sequences are suppressed and the theme has no visible effect. `--dump-keymap`
-prints the resolved theme name, which is the quickest way to confirm a config and
-theme file were read.
+prints the resolved theme name and keyboard-enhancement probe, which is the
+quickest way to confirm a config and theme file were read.
 
 ### Saving and quitting
 
 - `Ctrl+Q` with modified documents opens a prompt with `Save all and quit` and
   `Discard all and quit`; arrow keys choose, `Enter` confirms, `Esc` cancels.
-  Untitled buffers must be saved first (they only offer discard).
 - `Ctrl+W` on a modified document asks before discarding.
 - `F6` is refused while the pane still holds modified documents; save or close
   them first, so no document becomes unreachable.
@@ -466,8 +466,10 @@ rename = "r"
 
 Binding values are `ctrl+`/`alt+`/`shift+` plus a key name (`a`, `f2`, `enter`,
 `tab`, `backtab`, `esc`, `space`, `home`, `end`, `pageup`, `pagedown`, `delete`,
-`backspace`, arrows). `--dump-keymap` prints bound actions; the palette (`F1`)
-also lists unbound actions such as `toggle_terminal` and the theme commands.
+`backspace`, arrows). `--dump-keymap` probes the current terminal, prints whether keyboard enhancement
+is available, then prints bound actions; piping it reports `false` and shows the
+safe preset. The palette (`F1`) also lists unbound actions such as
+`toggle_terminal` and the theme commands.
 Conflicts, unknown names, and invalid values are reported with the config path
 and line, never silently dropped: a binding may not take a combination reserved
 for quit. The status bar shows the first warning and how many remain; `messages`
@@ -484,7 +486,7 @@ in the palette lists all of them.
 ```bash
 cargo fmt --check
 cargo check
-cargo test              # 228 unit + integration tests, no terminal required
+cargo test              # 231 unit + integration tests, no terminal required
 cargo clippy --all-targets --all-features
 python3 scripts/make_demo.py   # regenerate docs/demo.gif (needs pyte + Pillow)
 ```
@@ -528,6 +530,7 @@ every check.
 - Saving replaces the file by rename, so an extra hard link keeps pointing at the
   old inode. Symlinked files are updated through the link.
 - Clipboard writes are best effort: the internal clipboard always works, OSC 52
-  depends on the terminal.
+  depends on the terminal. Payloads above 64 KiB of base64 are not sent; the
+  status bar says the internal clipboard was used alone.
 - Startup probes keyboard enhancement support; terminals that never answer the
   query add a short delay to startup.

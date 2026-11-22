@@ -72,6 +72,10 @@ Delivered:
   `messages` palette command lists every warning.
 - Palette coverage: every explorer action and each open workspace
   (`switch_workspace_N`) is reachable from `F1`.
+- `Ctrl+O` opens a typed path and `Ctrl+N` creates a file on disk instead of an
+  untitled buffer; `--dump-keymap` probes the real terminal before resolving.
+- OSC 52 payloads above 64 KiB are skipped after the internal clipboard is set,
+  with a status-bar explanation.
 - Theme presets (`default`, `dark`, `light`, `high-contrast`) and theme files
   loaded by name from `<config>/i3-editor/themes/`, with `base` inheritance.
 - Tree-sitter highlighting for Rust, Python, JavaScript/TypeScript, Go, C,
@@ -125,7 +129,7 @@ Delivered:
 - Keymap presets and capability handling.
 - Unicode width/grapheme handling with tests.
 - Error handling through a single `Error` type; status-bar messages.
-- 228 unit and integration tests, `TestBackend` render tests.
+- 231 unit and integration tests, `TestBackend` render tests.
 - `install.sh` one-liner with `--update` and `--uninstall` (checksum-verified
   release download, version comparison, Cargo fallback) and a tag-driven release
   workflow for macOS/Linux on x86_64 and aarch64.
@@ -146,4 +150,4 @@ cargo clippy --all-targets --all-features
 cargo run -- --dump-keymap
 ```
 
-Last recorded run: `cargo test` → 228 passed, `cargo clippy` → 0 warnings.
+Last recorded run: `cargo test` → 231 passed, `cargo clippy` → 0 warnings.

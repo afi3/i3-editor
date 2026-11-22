@@ -70,10 +70,12 @@ fn run() -> error::Result<()> {
     if dump_keymap {
         use std::io::Write;
 
-        let (keymap, key_warnings) = input::KeyMap::from_config(&config.keys, true);
+        let enhanced = terminal::keyboard_enhancement_supported();
+        let (keymap, key_warnings) = input::KeyMap::from_config(&config.keys, enhanced);
         let themes_dir = config::themes_dir().unwrap_or_default();
         let (theme, theme_warnings) = theme::Theme::from_config(&config.appearance, &themes_dir);
         let mut out = std::io::stdout();
+        let _ = writeln!(out, "keyboard_enhancement: {enhanced}");
         let _ = writeln!(out, "theme: {}", theme.name());
         for line in keymap.labels() {
             let _ = writeln!(out, "{line}");

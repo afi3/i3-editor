@@ -11,6 +11,11 @@ use ratatui::crossterm::event::{
 use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal::supports_keyboard_enhancement;
 
+/// Probe once; any terminal that never answers counts as unsupported.
+pub fn keyboard_enhancement_supported() -> bool {
+    supports_keyboard_enhancement().unwrap_or(false)
+}
+
 pub struct Setup {
     pub terminal: Terminal<CrosstermBackend<Stdout>>,
     pub keyboard_enhancement: bool,
@@ -20,7 +25,7 @@ pub fn init() -> io::Result<Setup> {
     let terminal = ratatui::try_init()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnableBracketedPaste, EnableMouseCapture)?;
-    let keyboard_enhancement = supports_keyboard_enhancement().unwrap_or(false);
+    let keyboard_enhancement = keyboard_enhancement_supported();
     if keyboard_enhancement {
         execute!(
             stdout,

@@ -161,14 +161,6 @@ impl App {
         Ok(())
     }
 
-    pub(crate) fn new_buffer(&mut self) -> Result<()> {
-        let id = self.state.ids.document();
-        self.state.documents.insert(id, Document::empty(id, None));
-        self.activate_document(id)?;
-        self.notify("new buffer");
-        Ok(())
-    }
-
     pub(crate) fn close_document(&mut self) -> Result<()> {
         let pane_id = self.focused_or_first_pane()?;
         let Some(pane) = self.state.panes.get(&pane_id) else {
@@ -373,8 +365,11 @@ impl App {
             }
             clipboard.clone()
         };
-        crate::clipboard::copy_osc52(&copied);
-        self.notify(if cut { "cut" } else { "copied" });
+        let action = if cut { "cut" } else { "copied" };
+        match crate::clipboard::copy_osc52(&copied) {
+            Some(reason) => self.notify(format!("{action}: internal clipboard only ({reason})")),
+            None => self.notify(action),
+        }
         Ok(())
     }
 

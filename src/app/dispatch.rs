@@ -14,6 +14,9 @@ impl App {
         let Some(command) = self.dispatch_document(command)? else {
             return Ok(());
         };
+        let Some(command) = self.dispatch_prompt(command)? else {
+            return Ok(());
+        };
         let Some(command) = self.dispatch_navigation(command)? else {
             return Ok(());
         };
@@ -39,11 +42,19 @@ impl App {
         match command {
             Command::Quit => self.request_quit()?,
             Command::Save => self.save()?,
-            Command::SavePrompt => self.open_prompt(PromptKind::SaveAs),
-            Command::OpenPrompt | Command::QuickOpen => self.open_prompt(PromptKind::QuickOpen),
-            Command::NewPrompt => self.new_buffer()?,
             Command::CloseDocument => self.close_document()?,
             Command::ToggleExplorer => self.toggle_explorer(),
+            other => return Ok(Some(other)),
+        }
+        Ok(None)
+    }
+
+    fn dispatch_prompt(&mut self, command: Command) -> Result<Option<Command>> {
+        match command {
+            Command::SavePrompt => self.open_prompt(PromptKind::SaveAs),
+            Command::OpenPrompt => self.open_prompt(PromptKind::OpenPath),
+            Command::QuickOpen => self.open_prompt(PromptKind::QuickOpen),
+            Command::NewPrompt => self.open_prompt(PromptKind::NewFile),
             Command::Palette => self.open_prompt(PromptKind::CommandPalette),
             Command::Messages => self.open_prompt(PromptKind::Messages),
             Command::GoToLinePrompt => self.open_prompt(PromptKind::GoToLine),

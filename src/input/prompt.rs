@@ -11,6 +11,7 @@ use crate::state::DocumentId;
 pub enum PromptKind {
     CommandPalette,
     Messages,
+    OpenPath,
     QuickOpen,
     Find,
     FindInFiles,
@@ -63,7 +64,8 @@ impl PromptKind {
     fn is_file(self) -> bool {
         matches!(
             self,
-            PromptKind::QuickOpen
+            PromptKind::OpenPath
+                | PromptKind::QuickOpen
                 | PromptKind::SaveAs
                 | PromptKind::Overwrite
                 | PromptKind::ExternalChange
@@ -96,6 +98,7 @@ impl PromptKind {
 
     fn file_title(self) -> &'static str {
         match self {
+            PromptKind::OpenPath => "Open File",
             PromptKind::QuickOpen => "Quick Open",
             PromptKind::SaveAs => "Save As",
             PromptKind::Overwrite => "Overwrite file",
@@ -491,6 +494,7 @@ mod tests {
         for kind in [
             PromptKind::CommandPalette,
             PromptKind::Messages,
+            PromptKind::OpenPath,
             PromptKind::QuickOpen,
             PromptKind::Find,
             PromptKind::FindInFiles,

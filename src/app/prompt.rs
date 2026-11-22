@@ -191,6 +191,10 @@ impl App {
     fn submit_file_prompt(&mut self, prompt: PromptState) -> Result<()> {
         let root = self.state.explorer.root.clone();
         match prompt.kind {
+            PromptKind::OpenPath => {
+                let path = resolve(&root, &prompt.fields[0])?;
+                self.open_document(path)
+            }
             PromptKind::QuickOpen => {
                 let Some(relative) = prompt.selected_candidate() else {
                     return Ok(());
