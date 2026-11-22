@@ -45,6 +45,7 @@ impl App {
             Command::CloseDocument => self.close_document()?,
             Command::ToggleExplorer => self.toggle_explorer(),
             Command::Palette => self.open_prompt(PromptKind::CommandPalette),
+            Command::Messages => self.open_prompt(PromptKind::Messages),
             Command::GoToLinePrompt => self.open_prompt(PromptKind::GoToLine),
             Command::FindPrompt => self.open_prompt(PromptKind::Find),
             Command::FindInFiles => self.open_prompt(PromptKind::FindInFiles),

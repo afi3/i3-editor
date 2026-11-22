@@ -37,6 +37,7 @@ pub enum Command {
     ToggleExplorer,
     QuickOpen,
     Palette,
+    Messages,
     GoToLinePrompt,
     FindPrompt,
     FindInFiles,
@@ -112,14 +113,22 @@ impl Command {
     /// keep each match small enough to review; `unmatched_spec` is a fallback
     /// that the `every_command_has_a_specification` test makes unreachable.
     fn spec(&self) -> (&'static str, &'static str) {
+        self.primary_spec()
+            .or_else(|| self.secondary_spec())
+            .unwrap_or(("unknown", "Unknown command"))
+    }
+
+    fn primary_spec(&self) -> Option<(&'static str, &'static str)> {
         self.document_spec()
             .or_else(|| self.navigation_spec())
-            .or_else(|| self.text_spec())
             .or_else(|| self.explorer_spec())
+    }
+
+    fn secondary_spec(&self) -> Option<(&'static str, &'static str)> {
+        self.text_spec()
             .or_else(|| self.layout_spec())
             .or_else(|| self.terminal_spec())
             .or_else(|| self.workspace_spec())
-            .unwrap_or(("unknown", "Unknown command"))
     }
 
     fn document_spec(&self) -> Option<(&'static str, &'static str)> {
@@ -131,8 +140,8 @@ impl Command {
             Command::NewPrompt => ("new_file", "Create a new file"),
             Command::CloseDocument => ("close_document", "Close the active document tab"),
             Command::ToggleExplorer => ("toggle_explorer", "Show or hide the explorer"),
-            Command::QuickOpen => ("quick_open", "Fuzzy open a file"),
             Command::Palette => ("command_palette", "Run a command"),
+            Command::Messages => ("messages", "Show startup warnings"),
             Command::GoToLinePrompt => ("go_to_line", "Jump to a line"),
             Command::FindPrompt => ("find", "Find in the active document"),
             Command::FindInFiles => ("find_in_files", "Search the project for text"),
@@ -143,6 +152,7 @@ impl Command {
 
     fn navigation_spec(&self) -> Option<(&'static str, &'static str)> {
         Some(match self {
+            Command::QuickOpen => ("quick_open", "Fuzzy open a file"),
             Command::NextDocument => ("next_document", "Next document tab"),
             Command::PrevDocument => ("prev_document", "Previous document tab"),
             Command::NextMatch => ("next_match", "Jump to the next match"),
@@ -253,8 +263,10 @@ impl Command {
             Command::NewPrompt,
             Command::CloseDocument,
             Command::ToggleExplorer,
+            Command::Messages,
             Command::QuickOpen,
             Command::Palette,
+            Command::Messages,
             Command::GoToLinePrompt,
             Command::FindPrompt,
             Command::FindInFiles,
@@ -289,6 +301,17 @@ impl Command {
             Command::MovePane(Direction::Up),
             Command::MovePane(Direction::Down),
             Command::ToggleMoveMode,
+            Command::ExplorerUp,
+            Command::ExplorerDown,
+            Command::ExplorerSelect,
+            Command::ExplorerExpand,
+            Command::ExplorerCollapse,
+            Command::ExplorerNewFile,
+            Command::ExplorerNewDir,
+            Command::ExplorerRename,
+            Command::ExplorerDelete,
+            Command::ExplorerRefresh,
+            Command::ExplorerToggleHidden,
             Command::NewWorkspace,
             Command::CloseWorkspace,
             Command::NextWorkspace,
@@ -298,6 +321,12 @@ impl Command {
     }
 
     pub fn from_name(name: &str) -> Option<Command> {
+        if let Some(index) = name.strip_prefix("switch_workspace_")
+            && let Ok(index) = index.parse::<usize>()
+            && index > 0
+        {
+            return Some(Command::SwitchWorkspace(index - 1));
+        }
         Command::palette()
             .into_iter()
             .find(|command| command.name() == name)
@@ -326,8 +355,10 @@ mod tests {
             Command::NewPrompt,
             Command::CloseDocument,
             Command::ToggleExplorer,
+            Command::Messages,
             Command::QuickOpen,
             Command::Palette,
+            Command::Messages,
             Command::GoToLinePrompt,
             Command::FindPrompt,
             Command::FindInFiles,
@@ -400,6 +431,16 @@ mod tests {
             assert_ne!(command.name(), "unknown", "{command:?}");
             assert_ne!(command.description(), "Unknown command", "{command:?}");
         }
+    }
+
+    #[test]
+    fn indexed_workspace_names_resolve() {
+        assert_eq!(
+            Command::from_name("switch_workspace_2"),
+            Some(Command::SwitchWorkspace(1))
+        );
+        assert_eq!(Command::from_name("switch_workspace_0"), None);
+        assert_eq!(Command::from_name("switch_workspace_x"), None);
     }
 
     #[test]

@@ -411,6 +411,11 @@ key bindings stay untouched. If the write fails, the theme still applies and the
 status bar reports the error. Presets, syntax colors, status bar, and explorer all
 follow without a restart.
 
+The palette also lists every explorer action, `messages`, and
+`switch_workspace_N` for each open workspace; `next_workspace` / `prev_workspace`
+cycle through them. `messages` opens the full startup warning list when the
+status bar only has room for the first one plus a count.
+
 ## Configuration
 
 `$XDG_CONFIG_HOME/i3-editor/config.toml` or `~/.config/i3-editor/config.toml`.
@@ -463,8 +468,10 @@ Binding values are `ctrl+`/`alt+`/`shift+` plus a key name (`a`, `f2`, `enter`,
 `tab`, `backtab`, `esc`, `space`, `home`, `end`, `pageup`, `pagedown`, `delete`,
 `backspace`, arrows). `--dump-keymap` prints bound actions; the palette (`F1`)
 also lists unbound actions such as `toggle_terminal` and the theme commands.
-Conflicts and unknown names are reported with the config path and line, never
-silently dropped: a binding may not take a combination reserved for quit.
+Conflicts, unknown names, and invalid values are reported with the config path
+and line, never silently dropped: a binding may not take a combination reserved
+for quit. The status bar shows the first warning and how many remain; `messages`
+in the palette lists all of them.
 `I3_EDITOR_DEBUG=1` writes the resolved table with the enhancement flag to
 `<config>/i3-editor/keymap.log` at startup, next to the config file.
 
@@ -477,7 +484,7 @@ silently dropped: a binding may not take a combination reserved for quit.
 ```bash
 cargo fmt --check
 cargo check
-cargo test              # 221 unit + integration tests, no terminal required
+cargo test              # 228 unit + integration tests, no terminal required
 cargo clippy --all-targets --all-features
 python3 scripts/make_demo.py   # regenerate docs/demo.gif (needs pyte + Pillow)
 ```

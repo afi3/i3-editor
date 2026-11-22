@@ -5,4 +5,4 @@ pub mod presets;
 pub mod prompt;
 
 pub use keymap::{KeyCombo, KeyMap};
-pub use prompt::{PromptKind, PromptState};
+pub use prompt::{PromptGroup, PromptKind, PromptState};

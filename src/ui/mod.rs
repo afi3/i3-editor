@@ -718,7 +718,7 @@ mod tests {
             index: 1,
         });
         let mut prompt = PromptState::new(PromptKind::Find);
-        prompt = prompt.with_field("alpha");
+        prompt.set_input("alpha");
         state.mode = InputMode::Prompt(prompt);
 
         let buffer = draw_buffer(&mut state, 80, 24);

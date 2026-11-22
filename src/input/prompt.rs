@@ -10,6 +10,7 @@ use crate::state::DocumentId;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PromptKind {
     CommandPalette,
+    Messages,
     QuickOpen,
     Find,
     FindInFiles,
@@ -27,14 +28,75 @@ pub enum PromptKind {
     Theme,
 }
 
+/// Grouping used by the prompt setup and submit code, so neither needs one
+/// giant match over every kind.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PromptGroup {
+    Query,
+    File,
+    Session,
+}
+
 impl PromptKind {
+    pub fn group(self) -> PromptGroup {
+        if self.is_query() {
+            PromptGroup::Query
+        } else if self.is_file() {
+            PromptGroup::File
+        } else {
+            PromptGroup::Session
+        }
+    }
+
+    fn is_query(self) -> bool {
+        matches!(
+            self,
+            PromptKind::CommandPalette
+                | PromptKind::Messages
+                | PromptKind::Find
+                | PromptKind::FindInFiles
+                | PromptKind::Replace
+                | PromptKind::GoToLine
+        )
+    }
+
+    fn is_file(self) -> bool {
+        matches!(
+            self,
+            PromptKind::QuickOpen
+                | PromptKind::SaveAs
+                | PromptKind::Overwrite
+                | PromptKind::ExternalChange
+                | PromptKind::NewFile
+                | PromptKind::NewDir
+                | PromptKind::Rename
+                | PromptKind::Delete
+        )
+    }
+
     pub fn title(self) -> &'static str {
+        match self.group() {
+            PromptGroup::Query => self.query_title(),
+            PromptGroup::File => self.file_title(),
+            PromptGroup::Session => self.session_title(),
+        }
+    }
+
+    fn query_title(self) -> &'static str {
         match self {
             PromptKind::CommandPalette => "Command Palette",
-            PromptKind::QuickOpen => "Quick Open",
+            PromptKind::Messages => "Messages",
             PromptKind::Find => "Find",
             PromptKind::FindInFiles => "Find in Files",
             PromptKind::Replace => "Replace",
+            PromptKind::GoToLine => "Go to Line",
+            _ => "",
+        }
+    }
+
+    fn file_title(self) -> &'static str {
+        match self {
+            PromptKind::QuickOpen => "Quick Open",
             PromptKind::SaveAs => "Save As",
             PromptKind::Overwrite => "Overwrite file",
             PromptKind::ExternalChange => "File changed on disk",
@@ -42,10 +104,16 @@ impl PromptKind {
             PromptKind::NewDir => "New Directory",
             PromptKind::Rename => "Rename",
             PromptKind::Delete => "Delete",
+            _ => "",
+        }
+    }
+
+    fn session_title(self) -> &'static str {
+        match self {
             PromptKind::Discard => "Unsaved changes: Enter discards, Esc cancels",
             PromptKind::QuitDirty => "Unsaved changes",
-            PromptKind::GoToLine => "Go to Line",
             PromptKind::Theme => "Theme",
+            _ => "",
         }
     }
 
@@ -54,6 +122,7 @@ impl PromptKind {
         match self {
             PromptKind::Replace => 2,
             PromptKind::Delete
+            | PromptKind::Messages
             | PromptKind::Discard
             | PromptKind::QuitDirty
             | PromptKind::Overwrite
@@ -66,6 +135,7 @@ impl PromptKind {
         matches!(
             self,
             PromptKind::CommandPalette
+                | PromptKind::Messages
                 | PromptKind::QuickOpen
                 | PromptKind::FindInFiles
                 | PromptKind::Theme
@@ -119,12 +189,12 @@ impl PromptState {
         }
     }
 
-    pub fn with_field(mut self, value: impl Into<String>) -> Self {
+    /// Replace the active field and place the cursor at its end.
+    pub fn set_input(&mut self, value: impl Into<String>) {
         if let Some(field) = self.fields.get_mut(self.active) {
             *field = value.into();
             self.cursor = field.chars().count();
         }
-        self
     }
 
     pub fn input(&self) -> &str {
@@ -414,6 +484,31 @@ mod tests {
         assert_eq!(prompt.visible(), vec!["a.txt:1:6  first needle"]);
         prompt.move_selection(1);
         assert_eq!(prompt.selected_candidate(), Some("a.txt:1:6  first needle"));
+    }
+
+    #[test]
+    fn every_prompt_has_a_title() {
+        for kind in [
+            PromptKind::CommandPalette,
+            PromptKind::Messages,
+            PromptKind::QuickOpen,
+            PromptKind::Find,
+            PromptKind::FindInFiles,
+            PromptKind::Replace,
+            PromptKind::SaveAs,
+            PromptKind::Overwrite,
+            PromptKind::ExternalChange,
+            PromptKind::NewFile,
+            PromptKind::NewDir,
+            PromptKind::Rename,
+            PromptKind::Delete,
+            PromptKind::Discard,
+            PromptKind::QuitDirty,
+            PromptKind::GoToLine,
+            PromptKind::Theme,
+        ] {
+            assert!(!kind.title().is_empty(), "{kind:?}");
+        }
     }
 
     #[test]

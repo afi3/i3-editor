@@ -57,9 +57,9 @@ Create/switch/close, workspace tab bar, preserved layout, tabs, cursor, scroll.
 
 Delivered:
 
-- Config loading with per-section fallback and warnings; unknown sections and
-  unknown keys are reported instead of ignored, and binding warnings name the
-  config path and line.
+- Config loading with per-section fallback and warnings; unknown sections,
+  unknown keys, and invalid values are reported with the config path and line,
+  and binding warnings name the failing entry.
 - Startup capability handling: without keyboard enhancement the safe preset is
   forced and one status message names the actions it removes; `next_workspace`
   and `prev_workspace` keep workspaces reachable from the palette, user bindings
@@ -68,6 +68,10 @@ Delivered:
   at startup.
 - Bracketed paste is routed to the prompt field, shell PTY, or document by owner,
   and an open prompt captures mouse input instead of editing behind it.
+- The status bar shows the first warning plus the remaining count, and the
+  `messages` palette command lists every warning.
+- Palette coverage: every explorer action and each open workspace
+  (`switch_workspace_N`) is reachable from `F1`.
 - Theme presets (`default`, `dark`, `light`, `high-contrast`) and theme files
   loaded by name from `<config>/i3-editor/themes/`, with `base` inheritance.
 - Tree-sitter highlighting for Rust, Python, JavaScript/TypeScript, Go, C,
@@ -121,7 +125,7 @@ Delivered:
 - Keymap presets and capability handling.
 - Unicode width/grapheme handling with tests.
 - Error handling through a single `Error` type; status-bar messages.
-- 221 unit and integration tests, `TestBackend` render tests.
+- 228 unit and integration tests, `TestBackend` render tests.
 - `install.sh` one-liner with `--update` and `--uninstall` (checksum-verified
   release download, version comparison, Cargo fallback) and a tag-driven release
   workflow for macOS/Linux on x86_64 and aarch64.
@@ -142,4 +146,4 @@ cargo clippy --all-targets --all-features
 cargo run -- --dump-keymap
 ```
 
-Last recorded run: `cargo test` → 221 passed, `cargo clippy` → 0 warnings.
+Last recorded run: `cargo test` → 228 passed, `cargo clippy` → 0 warnings.

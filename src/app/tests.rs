@@ -1288,6 +1288,65 @@ fn palette_workspace_cycling_wraps() {
 }
 
 #[test]
+fn messages_lists_every_startup_warning() {
+    let (mut app, dir) = fixture("x\n");
+    app.state.warnings = vec!["first warning".to_string(), "second warning".to_string()];
+    app.dispatch(Command::Messages).expect("messages");
+    let InputMode::Prompt(prompt) = &app.state.mode else {
+        panic!("messages prompt missing")
+    };
+    assert_eq!(prompt.kind, crate::input::PromptKind::Messages);
+    assert_eq!(prompt.candidates, app.state.warnings);
+    app.submit_prompt().expect("close");
+    assert!(!app.state.mode.is_prompt());
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn startup_message_points_at_the_remaining_warnings() {
+    assert_eq!(super::startup_message(&[]), "");
+    assert_eq!(super::startup_message(&["only".to_string()]), "only");
+    assert_eq!(
+        super::startup_message(&["first".to_string(), "second".to_string()]),
+        "first (+1 more; palette: messages)"
+    );
+}
+
+#[test]
+fn palette_lists_and_switches_workspaces() {
+    let (mut app, dir) = fixture("x\n");
+    app.dispatch(Command::NewWorkspace).expect("new workspace");
+    assert_eq!(app.state.workspaces.active, 1);
+
+    app.dispatch(Command::Palette).expect("palette");
+    let InputMode::Prompt(prompt) = &mut app.state.mode else {
+        panic!("palette prompt missing")
+    };
+    assert!(
+        prompt
+            .candidates
+            .iter()
+            .any(|name| name == "switch_workspace_1")
+    );
+    assert!(
+        prompt
+            .candidates
+            .iter()
+            .any(|name| name == "switch_workspace_2")
+    );
+    assert!(
+        prompt
+            .candidates
+            .iter()
+            .any(|name| name == "explorer_refresh")
+    );
+    prompt.select_candidate("switch_workspace_1");
+    app.submit_prompt().expect("switch");
+    assert_eq!(app.state.workspaces.active, 0);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn ctrl_c_cancels_an_active_prompt() {
     use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 

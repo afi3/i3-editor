@@ -160,7 +160,7 @@ impl App {
                 None
             }
         };
-        state.ui.message = state.warnings.first().cloned().unwrap_or_default();
+        state.ui.message = startup_message(&state.warnings);
 
         let mut app = Self {
             state,
@@ -392,6 +392,16 @@ impl App {
         self.state.workspaces.active_mut().focus = target;
         self.state.focus = Focus::Pane(target);
         Ok(target)
+    }
+}
+
+/// First warning plus a pointer to the rest; the `messages` palette command
+/// lists them all.
+fn startup_message(warnings: &[String]) -> String {
+    match warnings.split_first() {
+        Some((first, [])) => first.clone(),
+        Some((first, rest)) => format!("{first} (+{} more; palette: messages)", rest.len()),
+        None => String::new(),
     }
 }
 

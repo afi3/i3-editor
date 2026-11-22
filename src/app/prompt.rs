@@ -6,7 +6,7 @@ use ratatui::crossterm::event::{KeyCode, KeyModifiers};
 
 use crate::command::Command;
 use crate::error::{Error, Result};
-use crate::input::{KeyCombo, PromptKind, PromptState};
+use crate::input::{KeyCombo, PromptGroup, PromptKind, PromptState};
 use crate::state::InputMode;
 
 use super::App;
@@ -131,8 +131,14 @@ impl App {
         else {
             return Ok(());
         };
-        let root = self.state.explorer.root.clone();
+        match prompt.kind.group() {
+            PromptGroup::Query => self.submit_query_prompt(prompt),
+            PromptGroup::File => self.submit_file_prompt(prompt),
+            PromptGroup::Session => self.submit_session_prompt(prompt),
+        }
+    }
 
+    fn submit_query_prompt(&mut self, prompt: PromptState) -> Result<()> {
         match prompt.kind {
             PromptKind::CommandPalette => {
                 let Some(name) = prompt.selected_candidate() else {
@@ -146,12 +152,7 @@ impl App {
                     }
                 }
             }
-            PromptKind::QuickOpen => {
-                let Some(relative) = prompt.selected_candidate() else {
-                    return Ok(());
-                };
-                self.open_document(root.join(relative))
-            }
+            PromptKind::Messages => Ok(()),
             PromptKind::Find => self.commit_search(prompt.fields[0].clone()),
             PromptKind::FindInFiles => {
                 let selected = prompt.filtered.get(prompt.selected).copied();
@@ -183,37 +184,25 @@ impl App {
                     .map_err(|_| Error::InvalidPath(PathBuf::from(&prompt.fields[0])))?;
                 self.goto_line(line.saturating_sub(1))
             }
-            PromptKind::SaveAs => {
-                let path = resolve(&root, &prompt.fields[0])?;
-                let current = self
-                    .state
-                    .active_document()
-                    .and_then(|document| document.path.clone());
-                if path.exists() && current.as_deref() != Some(path.as_path()) {
-                    self.open_prompt(PromptKind::Overwrite);
-                    if let InputMode::Prompt(prompt) = &mut self.state.mode {
-                        prompt.target = Some(path);
-                    }
-                    Ok(())
-                } else {
-                    self.dispatch(Command::SaveTo(path))
-                }
+            _ => Ok(()),
+        }
+    }
+
+    fn submit_file_prompt(&mut self, prompt: PromptState) -> Result<()> {
+        let root = self.state.explorer.root.clone();
+        match prompt.kind {
+            PromptKind::QuickOpen => {
+                let Some(relative) = prompt.selected_candidate() else {
+                    return Ok(());
+                };
+                self.open_document(root.join(relative))
             }
+            PromptKind::SaveAs => self.submit_save_as(&root, &prompt.fields[0]),
             PromptKind::Overwrite => match prompt.target.clone() {
                 Some(path) => self.dispatch(Command::SaveTo(path)),
                 None => Ok(()),
             },
-            PromptKind::ExternalChange => match prompt.selected_candidate() {
-                Some("Overwrite with the buffer") => match prompt.target.clone() {
-                    Some(path) => self.force_save_to(path),
-                    None => Ok(()),
-                },
-                Some("Reload from disk") => match prompt.document {
-                    Some(id) => self.reload_document(id),
-                    None => Ok(()),
-                },
-                _ => Ok(()),
-            },
+            PromptKind::ExternalChange => self.submit_external_change(&prompt),
             PromptKind::NewFile => {
                 let path = resolve(&self.state.explorer.target_dir(), &prompt.fields[0])?;
                 self.dispatch(Command::CreateFile(path))
@@ -230,6 +219,43 @@ impl App {
                 Some(path) => self.dispatch(Command::DeleteTarget(path)),
                 None => Ok(()),
             },
+            _ => Ok(()),
+        }
+    }
+
+    fn submit_save_as(&mut self, root: &Path, field: &str) -> Result<()> {
+        let path = resolve(root, field)?;
+        let current = self
+            .state
+            .active_document()
+            .and_then(|document| document.path.clone());
+        if path.exists() && current.as_deref() != Some(path.as_path()) {
+            self.open_prompt(PromptKind::Overwrite);
+            if let InputMode::Prompt(prompt) = &mut self.state.mode {
+                prompt.target = Some(path);
+            }
+            Ok(())
+        } else {
+            self.dispatch(Command::SaveTo(path))
+        }
+    }
+
+    fn submit_external_change(&mut self, prompt: &PromptState) -> Result<()> {
+        match prompt.selected_candidate() {
+            Some("Overwrite with the buffer") => match prompt.target.clone() {
+                Some(path) => self.force_save_to(path),
+                None => Ok(()),
+            },
+            Some("Reload from disk") => match prompt.document {
+                Some(id) => self.reload_document(id),
+                None => Ok(()),
+            },
+            _ => Ok(()),
+        }
+    }
+
+    fn submit_session_prompt(&mut self, prompt: PromptState) -> Result<()> {
+        match prompt.kind {
             PromptKind::Discard => {
                 if let Some(id) = prompt.document {
                     self.force_close_document(id);
@@ -254,42 +280,75 @@ impl App {
                 }
                 Ok(())
             }
+            _ => Ok(()),
         }
     }
 
     pub(crate) fn open_prompt(&mut self, kind: PromptKind) {
         let mut prompt = PromptState::new(kind);
+        let filled = match kind.group() {
+            PromptGroup::Query => self.fill_query_prompt(kind, &mut prompt),
+            PromptGroup::File => self.fill_file_prompt(kind, &mut prompt),
+            PromptGroup::Session => self.fill_session_prompt(kind, &mut prompt),
+        };
+        if !filled {
+            return;
+        }
+        let project_query = (kind == PromptKind::FindInFiles).then(|| prompt.input().to_string());
+        self.state.mode = InputMode::Prompt(prompt);
+        if let Some(query) = project_query {
+            self.start_project_search(query);
+        }
+    }
+
+    fn fill_query_prompt(&mut self, kind: PromptKind, prompt: &mut PromptState) -> bool {
         match kind {
             PromptKind::CommandPalette => {
-                prompt.set_candidates(
-                    Command::palette()
-                        .iter()
-                        .map(|command| command.name().to_string())
-                        .collect(),
-                );
+                let mut candidates: Vec<String> = Command::palette()
+                    .iter()
+                    .map(|command| command.name().to_string())
+                    .collect();
+                for index in 1..=self.state.workspaces.workspaces.len() {
+                    candidates.push(format!("switch_workspace_{index}"));
+                }
+                prompt.set_candidates(candidates);
             }
-            PromptKind::QuickOpen => {
-                prompt.set_candidates(self.quick_open_candidates());
+            PromptKind::Messages => {
+                if self.state.warnings.is_empty() {
+                    self.notify("no messages");
+                    return false;
+                }
+                prompt.set_candidates(self.state.warnings.clone());
             }
-            PromptKind::Find => {
+            PromptKind::Find | PromptKind::Replace => {
                 if let Some(search) = &self.state.search {
-                    prompt = prompt.with_field(search.query.clone());
+                    prompt.set_input(search.query.clone());
                 }
             }
             PromptKind::FindInFiles => {
                 if let Some(search) = &self.state.project_search {
-                    prompt = prompt.with_field(search.query.clone());
+                    prompt.set_input(search.query.clone());
                 }
             }
-            PromptKind::Replace => {
-                if let Some(search) = &self.state.search {
-                    prompt = prompt.with_field(search.query.clone());
+            PromptKind::GoToLine => {
+                if let (Some(pane), Some(document)) =
+                    (self.state.focused_pane(), self.state.active_document())
+                {
+                    prompt.set_input((document.line_of_char(pane.cursor) + 1).to_string());
                 }
             }
+            _ => {}
+        }
+        true
+    }
+
+    fn fill_file_prompt(&mut self, kind: PromptKind, prompt: &mut PromptState) -> bool {
+        match kind {
+            PromptKind::QuickOpen => prompt.set_candidates(self.quick_open_candidates()),
             PromptKind::SaveAs => {
                 if let Some(document) = self.state.active_document() {
                     if let Some(path) = &document.path {
-                        prompt = prompt.with_field(path.to_string_lossy().into_owned());
+                        prompt.set_input(path.to_string_lossy().into_owned());
                     } else {
                         let name = document.display_name();
                         let name = if name == "[No Name]" {
@@ -297,7 +356,7 @@ impl App {
                         } else {
                             name
                         };
-                        prompt = prompt.with_field(
+                        prompt.set_input(
                             self.state
                                 .explorer
                                 .target_dir()
@@ -308,13 +367,11 @@ impl App {
                     }
                 }
             }
+            PromptKind::NewFile | PromptKind::NewDir => prompt.set_input(""),
             PromptKind::Rename => {
                 if let Some(row) = self.state.explorer.selected_row() {
-                    prompt = prompt.with_field(row.name.clone());
+                    prompt.set_input(row.name.clone());
                 }
-            }
-            PromptKind::NewFile | PromptKind::NewDir => {
-                prompt = prompt.with_field("");
             }
             PromptKind::Delete => {
                 prompt.target = self
@@ -323,26 +380,17 @@ impl App {
                     .selected_row()
                     .map(|row| row.path.clone());
             }
-            PromptKind::Discard | PromptKind::Overwrite | PromptKind::ExternalChange => {}
-            PromptKind::Theme => {
-                prompt.set_candidates(crate::theme::Theme::names(&self.state.themes_dir));
-                prompt.select_candidate(&self.state.config.appearance.theme);
-            }
-            PromptKind::QuitDirty => {}
-            PromptKind::GoToLine => {
-                if let (Some(pane), Some(document)) =
-                    (self.state.focused_pane(), self.state.active_document())
-                {
-                    prompt =
-                        prompt.with_field((document.line_of_char(pane.cursor) + 1).to_string());
-                }
-            }
+            _ => {}
         }
-        let project_query = (kind == PromptKind::FindInFiles).then(|| prompt.input().to_string());
-        self.state.mode = InputMode::Prompt(prompt);
-        if let Some(query) = project_query {
-            self.start_project_search(query);
+        true
+    }
+
+    fn fill_session_prompt(&mut self, kind: PromptKind, prompt: &mut PromptState) -> bool {
+        if kind == PromptKind::Theme {
+            prompt.set_candidates(crate::theme::Theme::names(&self.state.themes_dir));
+            prompt.select_candidate(&self.state.config.appearance.theme);
         }
+        true
     }
 
     pub(crate) fn quick_open_candidates(&mut self) -> Vec<String> {

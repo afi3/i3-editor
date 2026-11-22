@@ -129,6 +129,7 @@ impl ConfigSource {
 
     fn line_of(&self, section: &str, key: Option<&str>) -> Option<usize> {
         let mut inside = false;
+        let mut fallback = None;
         for (index, line) in self.text.lines().enumerate() {
             let trimmed = line.trim();
             if let Some(name) = trimmed
@@ -141,19 +142,25 @@ impl ConfigSource {
                 }
                 continue;
             }
-            if inside && let Some(key) = key {
-                let found = trimmed
-                    .split('=')
-                    .next()
-                    .unwrap_or("")
-                    .trim()
-                    .trim_matches('"');
-                if found == key {
+            let Some(key) = key else {
+                continue;
+            };
+            let found = trimmed
+                .split('=')
+                .next()
+                .unwrap_or("")
+                .trim()
+                .trim_matches('"');
+            if found == key {
+                if inside {
                     return Some(index + 1);
                 }
+                // Nested tables such as `[keys.global]` live below the parent
+                // section; use the first matching key there as a fallback.
+                fallback.get_or_insert(index + 1);
             }
         }
-        None
+        fallback
     }
 }
 
@@ -314,11 +321,23 @@ fn take_section<T: for<'de> Deserialize<'de> + std::fmt::Debug>(
     };
     match section.clone().try_into::<T>() {
         Ok(parsed) => *target = parsed,
-        Err(error) => warnings.push(format!(
-            "{}[{name}] ignored: {error}",
-            source.prefix(name, None)
-        )),
+        Err(error) => {
+            let prefix = match error_key(&error) {
+                Some(key) => source.prefix(name, Some(&key)),
+                None => source.prefix(name, None),
+            };
+            warnings.push(format!("{prefix}[{name}] ignored: {error}"));
+        }
     }
+}
+
+/// `toml` reports the failing field only inside its display text
+/// (`... in `tab_size``), so recover it to point at the entry's line.
+fn error_key(error: &toml::de::Error) -> Option<String> {
+    let text = error.to_string();
+    let path = text.rsplit_once("in `")?.1.split_once('`')?.0;
+    // KeysConfig errors report `global.save`; the line holds `save`.
+    Some(path.rsplit('.').next().unwrap_or(path).to_string())
 }
 
 #[cfg(test)]
@@ -549,6 +568,37 @@ mod strict_tests {
             config.editor.tab_size, 2,
             "valid keys in the section survive"
         );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn invalid_value_names_the_entry_and_line() {
+        let dir = config_dir("value");
+        let path = dir.join("config.toml");
+        std::fs::write(&path, "[editor]\ntab_size = \"wide\"\n").expect("write");
+        let (config, warnings) = load_from(&path);
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(
+            warnings[0].contains(&format!("{}:2:", path.display())),
+            "warning must name the entry line: {warnings:?}"
+        );
+        assert!(warnings[0].contains("tab_size"), "{warnings:?}");
+        assert_eq!(config.editor.tab_size, 4, "section falls back to defaults");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn invalid_binding_points_at_the_nested_entry() {
+        let dir = config_dir("binding");
+        let path = dir.join("config.toml");
+        std::fs::write(&path, "[keys.global]\nsave = 3\n").expect("write");
+        let (_, warnings) = load_from(&path);
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(
+            warnings[0].contains(&format!("{}:2:", path.display())),
+            "warning must name the nested entry: {warnings:?}"
+        );
+        assert!(warnings[0].contains("save"), "{warnings:?}");
         std::fs::remove_dir_all(&dir).ok();
     }
 
