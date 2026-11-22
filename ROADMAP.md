@@ -53,7 +53,7 @@ by splitting inside a container.
 
 Create/switch/close, workspace tab bar, preserved layout, tabs, cursor, scroll.
 
-## Phase 8 — MVP stabilization: partially done
+## Phase 8 — MVP stabilization: done (v0.1.2)
 
 Delivered:
 
@@ -136,9 +136,145 @@ Delivered:
 - README demo GIF recorded from the real binary (`scripts/make_demo.py`).
 - `README.md`, `ARCHITECTURE.md`, `ROADMAP.md`.
 
-Not delivered yet:
+Known MVP limit (not a blocker):
 
 - An unknown fence language stays plain text, as documented in `README.md`.
+
+## Patch series v0.1.x (post-0.1.2)
+
+MVP shipped as `v0.1.2` on 2026-11-22. Feature work stays on the 0.1 line: each
+release bumps only the patch number, and `Cargo.toml` keeps the last released
+version until work on that patch starts. Do not bump the version, open a release
+branch, or re-audit the codebase before starting a patch: the scope, touched
+files, and acceptance check are recorded below.
+
+Workflow per patch: bump `Cargo.toml` + `Cargo.lock` and README release examples,
+implement the listed scope, run the verification commands at the end of this
+file, update this section and the test count, commit, tag `v0.1.N`, push, and
+confirm the release workflow published all four assets.
+
+### v0.1.3 — Editing core
+
+Goal: close the daily-editing gaps before adding IDE features.
+
+- Line operations: move line/selection up and down, delete line.
+- Toggle line comment and block comment for the document language.
+- Auto-pair brackets and quotes; skip over an existing closer on typing.
+- Bracket matching highlight under the cursor.
+- Mouse drag selection inside a pane (Drag currently only resizes splits).
+- Wheel scrolling in prompts, including Find in Files and Messages.
+- Clicking a workspace tab switches workspaces.
+- Config hot reload: watch `config.toml` alongside the workspace root, then
+  re-resolve keymap and theme without restart.
+
+Touches: `src/command.rs`, `src/app/editing.rs`, `src/app/cursor.rs`,
+`src/app/mouse.rs`, `src/input/presets.rs`, `src/editor/document.rs`,
+`src/ui/overlay.rs`, `src/ui/mod.rs`, `src/config/mod.rs`.
+
+Acceptance: tests for each operation, drag selection hit-testing at 80×24,
+prompt wheel movement, workspace tab click, and a config reload that changes a
+keybinding and the theme; full suite and gate stay clean.
+
+### v0.1.4 — Search and replace parity
+
+Goal: make both search surfaces handle real code searches.
+
+- Regex mode plus literal mode, whole-word, and a case toggle.
+- Apply the same options to Find and Find in Files.
+- Replace in Files with preview, per-file confirmation, and undo-safe writes
+  (atomic save path already exists).
+- Report match counts and truncation consistently in prompt titles.
+
+Touches: `src/app/search.rs`, `src/project_search.rs`, `src/app/project_search.rs`,
+`src/input/prompt.rs`, `src/ui/overlay.rs`, `src/command.rs`.
+
+Acceptance: regex and literal tests including invalid patterns, whole-word at
+boundaries, replace preview does not write before confirmation, and a replace
+across two files is verified by reading them back.
+
+### v0.1.5 — Navigation, workspace roots, recovery
+
+Goal: navigate larger projects and stop losing work.
+
+- Outline / go-to-symbol per document from the existing tree-sitter tree.
+- Tree-sitter folding for functions, blocks, and Markdown sections.
+- Per-workspace explorer root and watcher, so workspaces are independent
+  environments instead of sharing one folder.
+- Crash recovery: a swap/autosave file for dirty buffers, replayed on next start
+  with overwrite/discard/reload choices.
+
+Touches: `src/syntax/tree.rs`, a new `src/symbols/` or `src/outline.rs`,
+`src/explorer/mod.rs`, `src/watch.rs`, `src/state.rs`, `src/workspace/*`,
+`src/session.rs`, `src/app/mod.rs`, `src/ui/pane.rs`.
+
+Acceptance: outline jump lands on the symbol line, folding hides the expected
+range, switching workspaces changes the explorer root and quick-open list,
+crash recovery restores a dirty buffer after a synthetic exit without save.
+
+### v0.1.6 — LSP MVP
+
+Goal: diagnostics and navigation from language servers.
+
+- Async LSP client with per-server lifecycle and document sync.
+- Diagnostics surfaced in the status bar and in the gutter.
+- Completion popup, hover, and go-to-definition.
+- Config table for server commands and file-type mapping.
+
+Touches: new `src/lsp/`, `src/app/mod.rs` event loop, `src/ui/overlay.rs`,
+`src/ui/pane.rs`, `src/config/mod.rs`, keymap/palette commands.
+
+Acceptance: a fake or real server fixture produces a diagnostic, completion
+popup, hover text, and a definition jump in tests or a scripted pty check.
+
+Risk: largest architectural change; write the client/lifecycle design before
+implementation. Keep completion optional so a missing server never blocks edits.
+
+### v0.1.7 — Git integration
+
+Goal: see repository state without leaving the editor.
+
+- Status markers in the gutter (modified/added/deleted lines).
+- Read-only diff view for the active file and a staged/unstaged list.
+- Stage, unstage, and commit from the palette.
+- Shell out to `git`; do not add a libgit2-style dependency for MVP.
+
+Touches: new `src/git/`, `src/ui/pane.rs` gutter, `src/app/mod.rs` refresh
+trigger, palette commands, config for the git binary.
+
+Acceptance: fixture repository shows correct markers, diff view opens without
+modifying files, staging changes the index, and every command reports git errors
+in the status bar.
+
+### v0.1.8 — Editing model expansion
+
+Goal: handle selection-heavy edits and long prose.
+
+- Multi-cursor and column selection, including copy/cut/undo behavior.
+- Soft word wrap with correct cursor movement, hit-testing, and scroll.
+- Line-ending tools: convert LF/CRLF for the active document, with the save path
+  and EOL status staying consistent. Other encodings remain rejected and
+  documented; UTF-8 with BOM is the only encoding addition considered.
+
+Touches: `Pane` selection model in `src/state.rs`, `src/app/cursor.rs`,
+`src/app/editing.rs`, `src/app/mouse.rs`, `src/ui/pane.rs`,
+`src/editor/document.rs`, `src/editor/text.rs`.
+
+Acceptance: multi-cursor edit/undo tests, wrapped-cursor movement and click
+tests, CRLF conversion round-trip, and non-UTF-8 rejection with a clear message.
+
+Risk: multi-cursor and wrap change invariants used by search, copy, mouse, and
+undo; land them behind small, tested steps rather than one change.
+
+### Unscoped backlog
+
+Recorded so the next planning session does not rescan; no version assigned.
+
+- File operations: duplicate, copy path, reveal in terminal.
+- Terminal polish: rename tabs, per-workspace starting directory.
+- Workspace polish: rename workspaces.
+- Help/keybinding overlay and palette hints showing the active binding.
+- Session autosave and scratch buffers (if crash recovery in 0.1.5 is not enough).
+- Search history and per-surface option persistence.
 
 ## Verification commands
 
