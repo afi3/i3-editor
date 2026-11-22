@@ -153,10 +153,24 @@ implement the listed scope, run the verification commands at the end of this
 file, update this section and the test count, commit, tag `v0.1.N`, push, and
 confirm the release workflow published all four assets.
 
+Ordering rules for this series:
+
+- Lua **language support** ships in v0.1.3; the extension host waits until the
+  event loop and workspace model settle (v0.1.9).
+- Do not start the Lua host before LSP (v0.1.6) and per-workspace roots
+  (v0.1.5), because both reshape the APIs the host exposes.
+- The Lua API exposes selections as a **list** from v1 even when the editor holds
+  one cursor, so multi-cursor (v0.1.8) never breaks the plugin contract.
+- Git may move ahead of LSP only by an explicit decision; the default order
+  above keeps LSP as the architectural gate.
+
 ### v0.1.3 — Editing core
 
-Goal: close the daily-editing gaps before adding IDE features.
+Goal: close the daily-editing gaps and add Lua syntax support before IDE
+features.
 
+- Lua language support: add `tree-sitter-lua`, `Language::Lua`, the `.lua`
+  extension, the highlight query, and `lua` as a Markdown fence language.
 - Line operations: move line/selection up and down, delete line.
 - Toggle line comment and block comment for the document language.
 - Auto-pair brackets and quotes; skip over an existing closer on typing.
@@ -167,13 +181,16 @@ Goal: close the daily-editing gaps before adding IDE features.
 - Config hot reload: watch `config.toml` alongside the workspace root, then
   re-resolve keymap and theme without restart.
 
-Touches: `src/command.rs`, `src/app/editing.rs`, `src/app/cursor.rs`,
-`src/app/mouse.rs`, `src/input/presets.rs`, `src/editor/document.rs`,
-`src/ui/overlay.rs`, `src/ui/mod.rs`, `src/config/mod.rs`.
+Touches: `src/syntax/mod.rs`, `src/syntax/tree.rs`, `src/command.rs`,
+`src/app/editing.rs`, `src/app/cursor.rs`, `src/app/mouse.rs`,
+`src/input/presets.rs`, `src/editor/document.rs`, `src/ui/overlay.rs`,
+`src/ui/mod.rs`, `src/config/mod.rs`, `Cargo.toml`.
 
-Acceptance: tests for each operation, drag selection hit-testing at 80×24,
-prompt wheel movement, workspace tab click, and a config reload that changes a
-keybinding and the theme; full suite and gate stay clean.
+Acceptance: a `.lua` fixture highlights keywords, strings, comments, and numbers
+and a fenced `lua` block uses the grammar; tests for each editing operation,
+drag selection hit-testing at 80×24, prompt wheel movement, workspace tab click,
+and a config reload that changes a keybinding and the theme; full suite and gate
+stay clean.
 
 ### v0.1.4 — Search and replace parity
 
@@ -265,25 +282,19 @@ tests, CRLF conversion round-trip, and non-UTF-8 rejection with a clear message.
 Risk: multi-cursor and wrap change invariants used by search, copy, mouse, and
 undo; land them behind small, tested steps rather than one change.
 
-### v0.1.9 — Lua language and extension host
+### v0.1.9 — Lua extension host
 
-Goal: make Lua a first-class language and a sandboxed extension layer. Lua does
-not replace the Rust core, the typed `Command` dispatch, or the TOML
+Goal: add a sandboxed extension layer on top of the Rust core. Lua language
+support already shipped in v0.1.3; this patch embeds the VM and host only. Lua
+does not replace the Rust core, the typed `Command` dispatch, or the TOML
 configuration; scripts only call a small host API.
-
-Stage A — language support (no VM, can ship alone):
-
-- Add `tree-sitter-lua` and `Language::Lua`: extension mapping, highlight query,
-  and `lua` as a Markdown fence language.
-- Acceptance: a `.lua` fixture highlights keywords, strings, comments, and
-  numbers; a fenced `lua` block uses the grammar; an unknown fence stays plain.
-
-Stage B — extension host:
 
 - Embed `mlua` (vendored Lua 5.4) and load `<config>/i3-editor/plugins/*.lua`.
 - API v1: `commands.register`, `keymap.set`, `events.on` (`open`, `save`,
   `change`, `focus`), `statusline.register`, and read-only editor queries (path,
-  language, cursor, selection). Scripts never receive mutable editor state.
+  language, cursor, selections). `selections` is always a list, even with one
+  cursor, so v0.1.8 does not change the contract. Scripts never receive mutable
+  editor state.
 - Run callbacks on the UI thread with a time budget and no blocking I/O; long
   work must dispatch a Rust command or task. Guard reentrancy (a command that
   fires a hook that dispatches another command) with a depth limit.
@@ -297,15 +308,14 @@ Stage B — extension host:
 - Demo plugins for the repository (one keymap/command, one save hook, one
   statusline segment) double as test fixtures.
 
-Touches: `src/syntax/mod.rs`, `src/syntax/tree.rs`, new `src/lua/` (host + API),
-`src/command.rs` (registry hooks), `src/app/mod.rs` (dispatch/event integration),
-`src/watch.rs`, `src/config/mod.rs`, `src/ui/mod.rs` (statusline segments),
-`Cargo.toml`.
+Touches: new `src/lua/` (host + API), `src/command.rs` (registry hooks),
+`src/app/mod.rs` (dispatch/event integration), `src/watch.rs`,
+`src/config/mod.rs`, `src/ui/mod.rs` (statusline segments), `Cargo.toml`.
 
 Acceptance: a fixture script registers a command and keymap, a save hook writes a
-marker, a statusline segment renders, a broken script reports `path:line` without
-crashing, plugin reload removes old handlers, and a callback that exceeds the
-time budget is reported and stopped.
+marker, a statusline segment renders, `editor.selections()` returns a list, a
+broken script reports `path:line` without crashing, plugin reload removes old
+handlers, and a callback that exceeds the time budget is reported and stopped.
 
 Risk: API churn and sandbox escapes are the main risks. Version the API
 (`api_version`) from the first release, keep host capabilities narrow, and do not
@@ -313,8 +323,8 @@ call Lua per frame. `mlua` is preferred for synchronous hooks; an external
 JSON-RPC plugin process remains the alternative if crash isolation becomes more
 important than latency.
 
-Dependencies: `tree-sitter-lua = "0.5"`, `mlua = "0.12"` with `lua54` and
-`vendored`.
+Dependencies: `mlua = "0.12"` with `lua54` and `vendored`. The `tree-sitter-lua`
+dependency already lands in v0.1.3.
 
 ### Unscoped backlog
 
