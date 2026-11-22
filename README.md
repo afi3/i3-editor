@@ -282,17 +282,18 @@ document keeps its tree and hands every edit to it as an `InputEdit`; the next
 frame reparses only the changed region and runs the query over the visible lines
 instead of the whole file.
 
-Markdown uses two grammars: the block grammar highlights headings, fences, and
-links, and visible inline content is parsed with the inline grammar for emphasis,
-links, and code spans. Each fenced block is parsed with the language named in its
-info string, so Rust, Python, Shell, TOML, JSON, and the other supported
-languages are highlighted structurally inside the fence. These secondary trees are
-cached by byte offset and dropped on edit.
+Markdown uses three grammars: the block grammar highlights headings, fences, and
+links; visible inline content is parsed with the inline grammar for emphasis,
+links, and code spans; and HTML blocks plus inline tags are parsed with the HTML
+grammar. Each fenced block is parsed with the language named in its info string,
+so Rust, Python, Shell, TOML, JSON, and the other supported languages are
+highlighted structurally inside the fence. These secondary trees are cached by
+byte offset and dropped on edit.
 
 Files with other extensions render in the theme foreground.
 
-Known limits: Markdown HTML blocks and YAML/TOML front matter are not
-highlighted, and an unknown fence language stays plain text.
+Known limits: YAML/TOML front matter is not highlighted, and an unknown fence
+language stays plain text.
 
 The terminal backend honors `NO_COLOR`: when that variable is set, color
 sequences are suppressed and the theme has no visible effect. `--dump-keymap`
@@ -467,9 +468,9 @@ every check.
 
 ## Known limitations
 
-- Syntax highlighting is structural for every supported language. Markdown HTML
-  blocks and YAML/TOML front matter are not highlighted, and an unknown fence
-  language stays plain text.
+- Syntax highlighting is structural for every supported language. YAML/TOML
+  front matter in Markdown is not highlighted, and an unknown fence language
+  stays plain text.
 - Filesystem watching (Notify) is not implemented; quick open rescans the project
   on every invocation and caps the list at 5000 files.
 - `--update` uses the unauthenticated GitHub API (60 requests per hour per IP)

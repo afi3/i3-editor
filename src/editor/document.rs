@@ -635,6 +635,38 @@ mod tests {
     }
 
     #[test]
+    fn structural_spans_cover_markdown_html() {
+        use crate::syntax::TokenKind;
+
+        let mut document = Document::empty(DocumentId(1), Some(PathBuf::from("/tmp/html.md")));
+        document.rope = Rope::from_str(
+            "<div class=\"note\">\nraw\n</div>\n\nText <span title=\"x\">b</span>.\n",
+        );
+        let spans = document.syntax_spans_range(0, 5);
+
+        assert!(
+            spans[0].iter().any(|span| span.kind == TokenKind::Keyword),
+            "html block tag: {:?}",
+            spans[0]
+        );
+        assert!(spans[0].iter().any(|span| span.kind == TokenKind::String));
+        assert!(spans[0].iter().any(|span| span.kind == TokenKind::Function));
+        assert!(spans[1].is_empty(), "raw html text: {:?}", spans[1]);
+        assert!(
+            spans[2].iter().any(|span| span.kind == TokenKind::Keyword),
+            "closing tag: {:?}",
+            spans[2]
+        );
+        assert!(
+            spans[4].iter().any(|span| span.kind == TokenKind::Keyword),
+            "inline html tag: {:?}",
+            spans[4]
+        );
+        assert!(spans[4].iter().any(|span| span.kind == TokenKind::String));
+        assert!(spans[4].iter().any(|span| span.kind == TokenKind::Function));
+    }
+
+    #[test]
     fn markdown_injections_follow_edits() {
         use crate::syntax::TokenKind;
 
