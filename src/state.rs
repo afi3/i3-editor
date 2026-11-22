@@ -146,8 +146,8 @@ pub struct AppState {
     pub fullscreen: Option<PaneId>,
     /// Grab mode: arrow keys move the focused pane.
     pub moving: bool,
-    /// Bottom terminal panel. Dropping it kills the shell.
-    pub shell: Option<crate::shell::ShellPanel>,
+    /// Bottom terminal panel; empty when closed. Dropping a shell kills it.
+    pub terminals: crate::shell::Terminals,
     /// Directory scanned for `<name>.toml` themes.
     pub themes_dir: std::path::PathBuf,
     /// User config file, when one can be resolved; theme choices are written here.

@@ -518,7 +518,7 @@ mod tests {
             search: None,
             fullscreen: None,
             moving: false,
-            shell: None,
+            terminals: Default::default(),
             themes_dir: PathBuf::new(),
             config_path: None,
         }

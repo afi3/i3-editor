@@ -125,12 +125,14 @@ no `Alt+<letter>`, no `Ctrl+2`..`Ctrl+8`.
 | `Ctrl+G` | Go to line |
 | `Ctrl+Tab` / `BackTab` | Next / previous document |
 | `F3` / `F4` | Split left-right / top-bottom |
+| `F5` | New terminal tab |
+| `F11` | Close the active terminal tab |
 | `F6` | Close pane |
 | `Ctrl+Shift+Arrow` | Move focus between panes |
 | `F9` | Toggle fullscreen for the focused pane |
 | `F10` | Grab mode: arrows move the focused pane (Esc exits) |
 | `F12` | Toggle tabbed container for the focused split |
-| `Ctrl+PageUp` / `Ctrl+PageDown` | Previous / next container tab |
+| `Ctrl+PageUp` / `Ctrl+PageDown` | Previous / next container tab, or terminal tab while the shell has focus |
 | `F7` / `F8` | New / close workspace |
 | `Ctrl+1`..`Ctrl+9` | Switch workspace (best effort) |
 | `Ctrl+Z` / `Ctrl+Y` | Undo / redo |
@@ -327,14 +329,18 @@ the default workspace; a broken session is reported and ignored.
 
 ## Terminal panel
 
-The editor can host a real shell in a panel at the bottom of the window, outside
+The editor can host real shells in a panel at the bottom of the window, outside
 the panes. Open it from the command palette (`F1`, then `toggle_terminal`); the
-same command closes it, which kills the shell process.
+same command closes the panel and kills every shell in it.
 
+- `F5` (or `new_terminal`) adds a shell tab and focuses it; `F11` (or
+  `close_terminal`) closes the active tab and closes the panel with the last one.
+  `Ctrl+PageUp` / `Ctrl+PageDown` cycle tabs while the panel has focus; the title
+  marks the active one as `[2* /bin/zsh]`.
 - The shell comes from `[terminal] shell`, otherwise `$SHELL`, otherwise
   `/bin/sh`; it starts in the explorer root.
 - While the panel has focus, every key is forwarded to the shell except `Ctrl+Q`,
-  `F1`, and the terminal toggle itself.
+  `F1`, the terminal toggle, and the terminal-tab commands.
 - Click the panel to focus it. When the program in the shell enables mouse
   reporting (`DECSET 1000`, `1002`, or `1003`), clicks, drags, and wheel events
   inside the panel are sent to it using the encoding it asked for (SGR, UTF-8,
@@ -474,4 +480,3 @@ every check.
   depends on the terminal.
 - Startup probes keyboard enhancement support; terminals that never answer the
   query add a short delay to startup.
-- Terminal panel: one shell at a time.

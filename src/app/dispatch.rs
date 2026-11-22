@@ -58,14 +58,30 @@ impl App {
             Command::SplitLeftRight => self.split_pane(SplitAxis::LeftRight)?,
             Command::SplitTopBottom => self.split_pane(SplitAxis::TopBottom)?,
             Command::ToggleTerminal => self.toggle_shell(),
+            Command::TerminalNew => self.open_terminal(),
+            Command::TerminalClose => self.close_terminal(),
+            Command::NextTerminal => self.cycle_terminal(1),
+            Command::PrevTerminal => self.cycle_terminal(-1),
             Command::SelectTheme => self.open_prompt(PromptKind::Theme),
             Command::NextTheme => self.cycle_theme(1),
             Command::PrevTheme => self.cycle_theme(-1),
             Command::ClosePane => self.close_pane()?,
             Command::ToggleFullscreen => self.toggle_fullscreen(),
             Command::ToggleTabbed => self.toggle_tabbed(),
-            Command::NextPaneTab => self.cycle_pane_tab(1),
-            Command::PrevPaneTab => self.cycle_pane_tab(-1),
+            Command::NextPaneTab => {
+                if matches!(self.state.focus, crate::state::Focus::Shell) {
+                    self.cycle_terminal(1);
+                } else {
+                    self.cycle_pane_tab(1);
+                }
+            }
+            Command::PrevPaneTab => {
+                if matches!(self.state.focus, crate::state::Focus::Shell) {
+                    self.cycle_terminal(-1);
+                } else {
+                    self.cycle_pane_tab(-1);
+                }
+            }
             Command::MovePane(direction) => self.move_pane(direction)?,
             Command::ToggleMoveMode => self.toggle_move_mode(),
             Command::NewWorkspace => self.new_workspace()?,

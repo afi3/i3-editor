@@ -67,8 +67,9 @@ Delivered:
   over the visible byte range. Markdown adds the inline grammar per visible
   inline node and parses each fenced block with the language from its info
   string; those sub-trees are cached and cleared on edit.
-- Bottom terminal panel running a real shell (`portable-pty` + `vt100`), opened
-  and closed from the palette, with theme-aware rendering and scrollback.
+- Bottom terminal panel running real shells (`portable-pty` + `vt100`) in tabs,
+  opened and closed from the palette (`F5` new, `F11` close), with theme-aware
+  rendering, per-tab scrollback, and `Ctrl+PageUp/PageDown` cycling.
 - Terminal mouse reporting: when the shell program enables `DECSET 1000/1002/1003`,
   clicks, drags, and wheel events in the panel body are forwarded with the
   requested encoding (SGR, UTF-8, or X10), gated by its protocol mode.
@@ -100,7 +101,7 @@ Delivered:
 - Keymap presets and capability handling.
 - Unicode width/grapheme handling with tests.
 - Error handling through a single `Error` type; status-bar messages.
-- 194 unit and integration tests, `TestBackend` render tests.
+- 196 unit and integration tests, `TestBackend` render tests.
 - `install.sh` one-liner with `--update` and `--uninstall` (checksum-verified
   release download, version comparison, Cargo fallback) and a tag-driven release
   workflow for macOS/Linux on x86_64 and aarch64.
@@ -109,7 +110,6 @@ Delivered:
 
 Not delivered yet:
 
-- Terminal panel limits: one panel only.
 - Markdown HTML blocks and YAML/TOML front matter are not highlighted, and an
   unknown fence language stays plain text.
 
@@ -123,4 +123,4 @@ cargo clippy --all-targets --all-features
 cargo run -- --dump-keymap
 ```
 
-Last recorded run: `cargo test` → 194 passed, `cargo clippy` → 0 warnings.
+Last recorded run: `cargo test` → 196 passed, `cargo clippy` → 0 warnings.

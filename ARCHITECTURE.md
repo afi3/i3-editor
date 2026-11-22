@@ -127,17 +127,20 @@ byte offset and cleared on every edit. `SyntaxCache` also keeps the lexer's
 per-line state as a fallback when a grammar or query is unavailable; filling
 either during rendering is derived work and never changes document content.
 
-**The terminal panel is a real PTY plus a VT100 model.** `shell::ShellPanel`
-spawns `$SHELL` through `portable-pty`, reads the master in a dedicated thread into
-an `mpsc` channel, and drains that channel in the event loop (`pump_shell`) before
-each draw. `vt100::Parser` turns bytes into a screen grid; rendering maps cells
-(colors, bold, underline, inverse) onto the theme and places the terminal cursor
-when the panel has focus. Resizing recomputes both the PTY size and the parser
-grid, and the panel reserves rows before panes are laid out, so the minimum pane
-size still holds. Dropping `ShellPanel` kills the child. The parser also tracks
-the program's mouse protocol mode and encoding; while active, mouse events inside
-the panel body are forwarded as SGR, UTF-8, or X10 reports gated by that mode, and
-the wheel no longer scrolls the local scrollback.
+**The terminal panel is a real PTY plus a VT100 model.** `shell::Terminals` owns
+one `ShellPanel` per tab plus the active index; the panel is open while the
+collection is non-empty. Each `ShellPanel` spawns `$SHELL` through `portable-pty`,
+reads the master in a dedicated thread into an `mpsc` channel, and drains that
+channel in the event loop (`pump_shell`) before each draw. Every shell is pumped
+and resized; only the active tab is rendered and receives keys, wheel events, and
+mouse reports. `vt100::Parser` turns bytes into a screen grid; rendering maps
+cells (colors, bold, underline, inverse) onto the theme and places the terminal
+cursor when the panel has focus. Resizing recomputes both the PTY size and the
+parser grid, and the panel reserves rows before panes are laid out, so the
+minimum pane size still holds. Dropping a `ShellPanel` kills its child. The
+parser also tracks the program's mouse protocol mode and encoding; while active,
+mouse events inside the panel body are forwarded as SGR, UTF-8, or X10 reports
+gated by that mode, and the wheel no longer scrolls the local scrollback.
 
 **Nothing modified is discarded without an explicit choice.** `Ctrl+Q` with
 modified documents opens a prompt offering save-all/discard-all (discard only for

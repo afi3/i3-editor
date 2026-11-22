@@ -206,6 +206,64 @@ impl Drop for ShellPanel {
     }
 }
 
+/// Shells shown in the bottom panel, with one active tab. Dropping the
+/// collection kills every shell it owns.
+#[derive(Default)]
+pub struct Terminals {
+    shells: Vec<ShellPanel>,
+    active: usize,
+}
+
+impl Terminals {
+    pub fn is_empty(&self) -> bool {
+        self.shells.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.shells.len()
+    }
+
+    pub fn active(&self) -> Option<&ShellPanel> {
+        self.shells.get(self.active)
+    }
+
+    pub fn active_mut(&mut self) -> Option<&mut ShellPanel> {
+        self.shells.get_mut(self.active)
+    }
+
+    pub fn active_index(&self) -> usize {
+        self.active
+    }
+
+    pub fn shells(&self) -> &[ShellPanel] {
+        &self.shells
+    }
+
+    pub fn iter_mut(&mut self) -> std::slice::IterMut<'_, ShellPanel> {
+        self.shells.iter_mut()
+    }
+
+    pub fn push(&mut self, shell: ShellPanel) {
+        self.shells.push(shell);
+        self.active = self.shells.len() - 1;
+    }
+
+    pub fn cycle(&mut self, delta: isize) {
+        let len = self.shells.len();
+        if len < 2 {
+            return;
+        }
+        self.active = (self.active as isize + delta).rem_euclid(len as isize) as usize;
+    }
+
+    pub fn close_active(&mut self) {
+        if self.active < self.shells.len() {
+            self.shells.remove(self.active);
+            self.active = self.active.min(self.shells.len().saturating_sub(1));
+        }
+    }
+}
+
 /// Encode a key event as the byte sequence a terminal would send.
 pub fn encode_key(key: KeyEvent) -> Vec<u8> {
     let mut out = Vec::new();

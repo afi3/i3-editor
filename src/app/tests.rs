@@ -68,7 +68,7 @@ fn fixture(text: &str) -> (App, PathBuf) {
         search: None,
         fullscreen: None,
         moving: false,
-        shell: None,
+        terminals: Default::default(),
         themes_dir: dir.join("themes"),
         config_path: None,
     };
@@ -554,7 +554,7 @@ fn shell_mouse_reports_reach_the_program() {
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
     assert!(panel.reports_mouse(), "shell enabled mouse reporting");
-    app.state.shell = Some(panel);
+    app.state.terminals.push(panel);
 
     // Body starts at (1, 11); (6, 12) is one-based (6, 2).
     app.handle_mouse(MouseEvent {
@@ -567,7 +567,13 @@ fn shell_mouse_reports_reach_the_program() {
     let mut screen = String::new();
     for _ in 0..100 {
         app.pump_shell();
-        screen = app.state.shell.as_ref().expect("shell").screen().contents();
+        screen = app
+            .state
+            .terminals
+            .active()
+            .expect("shell")
+            .screen()
+            .contents();
         if screen.contains("^[[<0;6;2M") {
             break;
         }
@@ -663,7 +669,7 @@ fn terminal_panel_reserves_rows_and_runs_a_shell() {
 
     let (mut app, dir) = fixture("x\n");
     app.dispatch(Command::ToggleTerminal).expect("toggle");
-    assert!(app.state.shell.is_some());
+    assert!(!app.state.terminals.is_empty());
     assert_eq!(app.state.focus, Focus::Shell);
 
     ui::compute_layout(&mut app.state, ratatui::layout::Rect::new(0, 0, 80, 24));
@@ -671,13 +677,13 @@ fn terminal_panel_reserves_rows_and_runs_a_shell() {
     assert!(app.state.ui.shell.y + app.state.ui.shell.height <= 23);
     assert!(app.state.ui.panes.height >= crate::workspace::MIN_PANE_ROWS);
 
-    if let Some(shell) = app.state.shell.as_mut() {
+    if let Some(shell) = app.state.terminals.active_mut() {
         shell.write(b"printf 'panel-test\\n'\n");
     }
     let mut found = false;
     for _ in 0..150 {
         app.pump_shell();
-        if let Some(shell) = app.state.shell.as_ref()
+        if let Some(shell) = app.state.terminals.active()
             && shell.screen().contents().contains("panel-test")
         {
             found = true;
@@ -688,7 +694,34 @@ fn terminal_panel_reserves_rows_and_runs_a_shell() {
     assert!(found, "shell output did not reach the screen");
 
     app.dispatch(Command::ToggleTerminal).expect("close");
-    assert!(app.state.shell.is_none());
+    assert!(app.state.terminals.is_empty());
+    assert!(matches!(app.state.focus, Focus::Pane(_)));
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn terminal_tabs_open_cycle_and_close() {
+    let (mut app, dir) = fixture("x\n");
+    app.dispatch(Command::ToggleTerminal).expect("open");
+    assert_eq!(app.state.terminals.len(), 1);
+
+    app.dispatch(Command::TerminalNew).expect("new tab");
+    assert_eq!(app.state.terminals.len(), 2);
+    assert_eq!(app.state.terminals.active_index(), 1);
+
+    // Ctrl+PageUp/PageDown switch terminal tabs while the shell has focus.
+    app.dispatch(Command::PrevPaneTab).expect("previous tab");
+    assert_eq!(app.state.terminals.active_index(), 0);
+    app.dispatch(Command::NextPaneTab).expect("next tab");
+    assert_eq!(app.state.terminals.active_index(), 1);
+
+    app.dispatch(Command::TerminalClose).expect("close tab");
+    assert_eq!(app.state.terminals.len(), 1);
+    assert_eq!(app.state.focus, Focus::Shell);
+
+    app.dispatch(Command::TerminalClose)
+        .expect("close last tab");
+    assert!(app.state.terminals.is_empty());
     assert!(matches!(app.state.focus, Focus::Pane(_)));
     std::fs::remove_dir_all(&dir).ok();
 }

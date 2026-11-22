@@ -142,7 +142,7 @@ pub fn compute_layout(state: &mut AppState, area: Rect) {
         0
     };
     let main_height = area.height.saturating_sub(workspace_height + status_height);
-    let shell_height = if state.shell.is_some() {
+    let shell_height = if !state.terminals.is_empty() {
         let maximum = main_height.saturating_sub(crate::workspace::MIN_PANE_ROWS + 1);
         state.config.terminal.height.min(maximum)
     } else {
@@ -402,7 +402,7 @@ mod tests {
             search: None,
             fullscreen: None,
             moving: false,
-            shell: None,
+            terminals: Default::default(),
             themes_dir: std::path::PathBuf::new(),
             config_path: None,
         };
@@ -459,6 +459,24 @@ mod tests {
             assert!(rect.height >= crate::workspace::MIN_PANE_ROWS);
         }
         assert!(screen.matches("main.rs").count() >= 2);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn terminal_title_marks_the_active_tab() {
+        let (mut state, dir) = state("x\n");
+        let first =
+            crate::shell::ShellPanel::spawn_shell(&dir, 4, 60, "/bin/sh", 50).expect("first shell");
+        let second = crate::shell::ShellPanel::spawn_shell(&dir, 4, 60, "/bin/sh", 50)
+            .expect("second shell");
+        state.terminals.push(first);
+        state.terminals.push(second);
+        state.focus = Focus::Shell;
+
+        let screen = draw(&mut state, 80, 24);
+        assert!(screen.contains("Terminal"), "{screen}");
+        assert!(screen.contains("[1 /bin/sh]"), "{screen}");
+        assert!(screen.contains("[2* /bin/sh]"), "{screen}");
         std::fs::remove_dir_all(&dir).ok();
     }
 

@@ -10,33 +10,19 @@ use super::App;
 
 impl App {
     pub(crate) fn toggle_shell(&mut self) {
-        if self.state.shell.is_some() {
-            self.state.shell = None;
+        if !self.state.terminals.is_empty() {
+            self.state.terminals = crate::shell::Terminals::default();
             if matches!(self.state.focus, Focus::Shell) {
-                let target = if self
-                    .state
-                    .workspaces
-                    .active()
-                    .layout
-                    .contains(self.state.workspaces.active().focus)
-                {
-                    self.state.workspaces.active().focus
-                } else {
-                    self.state
-                        .workspaces
-                        .active()
-                        .layout
-                        .leaves()
-                        .first()
-                        .copied()
-                        .unwrap_or(crate::state::PaneId(0))
-                };
-                self.state.focus = Focus::Pane(target);
+                self.focus_back_to_pane();
             }
             self.notify("terminal closed");
             return;
         }
+        self.open_terminal();
+    }
 
+    /// Spawn another shell in the panel and focus it.
+    pub(crate) fn open_terminal(&mut self) {
         let rows = self.state.config.terminal.height.saturating_sub(2).max(3);
         let cols = self.state.ui.area.width.saturating_sub(2).max(20);
         let cwd = self.state.explorer.root.clone();
@@ -48,22 +34,88 @@ impl App {
             self.state.config.terminal.scrollback,
         ) {
             Ok(panel) => {
-                self.state.shell = Some(panel);
+                self.state.terminals.push(panel);
                 self.state.focus = Focus::Shell;
-                self.notify("terminal opened");
+                let message = self.terminal_position();
+                self.notify(message);
             }
             Err(error) => self.notify(error.to_string()),
         }
     }
 
-    /// Drain shell output; called once per loop iteration before drawing.
+    /// Close the active shell tab; the panel closes with its last tab.
+    pub(crate) fn close_terminal(&mut self) {
+        if self.state.terminals.is_empty() {
+            return;
+        }
+        self.state.terminals.close_active();
+        if self.state.terminals.is_empty() {
+            if matches!(self.state.focus, Focus::Shell) {
+                self.focus_back_to_pane();
+            }
+            self.notify("terminal closed");
+        } else {
+            let message = self.terminal_position();
+            self.notify(message);
+        }
+    }
+
+    pub(crate) fn cycle_terminal(&mut self, delta: isize) {
+        if self.state.terminals.len() < 2 {
+            return;
+        }
+        self.state.terminals.cycle(delta);
+        self.state.focus = Focus::Shell;
+        let message = self.terminal_position();
+        self.notify(message);
+    }
+
+    fn terminal_position(&self) -> String {
+        let terminals = &self.state.terminals;
+        let name = terminals
+            .active()
+            .map(crate::shell::ShellPanel::title)
+            .unwrap_or("shell");
+        format!(
+            "terminal {}/{}: {name}",
+            terminals.active_index() + 1,
+            terminals.len()
+        )
+    }
+
+    fn focus_back_to_pane(&mut self) {
+        let target = if self
+            .state
+            .workspaces
+            .active()
+            .layout
+            .contains(self.state.workspaces.active().focus)
+        {
+            self.state.workspaces.active().focus
+        } else {
+            self.state
+                .workspaces
+                .active()
+                .layout
+                .leaves()
+                .first()
+                .copied()
+                .unwrap_or(crate::state::PaneId(0))
+        };
+        self.state.focus = Focus::Pane(target);
+    }
+
+    /// Drain every shell; called once per loop iteration before drawing.
     pub(crate) fn pump_shell(&mut self) {
-        if let Some(shell) = self.state.shell.as_mut() {
+        let mut messages = Vec::new();
+        for shell in self.state.terminals.iter_mut() {
             shell.pump();
             if let Some(message) = shell.poll_exit() {
-                let message = message.clone();
-                self.notify(message);
+                messages.push(message);
             }
+        }
+        for message in messages {
+            self.notify(message);
         }
     }
 
@@ -72,19 +124,19 @@ impl App {
         if area.width <= 2 || area.height <= 2 {
             return;
         }
-        if let Some(shell) = self.state.shell.as_mut() {
+        for shell in self.state.terminals.iter_mut() {
             shell.resize(area.height - 2, area.width - 2);
         }
     }
 
     pub(crate) fn forward_to_shell(&mut self, key: KeyEvent) {
-        if let Some(shell) = self.state.shell.as_mut() {
+        if let Some(shell) = self.state.terminals.active_mut() {
             shell.send_key(key);
         }
     }
 
     pub(crate) fn scroll_shell(&mut self, delta: isize) {
-        if let Some(shell) = self.state.shell.as_mut() {
+        if let Some(shell) = self.state.terminals.active_mut() {
             shell.scroll(delta);
         }
         self.state.focus = Focus::Shell;

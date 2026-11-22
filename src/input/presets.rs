@@ -41,6 +41,8 @@ impl KeyMap {
             bind(scope, "backtab", Command::PrevDocument);
             bind(scope, "f3", Command::SplitLeftRight);
             bind(scope, "f4", Command::SplitTopBottom);
+            bind(scope, "f5", Command::TerminalNew);
+            bind(scope, "f11", Command::TerminalClose);
             bind(scope, "f6", Command::ClosePane);
             bind(scope, "f9", Command::ToggleFullscreen);
             bind(scope, "f10", Command::ToggleMoveMode);

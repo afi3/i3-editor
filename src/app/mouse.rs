@@ -54,7 +54,7 @@ impl App {
         if !contains(inner, mouse.column, mouse.row) {
             return false;
         }
-        let Some(shell) = self.state.shell.as_ref() else {
+        let Some(shell) = self.state.terminals.active() else {
             return false;
         };
         if !shell.reports_mouse() {
@@ -66,8 +66,8 @@ impl App {
         let column = mouse.column.saturating_sub(inner.x);
         let row = mouse.row.saturating_sub(inner.y);
         self.state
-            .shell
-            .as_mut()
+            .terminals
+            .active_mut()
             .is_some_and(|shell| shell.send_mouse(mouse, column, row))
     }
 
@@ -81,7 +81,9 @@ impl App {
             self.drag = Some(drag);
             return;
         }
-        if self.state.shell.is_some() && contains(self.state.ui.shell, mouse.column, mouse.row) {
+        if !self.state.terminals.is_empty()
+            && contains(self.state.ui.shell, mouse.column, mouse.row)
+        {
             self.state.focus = Focus::Shell;
             return;
         }
@@ -123,7 +125,7 @@ impl App {
     }
 
     fn on_wheel(&mut self, column: u16, row: u16, steps: isize) {
-        if self.state.shell.is_some() && contains(self.state.ui.shell, column, row) {
+        if !self.state.terminals.is_empty() && contains(self.state.ui.shell, column, row) {
             self.scroll_shell(-steps * 3);
             return;
         }

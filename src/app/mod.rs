@@ -111,7 +111,7 @@ impl App {
             search: None,
             fullscreen: None,
             moving: false,
-            shell: None,
+            terminals: crate::shell::Terminals::default(),
             themes_dir,
             config_path,
         };
@@ -139,9 +139,9 @@ impl App {
         while !self.state.should_quit {
             self.pump_shell();
             self.draw()?;
-            let timeout = if self.state.shell.is_some() && self.state.focus == Focus::Shell {
+            let timeout = if !self.state.terminals.is_empty() && self.state.focus == Focus::Shell {
                 Duration::from_millis(30)
-            } else if self.state.shell.is_some() {
+            } else if !self.state.terminals.is_empty() {
                 Duration::from_millis(60)
             } else {
                 Duration::from_millis(250)
@@ -202,6 +202,12 @@ impl App {
                         | Command::Palette
                         | Command::ToggleTerminal
                         | Command::SelectTheme
+                        | Command::TerminalNew
+                        | Command::TerminalClose
+                        | Command::NextTerminal
+                        | Command::PrevTerminal
+                        | Command::NextPaneTab
+                        | Command::PrevPaneTab
                 )
             {
                 let result = self.dispatch(command);

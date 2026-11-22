@@ -8,7 +8,7 @@ use crate::state::{AppState, Focus};
 use crate::theme::Theme;
 
 pub fn render(frame: &mut Frame, state: &AppState) {
-    let Some(shell) = &state.shell else {
+    let Some(shell) = state.terminals.active() else {
         return;
     };
     let area = state.ui.shell;
@@ -25,7 +25,7 @@ pub fn render(frame: &mut Frame, state: &AppState) {
             theme.border_inactive
         }))
         .style(theme.base())
-        .title(format!(" Terminal — {} ", shell.title()));
+        .title(panel_title(state));
     let inner = block.inner(area);
     frame.render_widget(block, area);
     if inner.width == 0 || inner.height == 0 {
@@ -61,6 +61,28 @@ pub fn render(frame: &mut Frame, state: &AppState) {
             frame.set_cursor_position((inner.x.saturating_add(col), inner.y.saturating_add(row)));
         }
     }
+}
+
+fn panel_title(state: &AppState) -> String {
+    let terminals = &state.terminals;
+    if terminals.len() <= 1 {
+        let name = terminals.active().map(|shell| shell.title()).unwrap_or("");
+        return format!(" Terminal — {name} ");
+    }
+    let tabs: Vec<String> = terminals
+        .shells()
+        .iter()
+        .enumerate()
+        .map(|(index, shell)| {
+            let active = if index == terminals.active_index() {
+                "*"
+            } else {
+                ""
+            };
+            format!("[{}{} {}]", index + 1, active, shell.title())
+        })
+        .collect();
+    format!(" Terminal {} ", tabs.join("  "))
 }
 
 fn cell_style(theme: &Theme, cell: &vt100::Cell) -> Style {
