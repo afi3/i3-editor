@@ -7,7 +7,7 @@ use ratatui::crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEven
 use ratatui::layout::Rect;
 
 use crate::editor::text as textutil;
-use crate::state::{Focus, PaneId};
+use crate::state::{Focus, InputMode, PaneId};
 use crate::workspace::SplitAxis;
 use crate::workspace::layout::{LayoutNode, Separator, SplitMode, split_area, tabbed_regions};
 
@@ -25,9 +25,7 @@ pub struct Drag {
 
 impl App {
     pub(crate) fn handle_mouse(&mut self, mouse: MouseEvent) {
-        // The prompt overlay owns input while it is open; a click must not
-        // change focus or the cursor behind it.
-        if self.state.mode.is_prompt() {
+        if self.handle_prompt_mouse(mouse) {
             return;
         }
         if self.drag.is_none() && self.forward_shell_mouse(mouse) {
@@ -38,9 +36,14 @@ impl App {
             MouseEventKind::Drag(MouseButton::Left) => {
                 if let Some(drag) = self.drag.take() {
                     self.resize_to(drag, mouse.column, mouse.row);
+                } else if let Some(pane_id) = self.selecting {
+                    self.place_cursor(pane_id, mouse.column, mouse.row, true);
                 }
             }
-            MouseEventKind::Up(MouseButton::Left) => self.drag = None,
+            MouseEventKind::Up(MouseButton::Left) => {
+                self.drag = None;
+                self.selecting = None;
+            }
             MouseEventKind::ScrollUp => self.on_wheel(mouse.column, mouse.row, -1),
             MouseEventKind::ScrollDown => self.on_wheel(mouse.column, mouse.row, 1),
             MouseEventKind::ScrollLeft => self.on_horizontal_wheel(mouse.column, mouse.row, -1),
@@ -78,6 +81,21 @@ impl App {
 
     fn on_left_click(&mut self, mouse: MouseEvent) {
         let extend = mouse.modifiers.contains(KeyModifiers::SHIFT);
+        self.selecting = None;
+        if contains(self.state.ui.workspace_bar, mouse.column, mouse.row) {
+            if let Some(index) = self
+                .state
+                .ui
+                .workspace_hits
+                .iter()
+                .find(|hit| mouse.column >= hit.start && mouse.column < hit.end)
+                .map(|hit| hit.index)
+            {
+                let result = self.switch_workspace(index);
+                self.finish(result);
+            }
+            return;
+        }
         if let Some((path, index)) = self.tab_at(mouse.column, mouse.row) {
             self.activate_tab(&path, index);
             return;
@@ -100,7 +118,35 @@ impl App {
         if let Some(pane_id) = self.pane_at(mouse.column, mouse.row) {
             self.state.focus = Focus::Pane(pane_id);
             self.state.workspaces.active_mut().focus = pane_id;
-            self.place_cursor(pane_id, mouse.column, mouse.row, extend);
+            if self.place_cursor(pane_id, mouse.column, mouse.row, extend) {
+                self.selecting = Some(pane_id);
+            }
+        }
+    }
+
+    /// Prompt overlay owns input; only the wheel may scroll its list.
+    fn handle_prompt_mouse(&mut self, mouse: MouseEvent) -> bool {
+        if !self.state.mode.is_prompt() {
+            return false;
+        }
+        match mouse.kind {
+            MouseEventKind::ScrollUp => self.scroll_prompt(-3),
+            MouseEventKind::ScrollDown => self.scroll_prompt(3),
+            _ => {}
+        }
+        true
+    }
+
+    fn scroll_prompt(&mut self, steps: isize) {
+        let InputMode::Prompt(prompt) = &self.state.mode else {
+            return;
+        };
+        if prompt.kind == crate::input::PromptKind::Find {
+            self.move_search_selection(steps);
+            return;
+        }
+        if let InputMode::Prompt(prompt) = &mut self.state.mode {
+            prompt.move_selection(steps);
         }
     }
 
@@ -163,26 +209,26 @@ impl App {
     }
 
     /// Move the cursor of `pane_id` to the clicked cell.
-    fn place_cursor(&mut self, pane_id: PaneId, column: u16, row: u16, extend: bool) {
+    fn place_cursor(&mut self, pane_id: PaneId, column: u16, row: u16, extend: bool) -> bool {
         let placement = {
             let Some(pane) = self.state.panes.get(&pane_id) else {
-                return;
+                return false;
             };
             let Some(rect) = self.state.ui.pane_rects.get(&pane_id).copied() else {
-                return;
+                return false;
             };
             let Some(document_id) = pane.active else {
-                return;
+                return false;
             };
             let Some(document) = self.state.documents.get(&document_id) else {
-                return;
+                return false;
             };
             let Some(geometry) = crate::ui::pane::text_geometry(&self.state, pane, document, rect)
             else {
-                return;
+                return false;
             };
             if !contains(geometry.area, column, row) {
-                return;
+                return false;
             }
             let line_offset = usize::from(row.saturating_sub(geometry.area.y));
             let line = (pane.scroll_top + line_offset).min(document.line_count().saturating_sub(1));
@@ -196,7 +242,7 @@ impl App {
         };
         let (cursor, previous) = placement;
         let Some(pane) = self.state.panes.get_mut(&pane_id) else {
-            return;
+            return false;
         };
         if extend && pane.anchor.is_none() {
             pane.anchor = Some(previous);
@@ -205,6 +251,7 @@ impl App {
         }
         pane.cursor = cursor;
         pane.target_col = None;
+        true
     }
 
     /// Scroll a pane without moving its cursor.

@@ -373,6 +373,70 @@ impl App {
         Ok(())
     }
 
+    /// Insert one typed character, pairing brackets and quotes. Paste and
+    /// command-driven insertions keep using `insert_text` unchanged.
+    pub(crate) fn insert_typed_char(&mut self, ch: char) -> Result<()> {
+        let language = self
+            .state
+            .active_document()
+            .map(|document| crate::syntax::Language::from_path(document.path.as_deref()))
+            .unwrap_or_default();
+        if ch == '`' && language == crate::syntax::Language::Markdown {
+            return self.insert_text("`");
+        }
+        let closer = match ch {
+            '(' => Some(')'),
+            '[' => Some(']'),
+            '{' => Some('}'),
+            '"' => Some('"'),
+            '\'' => Some('\''),
+            '`' => Some('`'),
+            _ => None,
+        };
+        if let Some(closer) = closer {
+            let selection = self.state.focused_pane().and_then(|pane| pane.selection());
+            if selection.is_none() {
+                let next = self
+                    .state
+                    .focused_pane()
+                    .zip(self.state.active_document())
+                    .map(|(pane, document)| {
+                        document
+                            .rope
+                            .get_char(pane.cursor)
+                            .map(|next| next == closer)
+                            .unwrap_or(false)
+                    })
+                    .unwrap_or(false);
+                if next {
+                    return self.insert_text(&ch.to_string());
+                }
+                self.insert_text(&format!("{ch}{closer}"))?;
+                if let Some(pane) = self.state.focused_pane_mut() {
+                    pane.cursor = pane.cursor.saturating_sub(1);
+                    pane.target_col = None;
+                }
+                return Ok(());
+            }
+        }
+        if matches!(ch, ')' | ']' | '}' | '"' | '\'' | '`') {
+            let skip = self
+                .state
+                .focused_pane()
+                .zip(self.state.active_document())
+                .is_some_and(|(pane, document)| {
+                    document
+                        .rope
+                        .get_char(pane.cursor)
+                        .is_some_and(|next| next == ch)
+                });
+            if skip {
+                return self.move_cursor(crate::command::Move::Right, false);
+            }
+        }
+        self.insert_text(&ch.to_string())
+    }
+
     pub(crate) fn insert_text(&mut self, text: &str) -> Result<()> {
         {
             let AppState {

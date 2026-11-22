@@ -172,6 +172,279 @@ fn find_in_files_opens_the_selected_match() {
 }
 
 #[test]
+fn move_lines_swaps_with_the_neighbour_and_undoes_once() {
+    use crate::command::Move;
+
+    let (mut app, dir) = fixture("one\ntwo\nthree\n");
+    app.dispatch(Command::MoveCursor(Move::Down))
+        .expect("line 1");
+    app.dispatch(Command::MoveLinesUp).expect("move up");
+    assert_eq!(text(&app), "two\none\nthree\n");
+    assert_eq!(
+        app.state
+            .active_document()
+            .expect("doc")
+            .line_of_char(app.state.focused_pane().expect("pane").cursor),
+        0
+    );
+    app.dispatch(Command::Undo).expect("undo");
+    assert_eq!(text(&app), "one\ntwo\nthree\n");
+
+    app.dispatch(Command::MoveLinesDown).expect("move down");
+    assert_eq!(text(&app), "one\nthree\ntwo\n");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn a_line_selection_moves_as_a_block() {
+    use crate::command::Move;
+
+    let (mut app, dir) = fixture("one\ntwo\nthree\n");
+    app.dispatch(Command::ExtendSelection(Move::Down))
+        .expect("down");
+    app.dispatch(Command::ExtendSelection(Move::Down))
+        .expect("down");
+    app.dispatch(Command::MoveLinesDown).expect("move down");
+    assert_eq!(text(&app), "three\none\ntwo\n");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn moving_past_the_first_line_is_refused() {
+    let (mut app, dir) = fixture("one\ntwo\n");
+    app.dispatch(Command::MoveLinesUp).expect("move up");
+    assert_eq!(text(&app), "one\ntwo\n");
+    assert!(
+        app.state.ui.message.contains("first line"),
+        "{}",
+        app.state.ui.message
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn delete_line_removes_the_current_line() {
+    use crate::command::Move;
+
+    let (mut app, dir) = fixture("one\ntwo\nthree\n");
+    app.dispatch(Command::MoveCursor(Move::Down))
+        .expect("line 1");
+    app.dispatch(Command::DeleteLine).expect("delete");
+    assert_eq!(text(&app), "one\nthree\n");
+    app.dispatch(Command::Undo).expect("undo");
+    assert_eq!(text(&app), "one\ntwo\nthree\n");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn delete_last_line_without_newline_keeps_the_previous_line() {
+    use crate::command::Move;
+
+    let (mut app, dir) = fixture("one\ntwo");
+    app.dispatch(Command::MoveCursor(Move::DocEnd))
+        .expect("end");
+    app.dispatch(Command::DeleteLine).expect("delete");
+    assert_eq!(text(&app), "one\n");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+fn set_document_path(app: &mut App, name: &str) {
+    let id = app.state.active_document_id().expect("document");
+    let parent = app
+        .state
+        .documents
+        .get(&id)
+        .and_then(|document| document.path.as_ref())
+        .and_then(|path| path.parent())
+        .expect("parent")
+        .to_path_buf();
+    app.state.documents.get_mut(&id).expect("doc").path = Some(parent.join(name));
+}
+
+#[test]
+fn toggle_comment_adds_and_removes_line_prefixes() {
+    let (mut app, dir) = fixture("let a = 1;\n");
+    set_document_path(&mut app, "note.rs");
+    app.dispatch(Command::ToggleComment).expect("comment");
+    assert_eq!(text(&app), "// let a = 1;\n");
+    app.dispatch(Command::ToggleComment).expect("uncomment");
+    assert_eq!(text(&app), "let a = 1;\n");
+    app.dispatch(Command::ToggleComment).expect("comment");
+    app.dispatch(Command::Undo).expect("undo");
+    assert_eq!(text(&app), "let a = 1;\n");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn toggle_comment_uses_the_block_form_for_markdown() {
+    let (mut app, dir) = fixture("hello\n");
+    set_document_path(&mut app, "note.md");
+    app.dispatch(Command::ToggleComment).expect("comment");
+    assert_eq!(text(&app), "<!-- hello -->\n");
+    app.dispatch(Command::ToggleComment).expect("uncomment");
+    assert_eq!(text(&app), "hello\n");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn toggle_comment_reports_languages_without_comments() {
+    let (mut app, dir) = fixture("{\"a\": 1}\n");
+    set_document_path(&mut app, "note.json");
+    app.dispatch(Command::ToggleComment).expect("comment");
+    assert_eq!(text(&app), "{\"a\": 1}\n");
+    assert!(
+        app.state.ui.message.contains("no comment syntax"),
+        "{}",
+        app.state.ui.message
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn typing_brackets_pairs_them_and_skips_the_closer() {
+    use ratatui::crossterm::event::KeyCode;
+
+    let (mut app, dir) = fixture("");
+    press(&mut app, KeyCode::Char('('));
+    assert_eq!(text(&app), "()");
+    assert_eq!(app.state.focused_pane().expect("pane").cursor, 1);
+
+    press(&mut app, KeyCode::Char(')'));
+    assert_eq!(text(&app), "()");
+    assert_eq!(app.state.focused_pane().expect("pane").cursor, 2);
+
+    press(&mut app, KeyCode::Char('"'));
+    assert_eq!(text(&app), "()\"\"");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn markdown_backticks_do_not_auto_pair() {
+    use ratatui::crossterm::event::KeyCode;
+
+    let (mut app, dir) = fixture("");
+    set_document_path(&mut app, "note.md");
+    press(&mut app, KeyCode::Char('`'));
+    assert_eq!(text(&app), "`");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn dragging_inside_a_pane_selects_text() {
+    use ratatui::crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+
+    let (mut app, dir) = fixture("hello world\n");
+    let pane_id = app.state.focused_pane_id().expect("pane");
+    let rect = app.state.ui.pane_rects[&pane_id];
+    let geometry = {
+        let pane = app.state.panes.get(&pane_id).expect("pane");
+        let document = app.state.active_document().expect("document");
+        crate::ui::pane::text_geometry(&app.state, pane, document, rect).expect("geometry")
+    };
+    let y = geometry.area.y;
+    let x = geometry.area.x + geometry.gutter;
+
+    app.handle_mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: x + 1,
+        row: y,
+        modifiers: KeyModifiers::NONE,
+    });
+    app.handle_mouse(MouseEvent {
+        kind: MouseEventKind::Drag(MouseButton::Left),
+        column: x + 6,
+        row: y,
+        modifiers: KeyModifiers::NONE,
+    });
+    let pane = app.state.panes.get(&pane_id).expect("pane");
+    assert_eq!(pane.selection(), Some(1..6));
+    assert_eq!(app.selecting, Some(pane_id));
+
+    app.handle_mouse(MouseEvent {
+        kind: MouseEventKind::Up(MouseButton::Left),
+        column: x + 6,
+        row: y,
+        modifiers: KeyModifiers::NONE,
+    });
+    assert_eq!(app.selecting, None);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn wheel_moves_the_prompt_selection() {
+    let (mut app, dir) = fixture("x\n");
+    app.dispatch(Command::Palette).expect("palette");
+    let InputMode::Prompt(prompt) = &app.state.mode else {
+        panic!("palette missing")
+    };
+    assert!(prompt.filtered.len() > 3);
+    wheel(
+        &mut app,
+        ratatui::crossterm::event::MouseEventKind::ScrollDown,
+        1,
+        1,
+    );
+    let InputMode::Prompt(prompt) = &app.state.mode else {
+        panic!("palette closed")
+    };
+    assert_eq!(prompt.selected, 3);
+    wheel(
+        &mut app,
+        ratatui::crossterm::event::MouseEventKind::ScrollUp,
+        1,
+        1,
+    );
+    let InputMode::Prompt(prompt) = &app.state.mode else {
+        panic!("palette closed")
+    };
+    assert_eq!(prompt.selected, 0);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn clicking_a_workspace_tab_switches_workspaces() {
+    use ratatui::crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+
+    let (mut app, dir) = fixture("x\n");
+    app.dispatch(Command::NewWorkspace).expect("new workspace");
+    assert_eq!(app.state.workspaces.active, 1);
+    crate::ui::compute_layout(&mut app.state, ratatui::layout::Rect::new(0, 0, 80, 24));
+    let hit = app.state.ui.workspace_hits[0].clone();
+    app.handle_mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: hit.start + 1,
+        row: app.state.ui.workspace_bar.y,
+        modifiers: KeyModifiers::NONE,
+    });
+    assert_eq!(app.state.workspaces.active, 0);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn config_file_changes_reload_settings() {
+    use std::time::{Duration, Instant};
+
+    let (mut app, dir) = fixture("x\n");
+    let config = dir.join("config.toml");
+    std::fs::write(&config, "[editor]\ntab_size = 2\n").expect("config");
+    app.state.config_path = Some(config.clone());
+    app.enhanced = true;
+    app.watcher = Some(crate::watch::Watcher::new(&dir, Some(&config)).expect("watch"));
+    std::fs::write(&config, "[editor]\ntab_size = 6\n").expect("rewrite");
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline && app.state.config.editor.tab_size != 6 {
+        app.pump_watcher();
+        if app.state.config.editor.tab_size != 6 {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+    assert_eq!(app.state.config.editor.tab_size, 6);
+    assert_eq!(app.state.ui.message, "config reloaded");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn paste_into_a_prompt_edits_the_field_not_the_document() {
     let (mut app, dir) = fixture("one\n");
     app.dispatch(Command::FindPrompt).expect("find");
@@ -1475,7 +1748,7 @@ fn watcher_reloads_a_clean_buffer_and_refreshes_the_explorer() {
         .active_document()
         .and_then(|document| document.path.clone())
         .expect("path");
-    app.watcher = Some(crate::watch::Watcher::new(&dir).expect("watch"));
+    app.watcher = Some(crate::watch::Watcher::new(&dir, None).expect("watch"));
 
     // Warm the quick-open cache so the assertions below prove invalidation.
     app.open_prompt(crate::input::PromptKind::QuickOpen);

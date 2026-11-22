@@ -294,6 +294,40 @@ impl Document {
         text
     }
 
+    /// Replace a range as one undo step. Used by structural edits that rebuild
+    /// a line block instead of inserting character by character.
+    pub fn replace(
+        &mut self,
+        range: std::ops::Range<usize>,
+        text: &str,
+        cursor_before: usize,
+        cursor_after: usize,
+        scroll_before: (usize, u16),
+    ) {
+        let start = range.start.min(self.len_chars());
+        let end = range.end.min(self.len_chars());
+        if start >= end {
+            self.insert(start, text, cursor_before, scroll_before);
+            return;
+        }
+        let line = self.line_of_char(start);
+        let removed: String = self.rope.slice(start..end).to_string();
+        let edit = self.input_edit(start, end, text);
+        self.rope.remove(start..end);
+        self.rope.insert(start, text);
+        self.history.record_replace(
+            start,
+            &removed,
+            text,
+            cursor_before,
+            cursor_after,
+            scroll_before,
+        );
+        self.dirty = self.history.is_modified();
+        self.invalidate_syntax(line);
+        self.syntax.get_mut().tree.apply_edit(edit);
+    }
+
     /// Returns `(cursor, scroll)` to restore on the pane that issued the edit.
     pub fn undo(&mut self) -> Option<(usize, (usize, u16))> {
         let restore = self.history.undo(&mut self.rope)?;
@@ -694,6 +728,32 @@ mod tests {
             spans[5].iter().any(|span| span.kind == TokenKind::TypeName),
             "markdown heading after front matter: {:?}",
             spans[5]
+        );
+    }
+
+    #[test]
+    fn structural_spans_cover_lua() {
+        use crate::syntax::TokenKind;
+
+        let mut document = Document::empty(DocumentId(1), Some(PathBuf::from("/tmp/init.lua")));
+        document.rope = Rope::from_str("local n = 42\n-- note\nfunction f() return true end\n");
+        let spans = document.syntax_spans_range(0, 3);
+
+        assert!(
+            spans[0].iter().any(|span| span.kind == TokenKind::Keyword),
+            "lua keyword: {:?}",
+            spans[0]
+        );
+        assert!(spans[0].iter().any(|span| span.kind == TokenKind::Number));
+        assert!(
+            spans[1].iter().any(|span| span.kind == TokenKind::Comment),
+            "lua comment: {:?}",
+            spans[1]
+        );
+        assert!(
+            spans[2].iter().any(|span| span.kind == TokenKind::Keyword),
+            "lua function keyword: {:?}",
+            spans[2]
         );
     }
 

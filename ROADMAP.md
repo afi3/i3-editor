@@ -140,61 +140,87 @@ Known MVP limit (not a blocker):
 
 - An unknown fence language stays plain text, as documented in `README.md`.
 
-## Patch series v0.1.x (post-0.1.2)
+## Planned release v0.1.3 — all remaining features
 
-MVP shipped as `v0.1.2` on 2026-11-22. Feature work stays on the 0.1 line: each
-release bumps only the patch number, and `Cargo.toml` keeps the last released
-version until work on that patch starts. Do not bump the version, open a release
-branch, or re-audit the codebase before starting a patch: the scope, touched
-files, and acceptance check are recorded below.
+MVP shipped as `v0.1.2` on 2026-11-22. Every feature previously spread across
+v0.1.3–v0.1.9 is now planned for a single release, **v0.1.3**. There are no
+intermediate tags in this cycle.
 
-Workflow per patch: bump `Cargo.toml` + `Cargo.lock` and README release examples,
-implement the listed scope, run the verification commands at the end of this
-file, update this section and the test count, commit, tag `v0.1.N`, push, and
-confirm the release workflow published all four assets.
+Policy:
 
-Ordering rules for this series:
+- `Cargo.toml` stays at the released version (0.1.2) until every workstream
+  below passes acceptance. Do not bump, tag, or push a release before then.
+- Commit per workstream and keep `main` green. The single release tag is the
+  only external milestone; individual features are reviewed through commits.
+- If a workstream has to ship early for safety, that requires an explicit
+  decision to split the release; the default is one tag.
+- Keep this section current: tick the progress list and update the test count as
+  work lands, so a new session does not rescan the codebase.
 
-- Lua **language support** ships in v0.1.3; the extension host waits until the
-  event loop and workspace model settle (v0.1.9).
-- Do not start the Lua host before LSP (v0.1.6) and per-workspace roots
-  (v0.1.5), because both reshape the APIs the host exposes.
+Delivery order (dependencies only, not separate releases):
+
+1. Editing core + Lua language support
+2. Search and replace parity
+3. Navigation, workspace roots, recovery
+4. LSP MVP
+5. Git integration
+6. Editing model expansion
+7. Lua extension host
+
+Internal ordering rules:
+
+- Lua **language support** lands in workstream 1; the extension host is last.
+- The Lua host waits for LSP and per-workspace roots because both reshape the
+  APIs it exposes.
 - The Lua API exposes selections as a **list** from v1 even when the editor holds
-  one cursor, so multi-cursor (v0.1.8) never breaks the plugin contract.
-- Git may move ahead of LSP only by an explicit decision; the default order
-  above keeps LSP as the architectural gate.
+  one cursor, so multi-cursor never breaks the plugin contract.
+- Git may move ahead of LSP only by an explicit decision; LSP remains the
+  architectural gate.
+- Every workstream ends with its own tests, `cargo fmt --check`,
+  `cargo clippy --all-targets --all-features`, and a clean forgeguard gate.
 
-### v0.1.3 — Editing core
+Risk: this is a large single release, so a regression has a wider bisect range.
+Mitigation: one commit per workstream, no feature is marked done without its own
+acceptance, and the version is bumped only after the full checklist passes.
 
-Goal: close the daily-editing gaps and add Lua syntax support before IDE
-features.
+Progress for v0.1.3:
 
-- Lua language support: add `tree-sitter-lua`, `Language::Lua`, the `.lua`
-  extension, the highlight query, and `lua` as a Markdown fence language.
+- [x] 1. Editing core + Lua language support
+- [ ] 2. Search and replace parity
+- [ ] 3. Navigation, workspace roots, recovery
+- [ ] 4. LSP MVP
+- [ ] 5. Git integration
+- [ ] 6. Editing model expansion
+- [ ] 7. Lua extension host
+
+### 1. Editing core + Lua language support
+
+Status: implemented and committed; release waits for the rest of v0.1.3.
+
+- Lua language support: `tree-sitter-lua`, `Language::Lua`, `.lua`, highlight
+  query, and `lua` as a Markdown fence language.
 - Line operations: move line/selection up and down, delete line.
-- Toggle line comment and block comment for the document language.
+- Toggle line and block comments per document language.
 - Auto-pair brackets and quotes; skip over an existing closer on typing.
 - Bracket matching highlight under the cursor.
-- Mouse drag selection inside a pane (Drag currently only resizes splits).
+- Mouse drag selection inside a pane.
 - Wheel scrolling in prompts, including Find in Files and Messages.
 - Clicking a workspace tab switches workspaces.
-- Config hot reload: watch `config.toml` alongside the workspace root, then
-  re-resolve keymap and theme without restart.
+- Config hot reload: watch `config.toml`, then re-resolve keymap and theme.
 
 Touches: `src/syntax/mod.rs`, `src/syntax/tree.rs`, `src/command.rs`,
-`src/app/editing.rs`, `src/app/cursor.rs`, `src/app/mouse.rs`,
-`src/input/presets.rs`, `src/editor/document.rs`, `src/ui/overlay.rs`,
-`src/ui/mod.rs`, `src/config/mod.rs`, `Cargo.toml`.
+`src/app/editing.rs`, `src/app/lines.rs`, `src/app/comment.rs`,
+`src/app/cursor.rs`, `src/app/mouse.rs`, `src/app/config_ops.rs`,
+`src/app/watch_ops.rs`, `src/input/presets.rs`, `src/editor/document.rs`,
+`src/editor/history.rs`, `src/ui/pane.rs`, `src/ui/mod.rs`,
+`src/config/mod.rs`, `src/watch.rs`, `Cargo.toml`.
 
-Acceptance: a `.lua` fixture highlights keywords, strings, comments, and numbers
-and a fenced `lua` block uses the grammar; tests for each editing operation,
-drag selection hit-testing at 80×24, prompt wheel movement, workspace tab click,
-and a config reload that changes a keybinding and the theme; full suite and gate
-stay clean.
+Acceptance: Lua fixture and `lua` fence highlight; line move/delete and comment
+toggle are single undo steps; auto-pair/skip and bracket emphasis tested;
+drag-select, prompt wheel, workspace click, and config hot reload tested at
+80×24; full suite and gate clean.
 
-### v0.1.4 — Search and replace parity
-
-Goal: make both search surfaces handle real code searches.
+### 2. Search and replace parity
 
 - Regex mode plus literal mode, whole-word, and a case toggle.
 - Apply the same options to Find and Find in Files.
@@ -209,9 +235,7 @@ Acceptance: regex and literal tests including invalid patterns, whole-word at
 boundaries, replace preview does not write before confirmation, and a replace
 across two files is verified by reading them back.
 
-### v0.1.5 — Navigation, workspace roots, recovery
-
-Goal: navigate larger projects and stop losing work.
+### 3. Navigation, workspace roots, recovery
 
 - Outline / go-to-symbol per document from the existing tree-sitter tree.
 - Tree-sitter folding for functions, blocks, and Markdown sections.
@@ -228,9 +252,7 @@ Acceptance: outline jump lands on the symbol line, folding hides the expected
 range, switching workspaces changes the explorer root and quick-open list,
 crash recovery restores a dirty buffer after a synthetic exit without save.
 
-### v0.1.6 — LSP MVP
-
-Goal: diagnostics and navigation from language servers.
+### 4. LSP MVP
 
 - Async LSP client with per-server lifecycle and document sync.
 - Diagnostics surfaced in the status bar and in the gutter.
@@ -246,9 +268,7 @@ popup, hover text, and a definition jump in tests or a scripted pty check.
 Risk: largest architectural change; write the client/lifecycle design before
 implementation. Keep completion optional so a missing server never blocks edits.
 
-### v0.1.7 — Git integration
-
-Goal: see repository state without leaving the editor.
+### 5. Git integration
 
 - Status markers in the gutter (modified/added/deleted lines).
 - Read-only diff view for the active file and a staged/unstaged list.
@@ -262,9 +282,7 @@ Acceptance: fixture repository shows correct markers, diff view opens without
 modifying files, staging changes the index, and every command reports git errors
 in the status bar.
 
-### v0.1.8 — Editing model expansion
-
-Goal: handle selection-heavy edits and long prose.
+### 6. Editing model expansion
 
 - Multi-cursor and column selection, including copy/cut/undo behavior.
 - Soft word wrap with correct cursor movement, hit-testing, and scroll.
@@ -282,31 +300,25 @@ tests, CRLF conversion round-trip, and non-UTF-8 rejection with a clear message.
 Risk: multi-cursor and wrap change invariants used by search, copy, mouse, and
 undo; land them behind small, tested steps rather than one change.
 
-### v0.1.9 — Lua extension host
+### 7. Lua extension host
 
 Goal: add a sandboxed extension layer on top of the Rust core. Lua language
-support already shipped in v0.1.3; this patch embeds the VM and host only. Lua
-does not replace the Rust core, the typed `Command` dispatch, or the TOML
-configuration; scripts only call a small host API.
+support already shipped in workstream 1; this part embeds the VM and host only.
 
 - Embed `mlua` (vendored Lua 5.4) and load `<config>/i3-editor/plugins/*.lua`.
 - API v1: `commands.register`, `keymap.set`, `events.on` (`open`, `save`,
   `change`, `focus`), `statusline.register`, and read-only editor queries (path,
-  language, cursor, selections). `selections` is always a list, even with one
-  cursor, so v0.1.8 does not change the contract. Scripts never receive mutable
-  editor state.
+  language, cursor, selections). `selections` is always a list.
 - Run callbacks on the UI thread with a time budget and no blocking I/O; long
-  work must dispatch a Rust command or task. Guard reentrancy (a command that
-  fires a hook that dispatches another command) with a depth limit.
+  work must dispatch a Rust command or task. Guard reentrancy with a depth limit.
 - Sandbox by default: no `io`, `os`, or `package`; capability opt-in for file and
-  process access. Isolate errors per plugin and report them through `messages`
-  with script `path:line`; disable a plugin after repeated failures.
-- Watch the plugin directory with the existing watcher; reloading a plugin
-  unregisters its commands, keymaps, hooks, and statusline segments first.
-- Keep TOML as the validated source of truth. An optional `init.lua` overlay is
-  out of scope for this patch and lands only after the API is stable.
-- Demo plugins for the repository (one keymap/command, one save hook, one
-  statusline segment) double as test fixtures.
+  process access. Isolate errors per plugin and report `path:line` through
+  `messages`; disable a plugin after repeated failures.
+- Watch the plugin directory; reloading a plugin unregisters its commands,
+  keymaps, hooks, and statusline segments first.
+- Keep TOML as the validated source of truth. `init.lua` overlay remains out of
+  scope.
+- Demo plugins (keymap/command, save hook, statusline) double as fixtures.
 
 Touches: new `src/lua/` (host + API), `src/command.rs` (registry hooks),
 `src/app/mod.rs` (dispatch/event integration), `src/watch.rs`,
@@ -314,21 +326,28 @@ Touches: new `src/lua/` (host + API), `src/command.rs` (registry hooks),
 
 Acceptance: a fixture script registers a command and keymap, a save hook writes a
 marker, a statusline segment renders, `editor.selections()` returns a list, a
-broken script reports `path:line` without crashing, plugin reload removes old
-handlers, and a callback that exceeds the time budget is reported and stopped.
+broken script reports `path:line` without crashing, reload removes old handlers,
+and a budget overflow is reported and stopped.
 
-Risk: API churn and sandbox escapes are the main risks. Version the API
-(`api_version`) from the first release, keep host capabilities narrow, and do not
-call Lua per frame. `mlua` is preferred for synchronous hooks; an external
-JSON-RPC plugin process remains the alternative if crash isolation becomes more
-important than latency.
+Risk: API churn and sandbox escapes. Version the API (`api_version`) from the
+first release, keep host capabilities narrow, and do not call Lua per frame.
 
-Dependencies: `mlua = "0.12"` with `lua54` and `vendored`. The `tree-sitter-lua`
-dependency already lands in v0.1.3.
+Dependencies: `mlua = "0.12"` with `lua54` and `vendored`. `tree-sitter-lua`
+already lands in workstream 1.
+
+### Overall acceptance for v0.1.3
+
+- Every workstream acceptance above passes.
+- `cargo fmt --check`, `cargo check`, `cargo test`,
+  `cargo clippy --all-targets --all-features` are clean.
+- `forgeguard gate --changed` reports no errors or warnings.
+- README, ARCHITECTURE, and this roadmap reflect the shipped features.
+- Only then: bump to 0.1.3, tag `v0.1.3`, push, and verify four release assets.
 
 ### Unscoped backlog
 
-Recorded so the next planning session does not rescan; no version assigned.
+Recorded so the next planning session does not rescan. These are **not** part of
+v0.1.3 unless explicitly promoted into a workstream above.
 
 - File operations: duplicate, copy path, reveal in terminal.
 - Terminal polish: rename tabs, per-workspace starting directory.
@@ -347,4 +366,4 @@ cargo clippy --all-targets --all-features
 cargo run -- --dump-keymap
 ```
 
-Last recorded run: `cargo test` → 231 passed, `cargo clippy` → 0 warnings.
+Last recorded run: `cargo test` → 248 passed, `cargo clippy` → 0 warnings.

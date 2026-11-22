@@ -66,6 +66,7 @@ pub enum Language {
     Shell,
     Toml,
     Json,
+    Lua,
     Markdown,
     #[default]
     Unknown,
@@ -86,6 +87,7 @@ impl Language {
             "sh" | "bash" | "zsh" => Language::Shell,
             "toml" => Language::Toml,
             "json" => Language::Json,
+            "lua" => Language::Lua,
             "md" | "markdown" => Language::Markdown,
             _ => Language::Unknown,
         }
@@ -103,6 +105,7 @@ impl Language {
             "shell" | "sh" | "bash" | "zsh" => Language::Shell,
             "toml" => Language::Toml,
             "json" => Language::Json,
+            "lua" => Language::Lua,
             "markdown" | "md" => Language::Markdown,
             _ => Language::Unknown,
         }
@@ -120,7 +123,7 @@ impl Language {
         )
     }
 
-    fn line_comment(self) -> Option<&'static str> {
+    pub fn line_comment(self) -> Option<&'static str> {
         match self {
             Language::Rust
             | Language::JavaScript
@@ -128,6 +131,7 @@ impl Language {
             | Language::Go
             | Language::C => Some("//"),
             Language::Python | Language::Shell | Language::Toml => Some("#"),
+            Language::Lua => Some("--"),
             _ => None,
         }
     }
@@ -141,6 +145,7 @@ impl Language {
             Language::C => C_KEYWORDS,
             Language::Shell => SHELL_KEYWORDS,
             Language::Toml | Language::Json | Language::Markdown | Language::Unknown => &[],
+            Language::Lua => LUA_KEYWORDS,
         }
     }
 
@@ -154,8 +159,22 @@ impl Language {
             Language::Shell => ch == '"' || ch == '\'',
             Language::Toml => ch == '"' || ch == '\'',
             Language::Json => ch == '"',
+            Language::Lua => ch == '"' || ch == '\'',
             Language::Markdown => ch == '`',
             Language::Unknown => false,
+        }
+    }
+
+    pub fn block_comment(self) -> Option<(&'static str, &'static str)> {
+        match self {
+            Language::Rust
+            | Language::JavaScript
+            | Language::TypeScript
+            | Language::Go
+            | Language::C => Some(("/*", "*/")),
+            Language::Lua => Some(("--[[", "]]")),
+            Language::Markdown => Some(("<!--", "-->")),
+            _ => None,
         }
     }
 
@@ -263,6 +282,10 @@ const C_KEYWORDS: &[&str] = &[
     "enum", "extern", "float", "for", "goto", "if", "inline", "int", "long", "register", "return",
     "short", "signed", "sizeof", "static", "struct", "switch", "typedef", "union", "unsigned",
     "void", "volatile", "while",
+];
+const LUA_KEYWORDS: &[&str] = &[
+    "and", "break", "do", "else", "elseif", "end", "false", "for", "function", "goto", "if", "in",
+    "local", "nil", "not", "or", "repeat", "return", "then", "true", "until", "while",
 ];
 const SHELL_KEYWORDS: &[&str] = &[
     "case", "do", "done", "elif", "else", "esac", "fi", "for", "function", "if", "in", "local",

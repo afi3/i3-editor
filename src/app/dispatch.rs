@@ -97,6 +97,10 @@ impl App {
             Command::DeleteForward => self.delete_forward()?,
             Command::MoveCursor(movement) => self.move_cursor(movement, false)?,
             Command::ExtendSelection(movement) => self.move_cursor(movement, true)?,
+            Command::MoveLinesUp => self.move_lines(-1)?,
+            Command::MoveLinesDown => self.move_lines(1)?,
+            Command::DeleteLine => self.delete_line()?,
+            Command::ToggleComment => self.toggle_comment()?,
             other => return Ok(Some(other)),
         }
         Ok(None)

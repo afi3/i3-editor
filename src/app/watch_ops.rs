@@ -23,6 +23,23 @@ impl App {
         if paths.is_empty() {
             return;
         }
+        let config_path = self.state.config_path.clone();
+        let config_dir = config_path
+            .as_ref()
+            .and_then(|path| path.parent())
+            .map(std::path::Path::to_path_buf);
+        let config_changed = config_path
+            .as_ref()
+            .is_some_and(|config| paths.iter().any(|path| same_path(path, config)));
+        if config_changed {
+            self.reload_config();
+        }
+        if let Some(dir) = config_dir {
+            paths.retain(|path| path.parent() != Some(dir.as_path()));
+        }
+        if paths.is_empty() {
+            return;
+        }
         paths.sort();
         paths.dedup();
 

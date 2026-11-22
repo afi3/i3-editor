@@ -130,6 +130,36 @@ impl History {
         self.last_edit = Some(Instant::now());
     }
 
+    /// One undo step for a remove followed by an insert at the same place.
+    pub fn record_replace(
+        &mut self,
+        char_idx: usize,
+        removed: &str,
+        inserted: &str,
+        cursor_before: usize,
+        cursor_after: usize,
+        scroll_before: (usize, u16),
+    ) {
+        self.push_batch(Batch {
+            edits: vec![
+                Edit::Remove {
+                    char_idx,
+                    text: removed.to_string(),
+                },
+                Edit::Insert {
+                    char_idx,
+                    text: inserted.to_string(),
+                },
+            ],
+            cursor_before,
+            cursor_after,
+            scroll_before,
+            id: self.next_id,
+            parent: self.current,
+        });
+        self.last_edit = None;
+    }
+
     pub fn record_remove(
         &mut self,
         char_idx: usize,

@@ -23,6 +23,13 @@ pub struct TabHit {
 }
 
 #[derive(Debug, Clone)]
+pub struct WorkspaceHit {
+    pub start: u16,
+    pub end: u16,
+    pub index: usize,
+}
+
+#[derive(Debug, Clone)]
 pub struct TabBar {
     pub path: Vec<usize>,
     pub rect: Rect,
@@ -40,6 +47,7 @@ pub struct UiState {
     pub status: Rect,
     pub message: String,
     pub tab_bars: Vec<TabBar>,
+    pub workspace_hits: Vec<WorkspaceHit>,
 }
 
 /// Pane rectangles for the current layout. A fullscreen pane replaces the whole
@@ -188,6 +196,24 @@ pub fn compute_layout(state: &mut AppState, area: Rect) {
     state.ui.shell = shell;
     refresh_panes(state);
     state.ui.workspace_bar = workspace_bar;
+    state.ui.workspace_hits.clear();
+    if workspace_bar.height > 0 {
+        let right = workspace_bar.x.saturating_add(workspace_bar.width);
+        let mut start = workspace_bar.x;
+        for (index, workspace) in state.workspaces.workspaces.iter().enumerate() {
+            if start >= right {
+                break;
+            }
+            let label = format!(" {}:{} ", index + 1, workspace.name);
+            let width = crate::editor::text::cells(&label, 4, 0);
+            let end = start.saturating_add(width).min(right);
+            state
+                .ui
+                .workspace_hits
+                .push(WorkspaceHit { start, end, index });
+            start = end;
+        }
+    }
     state.ui.explorer = explorer;
     state.ui.status = status;
 }
@@ -627,6 +653,38 @@ mod tests {
             buffer[(x + 17, y + 1)].fg,
             theme.syntax.keyword,
             "text after the closing marker is highlighted again"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn matching_brackets_are_emphasized() {
+        use ratatui::style::Modifier;
+
+        let (mut state, dir) = state("f(a)\n");
+        state.panes.get_mut(&PaneId(1)).expect("pane").cursor = 1;
+        let buffer = draw_buffer(&mut state, 80, 24);
+        let rect = state.ui.pane_rects[&PaneId(1)];
+        let geometry = {
+            let pane = state.panes.get(&PaneId(1)).expect("pane");
+            let document = state.documents.get(&DocumentId(1)).expect("document");
+            crate::ui::pane::text_geometry(&state, pane, document, rect).expect("geometry")
+        };
+        let x = geometry.area.x + geometry.gutter;
+        let y = geometry.area.y;
+        assert!(
+            buffer[(x + 1, y)]
+                .modifier
+                .contains(Modifier::BOLD | Modifier::UNDERLINED),
+            "opening bracket: {:?}",
+            buffer[(x + 1, y)]
+        );
+        assert!(
+            buffer[(x + 3, y)]
+                .modifier
+                .contains(Modifier::BOLD | Modifier::UNDERLINED),
+            "closing bracket: {:?}",
+            buffer[(x + 3, y)]
         );
         std::fs::remove_dir_all(&dir).ok();
     }

@@ -117,6 +117,7 @@ impl KeyMap {
             bind(scope, "ctrl+f", Command::FindPrompt);
             bind(scope, "ctrl+r", Command::ReplacePrompt);
             bind(scope, "ctrl+d", Command::DuplicateLine);
+            bind(scope, "ctrl+t", Command::ToggleComment);
             bind(
                 scope,
                 "ctrl+shift+left",
@@ -157,6 +158,11 @@ impl KeyMap {
             bind(scope, "d", Command::ExplorerDelete);
             bind(scope, "h", Command::ExplorerToggleHidden);
             bind(scope, "ctrl+r", Command::ExplorerRefresh);
+        }
+        if !safe {
+            let scope = &mut map.editing;
+            bind(scope, "alt+up", Command::MoveLinesUp);
+            bind(scope, "alt+down", Command::MoveLinesDown);
         }
         map
     }

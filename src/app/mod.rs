@@ -1,8 +1,11 @@
 //! Application coordinator: event loop, key routing, pane lifecycle.
 
+pub mod comment;
+pub mod config_ops;
 pub mod cursor;
 pub mod dispatch;
 pub mod editing;
+pub mod lines;
 pub mod mouse;
 pub mod project_search;
 pub mod prompt;
@@ -35,6 +38,8 @@ impl App {
             watcher: None,
             quick_open_files: None,
             project_task: None,
+            selecting: None,
+            enhanced: false,
         }
     }
 }
@@ -71,6 +76,10 @@ pub struct App {
     pub(crate) quick_open_files: Option<(u64, Vec<String>)>,
     /// Running Find in Files scan, if any.
     pub(crate) project_task: Option<crate::project_search::Task>,
+    /// Pane whose text is being selected by a mouse drag.
+    pub(crate) selecting: Option<crate::state::PaneId>,
+    /// Probe result, reused when the config is reloaded.
+    pub(crate) enhanced: bool,
 }
 
 impl App {
@@ -129,29 +138,19 @@ impl App {
             moving: false,
             terminals: crate::shell::Terminals::default(),
             themes_dir,
-            config_path,
+            config_path: config_path.clone(),
         };
         state.warnings.extend(key_warnings);
         state.warnings.extend(theme_warnings);
-        if !enhanced {
-            let unavailable = KeyMap::unavailable_without_enhancement();
-            let names = if unavailable.is_empty() {
-                "none".to_string()
-            } else {
-                unavailable.join(", ")
-            };
-            state.warnings.insert(
-                0,
-                format!(
-                    "keyboard enhancement unavailable; safe bindings active; unavailable: {names}; palette: next_workspace, prev_workspace"
-                ),
-            );
+        if let Some(message) = capability_warning(enhanced) {
+            state.warnings.insert(0, message);
         }
         if restore_session {
             let session_warnings = crate::session::restore(&mut state);
             state.warnings.extend(session_warnings);
         }
-        let watcher = match crate::watch::Watcher::new(&state.explorer.root) {
+        let watcher = match crate::watch::Watcher::new(&state.explorer.root, config_path.as_deref())
+        {
             Ok(watcher) => Some(watcher),
             Err(error) => {
                 state
@@ -170,6 +169,8 @@ impl App {
             watcher,
             quick_open_files: None,
             project_task: None,
+            selecting: None,
+            enhanced: false,
         };
         if let Some(path) = file {
             app.open_document(path)?;
@@ -226,7 +227,7 @@ impl App {
                 Ok(())
             }
             Focus::Explorer => Ok(()),
-            Focus::Pane(_) => self.insert_text(&text),
+            Focus::Pane(_) => self.dispatch(Command::InsertText(text)),
         }
     }
 
@@ -299,7 +300,7 @@ impl App {
                 .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
             && let KeyCode::Char(ch) = key.code
         {
-            let result = self.dispatch(Command::InsertText(ch.to_string()));
+            let result = self.insert_typed_char(ch);
             self.finish(result);
         }
     }
@@ -393,6 +394,21 @@ impl App {
         self.state.focus = Focus::Pane(target);
         Ok(target)
     }
+}
+
+fn capability_warning(enhanced: bool) -> Option<String> {
+    if enhanced {
+        return None;
+    }
+    let unavailable = KeyMap::unavailable_without_enhancement();
+    let names = if unavailable.is_empty() {
+        "none".to_string()
+    } else {
+        unavailable.join(", ")
+    };
+    Some(format!(
+        "keyboard enhancement unavailable; safe bindings active; unavailable: {names}; palette: next_workspace, prev_workspace"
+    ))
 }
 
 /// First warning plus a pointer to the rest; the `messages` palette command

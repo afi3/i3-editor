@@ -79,6 +79,11 @@ static GRAMMARS: LazyLock<HashMap<Language, Grammar>> = LazyLock::new(|| {
         tree_sitter_json::HIGHLIGHTS_QUERY,
     );
     add(
+        Language::Lua,
+        tree_sitter_lua::LANGUAGE.into(),
+        tree_sitter_lua::HIGHLIGHTS_QUERY,
+    );
+    add(
         Language::Toml,
         tree_sitter_toml_ng::LANGUAGE.into(),
         tree_sitter_toml_ng::HIGHLIGHTS_QUERY,
@@ -665,6 +670,7 @@ mod tests {
             Language::Shell,
             Language::Toml,
             Language::Json,
+            Language::Lua,
             Language::Markdown,
         ] {
             assert!(supports(language), "{language:?}");

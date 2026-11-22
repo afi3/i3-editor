@@ -16,12 +16,17 @@ pub struct Watcher {
 }
 
 impl Watcher {
-    pub fn new(root: &Path) -> notify::Result<Self> {
+    /// Watch the workspace root recursively. When `config` is given, its parent
+    /// directory is watched non-recursively so atomic config saves are seen.
+    pub fn new(root: &Path, config: Option<&Path>) -> notify::Result<Self> {
         let (sender, events) = mpsc::channel();
         let mut watcher = notify::recommended_watcher(move |event| {
             let _ = sender.send(event);
         })?;
         watcher.watch(root, RecursiveMode::Recursive)?;
+        if let Some(parent) = config.and_then(Path::parent) {
+            let _ = watcher.watch(parent, RecursiveMode::NonRecursive);
+        }
         Ok(Self {
             _watcher: watcher,
             events,

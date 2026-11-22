@@ -183,6 +183,10 @@ pub fn render(
     }
 
     if focused {
+        highlight_brackets(frame, pane, document, text_area, gutter, tab_width);
+    }
+
+    if focused {
         let line = document.line_of_char(pane.cursor);
         let line_start = document.char_of_line(line);
         let text = document.line_text(line);
@@ -228,6 +232,41 @@ fn render_tabs(frame: &mut Frame, state: &AppState, pane: &Pane, area: Rect) {
         ));
     }
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+
+fn highlight_brackets(
+    frame: &mut ratatui::Frame,
+    pane: &Pane,
+    document: &crate::editor::document::Document,
+    text_area: Rect,
+    gutter: u16,
+    tab_width: usize,
+) {
+    let Some((first, second)) = textutil::matching_bracket(&document.rope, pane.cursor) else {
+        return;
+    };
+    let buffer = frame.buffer_mut();
+    for position in [first, second] {
+        let line = document.line_of_char(position);
+        if line < pane.scroll_top || line >= pane.scroll_top + usize::from(text_area.height) {
+            continue;
+        }
+        let line_start = document.char_of_line(line);
+        let text = document.line_text(line);
+        let column = textutil::cells_prefix(&text, position.saturating_sub(line_start), tab_width);
+        if column < pane.scroll_left {
+            continue;
+        }
+        let x = text_area
+            .x
+            .saturating_add(gutter)
+            .saturating_add(column - pane.scroll_left);
+        if x >= text_area.x.saturating_add(text_area.width) {
+            continue;
+        }
+        let y = text_area.y.saturating_add((line - pane.scroll_top) as u16);
+        buffer[(x, y)].modifier |= Modifier::BOLD | Modifier::UNDERLINED;
+    }
 }
 
 #[allow(clippy::too_many_arguments)]

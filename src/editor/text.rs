@@ -60,6 +60,71 @@ pub fn prev_word(rope: &Rope, char_idx: usize) -> usize {
     idx
 }
 
+/// Matching bracket for the bracket at, or immediately before, the cursor.
+/// Scanning is bounded so a pathological file cannot stall a frame.
+pub fn matching_bracket(rope: &Rope, cursor: usize) -> Option<(usize, usize)> {
+    let len = rope.len_chars();
+    if len == 0 {
+        return None;
+    }
+    let position = if is_bracket(rope.char(cursor.min(len - 1))) {
+        cursor.min(len - 1)
+    } else if cursor > 0 && is_bracket(rope.char(cursor - 1)) {
+        cursor - 1
+    } else {
+        return None;
+    };
+    match rope.char(position) {
+        '(' => scan_forward(rope, position, '(', ')'),
+        ')' => scan_backward(rope, position, '(', ')'),
+        '[' => scan_forward(rope, position, '[', ']'),
+        ']' => scan_backward(rope, position, '[', ']'),
+        '{' => scan_forward(rope, position, '{', '}'),
+        '}' => scan_backward(rope, position, '{', '}'),
+        _ => None,
+    }
+}
+
+const BRACKET_SCAN_LIMIT: usize = 10_000;
+
+fn scan_forward(rope: &Rope, position: usize, open: char, close: char) -> Option<(usize, usize)> {
+    let mut depth = 0usize;
+    let end = (position + 1 + BRACKET_SCAN_LIMIT).min(rope.len_chars());
+    for index in position + 1..end {
+        let ch = rope.char(index);
+        if ch == open {
+            depth += 1;
+        } else if ch == close {
+            if depth == 0 {
+                return Some((position, index));
+            }
+            depth -= 1;
+        }
+    }
+    None
+}
+
+fn scan_backward(rope: &Rope, position: usize, open: char, close: char) -> Option<(usize, usize)> {
+    let mut depth = 0usize;
+    let start = position.saturating_sub(BRACKET_SCAN_LIMIT);
+    for index in (start..position).rev() {
+        let ch = rope.char(index);
+        if ch == close {
+            depth += 1;
+        } else if ch == open {
+            if depth == 0 {
+                return Some((index, position));
+            }
+            depth -= 1;
+        }
+    }
+    None
+}
+
+fn is_bracket(ch: char) -> bool {
+    matches!(ch, '(' | ')' | '[' | ']' | '{' | '}')
+}
+
 pub fn next_word(rope: &Rope, char_idx: usize) -> usize {
     let len = rope.len_chars();
     let mut idx = char_idx;
@@ -212,5 +277,15 @@ mod tests {
         assert_eq!(clip("abcdef", 2, 3, 4), "cde");
         assert_eq!(clip("\tab", 1, 2, 4), "  ");
         assert_eq!(clip("abc", 5, 3, 4), "");
+    }
+
+    #[test]
+    fn matching_bracket_handles_nesting_and_both_sides() {
+        let rope = Rope::from_str("f(a(b)c)d");
+        assert_eq!(matching_bracket(&rope, 1), Some((1, 7)));
+        assert_eq!(matching_bracket(&rope, 5), Some((3, 5)));
+        assert_eq!(matching_bracket(&rope, 2), Some((1, 7)));
+        assert_eq!(matching_bracket(&rope, 0), None);
+        assert_eq!(matching_bracket(&Rope::from_str("("), 0), None);
     }
 }

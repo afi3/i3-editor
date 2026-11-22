@@ -52,6 +52,10 @@ pub enum Command {
     Cut,
     Paste,
     DuplicateLine,
+    MoveLinesUp,
+    MoveLinesDown,
+    DeleteLine,
+    ToggleComment,
     InsertText(String),
     InsertTab,
     InsertNewline,
@@ -176,6 +180,12 @@ impl Command {
             Command::DeleteForward => ("delete_forward", "Delete forwards"),
             Command::MoveCursor(_) => ("move_cursor", "Move the cursor"),
             Command::ExtendSelection(_) => ("extend_selection", "Extend the selection"),
+            Command::MoveLinesUp => ("move_lines_up", "Move the current line or selection up"),
+            Command::MoveLinesDown => {
+                ("move_lines_down", "Move the current line or selection down")
+            }
+            Command::DeleteLine => ("delete_line", "Delete the current line"),
+            Command::ToggleComment => ("toggle_comment", "Toggle comments for the selection"),
             _ => return None,
         })
     }
@@ -281,6 +291,10 @@ impl Command {
             Command::Cut,
             Command::Paste,
             Command::DuplicateLine,
+            Command::MoveLinesUp,
+            Command::MoveLinesDown,
+            Command::DeleteLine,
+            Command::ToggleComment,
             Command::SplitLeftRight,
             Command::SplitTopBottom,
             Command::ClosePane,
@@ -373,6 +387,10 @@ mod tests {
             Command::Cut,
             Command::Paste,
             Command::DuplicateLine,
+            Command::MoveLinesUp,
+            Command::MoveLinesDown,
+            Command::DeleteLine,
+            Command::ToggleComment,
             Command::InsertText("x".to_string()),
             Command::InsertTab,
             Command::InsertNewline,
