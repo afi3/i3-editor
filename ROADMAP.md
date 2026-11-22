@@ -265,6 +265,57 @@ tests, CRLF conversion round-trip, and non-UTF-8 rejection with a clear message.
 Risk: multi-cursor and wrap change invariants used by search, copy, mouse, and
 undo; land them behind small, tested steps rather than one change.
 
+### v0.1.9 — Lua language and extension host
+
+Goal: make Lua a first-class language and a sandboxed extension layer. Lua does
+not replace the Rust core, the typed `Command` dispatch, or the TOML
+configuration; scripts only call a small host API.
+
+Stage A — language support (no VM, can ship alone):
+
+- Add `tree-sitter-lua` and `Language::Lua`: extension mapping, highlight query,
+  and `lua` as a Markdown fence language.
+- Acceptance: a `.lua` fixture highlights keywords, strings, comments, and
+  numbers; a fenced `lua` block uses the grammar; an unknown fence stays plain.
+
+Stage B — extension host:
+
+- Embed `mlua` (vendored Lua 5.4) and load `<config>/i3-editor/plugins/*.lua`.
+- API v1: `commands.register`, `keymap.set`, `events.on` (`open`, `save`,
+  `change`, `focus`), `statusline.register`, and read-only editor queries (path,
+  language, cursor, selection). Scripts never receive mutable editor state.
+- Run callbacks on the UI thread with a time budget and no blocking I/O; long
+  work must dispatch a Rust command or task. Guard reentrancy (a command that
+  fires a hook that dispatches another command) with a depth limit.
+- Sandbox by default: no `io`, `os`, or `package`; capability opt-in for file and
+  process access. Isolate errors per plugin and report them through `messages`
+  with script `path:line`; disable a plugin after repeated failures.
+- Watch the plugin directory with the existing watcher; reloading a plugin
+  unregisters its commands, keymaps, hooks, and statusline segments first.
+- Keep TOML as the validated source of truth. An optional `init.lua` overlay is
+  out of scope for this patch and lands only after the API is stable.
+- Demo plugins for the repository (one keymap/command, one save hook, one
+  statusline segment) double as test fixtures.
+
+Touches: `src/syntax/mod.rs`, `src/syntax/tree.rs`, new `src/lua/` (host + API),
+`src/command.rs` (registry hooks), `src/app/mod.rs` (dispatch/event integration),
+`src/watch.rs`, `src/config/mod.rs`, `src/ui/mod.rs` (statusline segments),
+`Cargo.toml`.
+
+Acceptance: a fixture script registers a command and keymap, a save hook writes a
+marker, a statusline segment renders, a broken script reports `path:line` without
+crashing, plugin reload removes old handlers, and a callback that exceeds the
+time budget is reported and stopped.
+
+Risk: API churn and sandbox escapes are the main risks. Version the API
+(`api_version`) from the first release, keep host capabilities narrow, and do not
+call Lua per frame. `mlua` is preferred for synchronous hooks; an external
+JSON-RPC plugin process remains the alternative if crash isolation becomes more
+important than latency.
+
+Dependencies: `tree-sitter-lua = "0.5"`, `mlua = "0.12"` with `lua54` and
+`vendored`.
+
 ### Unscoped backlog
 
 Recorded so the next planning session does not rescan; no version assigned.
