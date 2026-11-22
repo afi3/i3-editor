@@ -373,6 +373,53 @@ fn relative_path(repo: &Path, path: &Path) -> Option<String> {
         .map(|path| path.to_string_lossy().into_owned())
 }
 
+/// Fast-forward the current branch from its upstream. Refuses a dirty index or
+/// worktree so a pull cannot create a merge/conflict state.
+pub fn pull(binary: &str, repo: &Path) -> Result<String, String> {
+    ensure_clean(binary, repo)?;
+    ensure_upstream(binary, repo)?;
+    let output = run(binary, repo, &["pull", "--ff-only", "--no-rebase"])?;
+    Ok(summary(&output, "already up to date"))
+}
+
+/// Push the current branch to its configured upstream. Credential helpers and
+/// SSH agents work; terminal prompts are disabled because the UI owns stdin.
+pub fn push(binary: &str, repo: &Path) -> Result<String, String> {
+    ensure_upstream(binary, repo)?;
+    let output = run(binary, repo, &["push"])?;
+    Ok(summary(&output, "pushed"))
+}
+
+fn ensure_clean(binary: &str, repo: &Path) -> Result<(), String> {
+    let unstaged = run(binary, repo, &["diff", "--quiet"]).is_err();
+    let staged = run(binary, repo, &["diff", "--cached", "--quiet"]).is_err();
+    if unstaged || staged {
+        return Err(
+            "working tree has uncommitted changes; commit or stash them before pulling".to_string(),
+        );
+    }
+    Ok(())
+}
+
+fn ensure_upstream(binary: &str, repo: &Path) -> Result<(), String> {
+    run(
+        binary,
+        repo,
+        &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+    )
+    .map(|_| ())
+    .map_err(|_| "no upstream branch; set one with: git push -u origin <branch>".to_string())
+}
+
+fn summary(output: &str, fallback: &str) -> String {
+    output
+        .lines()
+        .rev()
+        .find(|line| !line.trim().is_empty())
+        .map(|line| line.trim().to_string())
+        .unwrap_or_else(|| fallback.to_string())
+}
+
 fn run(binary: &str, cwd: &Path, args: &[&str]) -> Result<String, String> {
     let output = Command::new(binary)
         .args(args)
@@ -415,6 +462,8 @@ mod tests {
         let status = Command::new("git")
             .args(args)
             .current_dir(dir)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
             .status()
             .expect("git");
         assert!(status.success(), "git {args:?}");
@@ -527,6 +576,81 @@ mod tests {
         );
         let log = log("git", &dir, 10).expect("log");
         assert!(log.iter().any(|line| line.contains("base")), "{log:?}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn pull_and_push_round_trip_through_a_bare_remote() {
+        let root = std::env::temp_dir().join(format!("i3-git-net-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("root");
+        let remote = root.join("remote.git");
+        std::fs::create_dir_all(&remote).expect("remote");
+        git(&remote, &["init", "--bare", "-q"]);
+
+        let one = root.join("one");
+        std::fs::create_dir_all(&one).expect("one");
+        git(&one, &["init", "-q"]);
+        git(&one, &["config", "user.email", "test@example.com"]);
+        git(&one, &["config", "user.name", "Test"]);
+        std::fs::write(one.join("a.txt"), "one\n").expect("seed");
+        git(&one, &["add", "."]);
+        git(&one, &["commit", "-q", "-m", "base"]);
+        let branch = branch("git", &one).expect("branch");
+        git(
+            &one,
+            &["remote", "add", "origin", &remote.to_string_lossy()],
+        );
+        git(&one, &["push", "-u", "origin", &branch]);
+
+        let two = root.join("two");
+        let clone = Command::new("git")
+            .args([
+                "clone",
+                "-q",
+                &remote.to_string_lossy(),
+                &two.to_string_lossy(),
+            ])
+            .current_dir(&root)
+            .status()
+            .expect("clone");
+        assert!(clone.success());
+        git(&two, &["config", "user.email", "test@example.com"]);
+        git(&two, &["config", "user.name", "Test"]);
+        std::fs::write(two.join("a.txt"), "two\n").expect("edit");
+        git(&two, &["add", "."]);
+        git(&two, &["commit", "-q", "-m", "remote change"]);
+        git(&two, &["push"]);
+
+        pull("git", &one).expect("pull");
+        assert_eq!(
+            std::fs::read_to_string(one.join("a.txt")).expect("read"),
+            "two\n"
+        );
+
+        std::fs::write(one.join("a.txt"), "three\n").expect("edit");
+        git(&one, &["add", "."]);
+        git(&one, &["commit", "-q", "-m", "local change"]);
+        push("git", &one).expect("push");
+        let log = Command::new("git")
+            .args(["log", "-1", "--pretty=%s"])
+            .current_dir(&remote)
+            .output()
+            .expect("remote log");
+        assert_eq!(String::from_utf8_lossy(&log.stdout).trim(), "local change");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn pull_refuses_a_dirty_worktree() {
+        let dir = repo("pull-dirty");
+        let file = dir.join("a.txt");
+        std::fs::write(&file, "one\n").expect("seed");
+        git(&dir, &["add", "."]);
+        git(&dir, &["commit", "-q", "-m", "base"]);
+        std::fs::write(&file, "two\n").expect("edit");
+        let error = pull("git", &dir).expect_err("dirty pull");
+        assert!(error.contains("uncommitted changes"), "{error}");
         std::fs::remove_dir_all(&dir).ok();
     }
 

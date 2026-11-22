@@ -389,6 +389,12 @@ no library dependency. The active workspace root must be inside a work tree.
   applies the selected hunk to the index (or removes it with `--reverse`), and
   `Esc`/`q` closes. An untracked file has no applicable hunk context, so staging
   a hunk stages the whole file.
+- `git_pull` fast-forwards the current branch from its upstream. It refuses a
+  dirty index/worktree or any unsaved editor buffer before running, and uses
+  `--ff-only` so it never creates a merge or conflict state.
+- `git_push` pushes the current branch to its configured upstream. Terminal
+  credential prompts stay disabled; SSH agents and credential helpers work. A
+  missing upstream or rejected push is reported in the status bar.
 - Every failure (not a repository, nothing staged, git missing) is reported in
   the status bar.
 
@@ -791,7 +797,7 @@ every check.
   the plugin directory changes or the editor restarts.
 - Soft wrap computes rows from the cursor's line and its neighbours instead of
   rescanning the document, so `Up`/`Down` stay bounded by the viewport.
-- Git is read-only beyond the index: no push/pull or conflict UI. Untracked
+- Git pull is fast-forward-only and there is no merge or conflict UI. Untracked
   files are marked as all-added; binary files have no line markers, and markers
   can lag by up to one second.
 - The LSP client uses full-text sync instead of incremental ranges; timed-out

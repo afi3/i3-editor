@@ -126,6 +126,8 @@ impl App {
             Command::GitStatus => self.git_status()?,
             Command::GitDiff => self.git_diff()?,
             Command::GitLog => self.git_log()?,
+            Command::GitPull => self.git_pull()?,
+            Command::GitPush => self.git_push()?,
             Command::GitStage => self.git_stage()?,
             Command::GitUnstage => self.git_unstage()?,
             Command::GitStageHunk => self.git_hunk_picker(true)?,

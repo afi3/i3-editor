@@ -119,6 +119,51 @@ impl App {
         Ok(())
     }
 
+    pub(crate) fn git_push(&mut self) -> Result<()> {
+        let binary = self.state.config.git.binary.clone();
+        let repo = git::discover(&binary, &self.state.explorer.root)
+            .ok_or_else(|| Error::Git("not a git repository".to_string()))?;
+        let summary = git::push(&binary, &repo).map_err(Error::Git)?;
+        self.notify(summary);
+        self.refresh_git_marks();
+        Ok(())
+    }
+
+    pub(crate) fn git_pull(&mut self) -> Result<()> {
+        let dirty = self
+            .state
+            .documents
+            .values()
+            .find(|document| document.dirty)
+            .map(|document| document.display_name());
+        if let Some(name) = dirty {
+            self.notify(format!(
+                "{name} has unsaved changes; save or discard before pulling"
+            ));
+            return Ok(());
+        }
+        let binary = self.state.config.git.binary.clone();
+        let repo = git::discover(&binary, &self.state.explorer.root)
+            .ok_or_else(|| Error::Git("not a git repository".to_string()))?;
+        let summary = git::pull(&binary, &repo).map_err(Error::Git)?;
+        self.state.explorer.refresh();
+        let reload: Vec<DocumentId> = self
+            .state
+            .documents
+            .iter()
+            .filter(|(_, document)| {
+                !document.dirty && document.path.is_some() && document.disk_changed()
+            })
+            .map(|(id, _)| *id)
+            .collect();
+        for id in reload {
+            let _ = self.reload_document(id);
+        }
+        self.refresh_git_marks();
+        self.notify(summary);
+        Ok(())
+    }
+
     pub(crate) fn git_stage(&mut self) -> Result<()> {
         let (repo, relative) = self.active_git_file()?;
         let binary = self.state.config.git.binary.clone();

@@ -275,13 +275,17 @@ four platform assets are the release milestone.
   with `Esc`/`q`.
 - `git_log` shows the current branch, local branches, and the latest 50 commits
   in the read-only overlay, including the unborn/no-commit state.
+- `git_pull` fast-forwards from upstream with `--ff-only` and refuses dirty
+  index/worktree or unsaved editor buffers. `git_push` pushes the current branch
+  to its upstream with terminal prompts disabled.
 - Tests cover a two-hunk stage/unstage round trip, the rendered picker, branch
-  and log helpers, and the app overlay.
+  and log helpers, the app overlay, a local bare-remote pull/push round trip, and
+  dirty-pull refusal.
 
-Verification: `cargo test` (336), `cargo fmt --check`,
+Verification: `cargo test` (339), `cargo fmt --check`,
 `cargo clippy --all-targets --all-features`.
 
-Remaining Git depth: pull/push and conflict UI.
+Remaining Git depth: conflict UI.
 
 Policy that applied during the cycle:
 
@@ -584,4 +588,4 @@ cargo clippy --all-targets --all-features
 cargo run -- --dump-keymap
 ```
 
-Last recorded run: `cargo test` → 336 passed, `cargo clippy` → 0 warnings.
+Last recorded run: `cargo test` → 339 passed, `cargo clippy` → 0 warnings.

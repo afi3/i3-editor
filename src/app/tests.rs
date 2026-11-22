@@ -2626,6 +2626,31 @@ fn git_log_overlay_shows_branch_branches_and_commits() {
 }
 
 #[test]
+fn git_pull_refuses_unsaved_buffers_before_touching_git() {
+    use std::process::Command as Process;
+
+    if Process::new("git").arg("--version").output().is_err() {
+        return;
+    }
+    let (mut app, dir) = fixture("one\n");
+    let status = Process::new("git")
+        .args(["init", "-q"])
+        .current_dir(&dir)
+        .status()
+        .expect("git init");
+    assert!(status.success());
+    app.dispatch(Command::InsertText("edited ".to_string()))
+        .expect("dirty buffer");
+    app.dispatch(Command::GitPull).expect("pull refused");
+    assert!(
+        app.state.ui.message.contains("unsaved changes"),
+        "{}",
+        app.state.ui.message
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn git_markers_diff_staging_and_commit_work() {
     use std::process::Command as Process;
 

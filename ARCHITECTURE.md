@@ -292,7 +292,9 @@ headers and reuses the file header for each patch; `git_stage_hunk` feeds one
 patch to `git apply --cached`, and `git_unstage_hunk` adds `--reverse`. The hunk
 picker is a selectable overlay over that list. `git::branch`, `git::branches`,
 and `git::log` feed the read-only branch/log overlay; they handle detached HEAD
-and the unborn-repository case. `App::refresh_git_marks`
+and the unborn-repository case. `git::pull` refuses uncommitted changes and uses
+`--ff-only`; `git::push` uses the configured upstream. Both run with terminal
+prompts disabled. `App::refresh_git_marks`
 recomputes only documents shown in panes, once per second and after
 open/save/git actions. Every helper returns git's stderr/stdout on failure, which
 the command path puts in the status bar.
