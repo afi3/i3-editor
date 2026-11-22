@@ -143,6 +143,102 @@ pub fn next_word(rope: &Rope, char_idx: usize) -> usize {
     idx
 }
 
+/// One visual row of a document line. `start..end` are char offsets inside the
+/// line; a row with `start == 0` is the first row of the line.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct VisualRow {
+    pub line: usize,
+    pub start: usize,
+    pub end: usize,
+}
+
+/// Split one line into wrapped char ranges. Breaks prefer the last space in
+/// the row; a word longer than the width breaks at the cell limit.
+pub fn wrap_ranges(text: &str, width: u16, tab_width: usize) -> Vec<(usize, usize)> {
+    let chars: Vec<char> = text.chars().collect();
+    if chars.is_empty() {
+        return vec![(0, 0)];
+    }
+    let mut ranges = Vec::new();
+    let mut start = 0usize;
+    while start < chars.len() {
+        let (end, last_space) = scan_row(&chars, start, width, tab_width);
+        if end >= chars.len() {
+            ranges.push((start, chars.len()));
+            break;
+        }
+        let cut = last_space.filter(|cut| *cut > start).unwrap_or(end);
+        let cut = cut.max(start + 1);
+        ranges.push((start, cut));
+        start = cut;
+    }
+    ranges
+}
+
+fn scan_row(chars: &[char], start: usize, width: u16, tab_width: usize) -> (usize, Option<usize>) {
+    let width = width.max(1);
+    let tab = tab_width.max(1) as u16;
+    let mut cell = 0u16;
+    let mut end = start;
+    let mut last_space = None;
+    while end < chars.len() {
+        let ch = chars[end];
+        let advance = if ch == '\t' {
+            tab - (cell % tab)
+        } else {
+            unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0) as u16
+        };
+        if end > start && cell.saturating_add(advance) > width {
+            break;
+        }
+        cell = cell.saturating_add(advance);
+        end += 1;
+        if ch == ' ' {
+            last_space = Some(end);
+        }
+    }
+    (end, last_space)
+}
+
+/// Wrapped rows for `rows` display lines starting at `start_line`, skipping
+/// closed folds. `rows` is a hard stop; pass `usize::MAX` to cover the document.
+pub fn visual_rows(
+    document: &crate::editor::document::Document,
+    start_line: usize,
+    width: u16,
+    tab_width: usize,
+    rows: usize,
+) -> Vec<VisualRow> {
+    let mut out = Vec::new();
+    for line in start_line..document.line_count() {
+        if document.is_hidden(line) {
+            continue;
+        }
+        if push_visual_rows(document, line, width, tab_width, rows, &mut out) {
+            break;
+        }
+    }
+    out
+}
+
+fn push_visual_rows(
+    document: &crate::editor::document::Document,
+    line: usize,
+    width: u16,
+    tab_width: usize,
+    limit: usize,
+    out: &mut Vec<VisualRow>,
+) -> bool {
+    let text = document.line_text(line);
+    for (start, end) in wrap_ranges(&text, width, tab_width) {
+        out.push(VisualRow { line, start, end });
+        if out.len() >= limit {
+            return true;
+        }
+    }
+    false
+}
+
 /// Display cells for a text fragment, expanding tabs to the next tab stop.
 pub fn cells(text: &str, tab_width: usize, start_cell: u16) -> u16 {
     let mut cell = start_cell;

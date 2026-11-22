@@ -14,15 +14,23 @@ pub struct Workspace {
     pub layout: LayoutNode,
     /// Pane focus remembered when another workspace or the explorer takes over.
     pub focus: PaneId,
+    /// Explorer root and watcher scope for this workspace.
+    pub root: std::path::PathBuf,
 }
 
 impl Workspace {
-    pub fn new(id: WorkspaceId, name: impl Into<String>, pane: PaneId) -> Self {
+    pub fn new(
+        id: WorkspaceId,
+        name: impl Into<String>,
+        pane: PaneId,
+        root: std::path::PathBuf,
+    ) -> Self {
         Self {
             id,
             name: name.into(),
             layout: LayoutNode::Pane(pane),
             focus: pane,
+            root,
         }
     }
 }
@@ -79,8 +87,18 @@ mod tests {
 
     fn manager() -> WorkspaceManager {
         let mut manager = WorkspaceManager::default();
-        manager.push(Workspace::new(WorkspaceId(1), "one", PaneId(1)));
-        manager.push(Workspace::new(WorkspaceId(2), "two", PaneId(2)));
+        manager.push(Workspace::new(
+            WorkspaceId(1),
+            "one",
+            PaneId(1),
+            std::path::PathBuf::from("/tmp"),
+        ));
+        manager.push(Workspace::new(
+            WorkspaceId(2),
+            "two",
+            PaneId(2),
+            std::path::PathBuf::from("/tmp"),
+        ));
         manager
     }
 

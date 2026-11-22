@@ -70,6 +70,22 @@ impl Ids {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Cursor {
+    pub cursor: usize,
+    pub anchor: Option<usize>,
+}
+
+impl Cursor {
+    pub fn range(self) -> std::ops::Range<usize> {
+        match self.anchor {
+            Some(anchor) if anchor < self.cursor => anchor..self.cursor,
+            Some(anchor) if anchor > self.cursor => self.cursor..anchor,
+            _ => self.cursor..self.cursor,
+        }
+    }
+}
+
 /// One editor viewport. Cursor, selection, and scroll belong to the pane, never
 /// to the document, so two panes can show one buffer at different places.
 #[derive(Debug)]
@@ -82,6 +98,8 @@ pub struct Pane {
     pub scroll_top: usize,
     pub scroll_left: u16,
     pub target_col: Option<usize>,
+    /// Secondary cursors/selections, kept in no particular order.
+    pub extra: Vec<Cursor>,
 }
 
 impl Pane {
@@ -95,6 +113,7 @@ impl Pane {
             scroll_top: 0,
             scroll_left: 0,
             target_col: None,
+            extra: Vec::new(),
         }
     }
 
@@ -110,28 +129,163 @@ impl Pane {
         })
     }
 
+    /// Every cursor as a range: primary first, then secondary carets and
+    /// selections. Overlapping ranges are merged so an edit never applies twice
+    /// to one character.
+    pub fn edit_ranges(&self) -> Vec<Range<usize>> {
+        let mut ranges = Vec::with_capacity(self.extra.len() + 1);
+        ranges.push(match self.selection() {
+            Some(range) => range,
+            None => self.cursor..self.cursor,
+        });
+        ranges.extend(self.extra.iter().map(|cursor| cursor.range()));
+        ranges.sort_by_key(|range| (range.start, range.end));
+        let mut merged: Vec<Range<usize>> = Vec::with_capacity(ranges.len());
+        for range in ranges {
+            match merged.last_mut() {
+                Some(last) if range.start <= last.end => last.end = last.end.max(range.end),
+                _ => merged.push(range),
+            }
+        }
+        merged
+    }
+
+    /// Ranges that carry a real selection, for copy/cut.
+    pub fn selected_ranges(&self) -> Vec<Range<usize>> {
+        self.edit_ranges()
+            .into_iter()
+            .filter(|range| !range.is_empty())
+            .collect()
+    }
+
+    pub fn clear_extra(&mut self) {
+        self.extra.clear();
+    }
+
+    pub fn add_cursor(&mut self, cursor: usize) {
+        if cursor == self.cursor || self.extra.iter().any(|extra| extra.cursor == cursor) {
+            return;
+        }
+        self.extra.push(Cursor {
+            cursor,
+            anchor: None,
+        });
+    }
+
+    /// Rectangular selection: one range per line between `start` and `end`,
+    /// using the same character columns on every line.
+    pub fn column_selection(
+        &mut self,
+        document: &Document,
+        start_line: usize,
+        start_col: usize,
+        end_line: usize,
+        end_col: usize,
+    ) {
+        let last = document.line_count().saturating_sub(1);
+        let (first, last_line) = if start_line <= end_line {
+            (start_line.min(last), end_line.min(last))
+        } else {
+            (end_line.min(last), start_line.min(last))
+        };
+        let (left, right) = if start_col <= end_col {
+            (start_col, end_col)
+        } else {
+            (end_col, start_col)
+        };
+        self.extra.clear();
+        for line in first..=last_line {
+            let text = document.line_text(line);
+            let length = text.chars().count();
+            let anchor = document.char_of_line(line) + left.min(length);
+            let cursor = document.char_of_line(line) + right.min(length);
+            if line == first {
+                self.cursor = cursor;
+                self.anchor = Some(anchor);
+            } else {
+                self.extra.push(Cursor {
+                    cursor,
+                    anchor: Some(anchor),
+                });
+            }
+        }
+        self.target_col = None;
+    }
+
+    /// Place the primary cursor after a multi-selection edit and rebuild the
+    /// secondary carets. `ranges` are the merged, ascending edit ranges.
+    pub fn apply_edit_result(&mut self, ranges: &[Range<usize>], inserted: usize) {
+        let positions = cursors_after(ranges, inserted);
+        let Some((&last, rest)) = positions.split_last() else {
+            return;
+        };
+        self.cursor = last;
+        self.anchor = None;
+        self.extra = rest
+            .iter()
+            .map(|cursor| Cursor {
+                cursor: *cursor,
+                anchor: None,
+            })
+            .collect();
+        self.target_col = None;
+    }
+
     pub fn select_all(&mut self, document: &Document) {
         self.anchor = Some(0);
         self.cursor = document.rope.len_chars();
+        self.extra.clear();
     }
+}
+
+/// Final cursor positions for edits applied to `ranges` (ascending, merged)
+/// that insert `length` chars at each start. Selections are replaced, so each
+/// position lands after its own inserted text; earlier edits shift later ones.
+pub fn cursors_after(ranges: &[Range<usize>], length: usize) -> Vec<usize> {
+    let mut out = Vec::with_capacity(ranges.len());
+    let mut removed_before = 0usize;
+    for (index, range) in ranges.iter().enumerate() {
+        out.push(range.start + (index + 1) * length - removed_before);
+        removed_before += range.end - range.start;
+    }
+    out
 }
 
 /// Result set of the background project search.
 #[derive(Debug, Default)]
 pub struct ProjectSearch {
     pub query: String,
+    pub options: crate::search_options::Options,
     pub results: Vec<crate::project_search::Match>,
     pub truncated: bool,
+}
+
+/// Read-only diff overlay.
+#[derive(Clone, Debug)]
+pub struct DiffView {
+    pub title: String,
+    pub lines: Vec<String>,
+    pub scroll: usize,
+}
+
+/// Completion rows rendered above the prompt layer.
+#[derive(Clone, Debug, Default)]
+pub struct CompletionPopup {
+    pub items: Vec<crate::lsp::CompletionItem>,
+    pub selected: usize,
 }
 
 pub struct Search {
     /// Document the offsets belong to; the same buffer may be open in two panes.
     pub document: DocumentId,
     pub query: String,
-    /// Char offsets of every non-overlapping match.
-    pub matches: Vec<usize>,
+    pub options: crate::search_options::Options,
+    /// Char ranges of every non-overlapping match.
+    pub matches: Vec<std::ops::Range<usize>>,
     /// Index into `matches` of the match under the cursor.
     pub index: usize,
+    /// True when matches existed past the cap; the UI marks the count.
+    pub truncated: bool,
 }
 
 pub struct AppState {
@@ -150,7 +304,20 @@ pub struct AppState {
     pub warnings: Vec<String>,
     pub clipboard: String,
     pub search: Option<Search>,
+    pub search_options: crate::search_options::Options,
     pub project_search: Option<ProjectSearch>,
+    /// Diagnostics per document from the last publishDiagnostics notification.
+    pub lsp_diagnostics: HashMap<DocumentId, Vec<crate::lsp::Diagnostic>>,
+    /// Completion popup, when a server answered the request.
+    pub completions: Option<CompletionPopup>,
+    /// Hover text popup.
+    pub hover: Option<String>,
+    /// Per-line git markers for documents shown in a pane.
+    pub git_marks: HashMap<DocumentId, Vec<Option<crate::git::Change>>>,
+    /// Read-only diff overlay.
+    pub git_diff: Option<DiffView>,
+    /// Statusline strings produced by Lua plugins.
+    pub plugin_status: Vec<String>,
     /// Pane temporarily occupying the whole pane area.
     pub fullscreen: Option<PaneId>,
     /// Grab mode: arrow keys move the focused pane.

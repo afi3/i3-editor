@@ -225,6 +225,95 @@ them (they are already matches), and jumps by converting line plus char column
 into a document offset. The worker skips files above 1 MiB and invalid UTF-8, and
 stops at 1000 matches.
 
+**Replace in Files is the same worker plus one explicit writer.**
+`group_by_file` collapses consecutive results per file for the preview list.
+Typing never writes; `Enter` on the replacement field is the per-file
+confirmation. A clean open buffer is rewritten as a single `Document::replace`
+so undo crosses the save, then saved through the atomic path; a dirty buffer is
+refused. Any other file is read, rewritten with the same `Matcher`, and replaced
+atomically (`write_atomic`, with an in-place fallback when rename is refused).
+
+**Structure comes from the same grammars, parsed on demand.** `structure::symbols`
+and `structure::folds` build a fresh tree with the language's tree-sitter grammar
+when the user asks for a symbol list or a fold; rendering keeps its separate
+incremental tree in `Highlighter`. Symbol rows carry tree-sitter byte columns,
+converted to char offsets at the jump. Folds are inclusive line ranges stored on
+the `Document`; any edit clears them because their line numbers would drift.
+`ui::pane` renders only non-hidden lines and maps display rows back through the
+same filter for the cursor, bracket highlights, and mouse hit-testing.
+
+**One pane can hold several cursors.** `Pane.cursor/anchor` is the primary
+selection; `Pane.extra` holds secondary carets and selections. `edit_ranges`
+merges overlaps into ascending ranges, and `Document::replace_ranges` applies
+them from the end while recording every remove/insert in one `History` batch, so
+undo and redo cover the whole multi-cursor edit. `cursors_after` computes the
+post-edit positions; single-range edits still take the incremental
+`insert`/`remove`/`replace` path so tree-sitter updates stay minimal. Mouse
+Alt-drag builds one selection per line through `Pane::column_selection`.
+
+**Soft wrap is a pure line-to-row mapping.** `text::wrap_ranges` splits a line by
+display cells with a word-boundary preference; `text::visual_rows` maps document
+lines to `VisualRow { line, start, end }`, skipping folds. Rendering, cursor
+placement, mouse hit-testing, and vertical movement all consume that same list,
+so wrapped rows cannot disagree between surfaces. Wrapping is enabled per
+document set (`editor.word_wrap`) and horizontal scrolling turns off while it is
+active.
+
+**Line endings are converted as a document edit.** `Document::convert_eol`
+normalizes the rope to the requested ending, records the whole replacement in
+one undo batch, and updates `Eol` so new lines and the next save use it. Normal
+saves still write the rope verbatim, so untouched mixed endings survive.
+
+**Lua plugins share one sandboxed state and a registry.** `plugins::Plugins`
+loads the plugin directory into a `Lua` created with only the safe string/table/
+math/utf8/coroutine libraries; `io`/`os` are added only by capability, and
+`package` is never loaded. Each plugin gets API tables whose closures record
+command ids, key combos, event hooks, and statusline hooks in a shared
+`Registry`. Callbacks are Lua functions stored in a hidden table; invoking one
+sets a per-call `__i3_ctx` snapshot (`path`, language, cursor, selections) that
+the read-only `editor` table reads. A per-call instruction hook aborts past the
+time budget, a depth counter stops re-entrancy, and repeated errors disable a
+plugin. Reloading replaces both the Lua state and the registry, which unregisters
+everything atomically. The watcher watches the plugin directory next to
+`config.toml` and routes those events to `App::reload_plugins`.
+
+**Git is a thin CLI adapter.** `git::line_marks` parses `git diff HEAD -U0` hunk
+headers into one marker per new-side line; untracked files are read and marked
+added. `git::status` parses porcelain `XY` codes, `diff` returns unified text for
+the read-only overlay, and stage/unstage/commit call `git add`, `git restore
+--staged`, and `git commit`. `App::refresh_git_marks` recomputes only documents
+shown in panes, once per second and after open/save/git actions. Every helper
+returns git's stderr/stdout on failure, which the command path puts in the status
+bar.
+
+**LSP is threads and channels, not a runtime.** `lsp::LspManager` owns one
+`Server` per configured language. Spawning pipes a child's stdin/stdout; a reader
+thread frames Content-Length messages into an mpsc channel; the UI thread drains
+that channel in `App::pump_lsp` once per frame. Requests carry an id whose
+`ReplyKind` lives in the server's pending map, so completion, hover, and
+definition replies need no global dispatcher. `initialize` runs first; requests
+sent before the response are queued per server and flushed once it arrives.
+Documents use full sync: every frame compares the rope text with the last sent
+text and emits `didOpen`/`didChange`/`didClose`; positions convert between char
+offsets and UTF-16 columns at the boundary. Diagnostics are stored per document
+id and rendered by the gutter and status bar. A server that fails to spawn is
+marked failed and reported once, so edits never wait on a language server.
+
+**Each workspace owns a root and a watcher.** `Workspace.root` is persisted in
+`session.toml`. `AppState` keeps one explorer for the active workspace; switching
+rebuilds it from the target root and clears the quick-open cache. `App.watchers`
+holds one recursive watcher per workspace id; the loop drains all of them,
+coalesces paths, and only rebuilds the explorer when the event came from the
+active workspace. Open buffers react to their own paths regardless of workspace.
+
+**Crash recovery is a swap directory, not a journal.** `recovery::write_to`
+writes each dirty document to `<config>/i3-editor/swap/` through `tempfile` +
+rename, keyed by the hex-encoded path, and deletes swaps for clean documents.
+The event loop runs it at most once per second. Startup replays swaps into
+`Document::restore` (fresh undo history, dirty flag), attaches recovered buffers
+as tabs, and prompts per file: save, reload, or keep. A graceful exit clears the
+directory, so discarded quit choices cannot come back.
+
 **Rendering is read-only.** `ui::render` takes `&AppState`. The only mutation
 before a draw is `compute_layout`, which fills the rect cache.
 

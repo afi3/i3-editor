@@ -17,12 +17,34 @@ impl App {
             self.cancel_prompt();
             return;
         }
+        if self.toggle_search_option(combo) {
+            return;
+        }
         match combo.code {
             KeyCode::Esc => {
                 self.cancel_prompt();
                 return;
             }
             KeyCode::Enter => {
+                let replace_file = matches!(
+                    &self.state.mode,
+                    InputMode::Prompt(prompt)
+                        if prompt.kind == PromptKind::ReplaceInFiles
+                            && (combo.mods.contains(KeyModifiers::CONTROL) || prompt.active > 0)
+                );
+                if replace_file {
+                    let result = self.replace_selected_project_file();
+                    self.finish(result);
+                    return;
+                }
+                if let InputMode::Prompt(prompt) = &mut self.state.mode
+                    && prompt.kind == PromptKind::ReplaceInFiles
+                {
+                    // First Enter moves from the query to the replacement; the
+                    // next one is the per-file confirmation.
+                    prompt.next_field();
+                    return;
+                }
                 let result = self.submit_prompt();
                 self.finish(result);
                 return;
@@ -104,23 +126,90 @@ impl App {
         let InputMode::Prompt(prompt) = &self.state.mode else {
             return;
         };
+        let query_changed = prompt.active == 0;
         match prompt.kind {
             PromptKind::Find => {
-                let query = prompt.input().to_string();
+                let query = prompt.fields.first().cloned().unwrap_or_default();
                 self.preview_search(query);
             }
-            PromptKind::FindInFiles => {
-                let query = prompt.input().to_string();
+            PromptKind::Replace if query_changed => {
+                let query = prompt.fields.first().cloned().unwrap_or_default();
+                self.preview_search(query);
+            }
+            PromptKind::FindInFiles | PromptKind::ReplaceInFiles if query_changed => {
+                let query = prompt.fields.first().cloned().unwrap_or_default();
                 self.start_project_search(query);
             }
             _ => {}
         }
     }
 
+    /// Alt+R/Alt+W/Alt+C toggle search options while a search prompt is open.
+    fn toggle_search_option(&mut self, combo: KeyCombo) -> bool {
+        if !combo.mods.contains(KeyModifiers::ALT)
+            || !matches!(
+                &self.state.mode,
+                InputMode::Prompt(prompt)
+                    if matches!(
+                        prompt.kind,
+                        PromptKind::Find
+                            | PromptKind::Replace
+                            | PromptKind::FindInFiles
+                            | PromptKind::ReplaceInFiles
+                    )
+            )
+        {
+            return false;
+        }
+        let mut options = self.state.search_options;
+        match combo.code {
+            KeyCode::Char('r') => options.regex = !options.regex,
+            KeyCode::Char('w') => options.whole_word = !options.whole_word,
+            KeyCode::Char('c') => options.case_sensitive = !options.case_sensitive,
+            _ => return false,
+        }
+        let (kind, query) = {
+            let InputMode::Prompt(prompt) = &self.state.mode else {
+                return false;
+            };
+            (
+                prompt.kind,
+                prompt.fields.first().cloned().unwrap_or_default(),
+            )
+        };
+        self.state.search_options = options;
+        self.notify(options.summary());
+        match kind {
+            PromptKind::Find | PromptKind::Replace => self.preview_search(query),
+            PromptKind::FindInFiles | PromptKind::ReplaceInFiles => {
+                self.start_project_search(query)
+            }
+            _ => {}
+        }
+        true
+    }
+
     /// Close the prompt without submitting. A running project scan is stopped.
     pub(crate) fn cancel_prompt(&mut self) {
-        if matches!(&self.state.mode, InputMode::Prompt(prompt) if prompt.kind == PromptKind::FindInFiles)
+        if let InputMode::Prompt(prompt) = &self.state.mode
+            && prompt.kind == PromptKind::Recovery
         {
+            let id = prompt.document;
+            self.state.mode = InputMode::Normal;
+            if let Some(id) = id {
+                let result = self.resolve_recovery(id, "Keep unsaved buffer");
+                self.finish(result);
+            }
+            return;
+        }
+        if matches!(
+            &self.state.mode,
+            InputMode::Prompt(prompt)
+                if matches!(
+                    prompt.kind,
+                    PromptKind::FindInFiles | PromptKind::ReplaceInFiles
+                )
+        ) {
             self.stop_project_search();
         }
         self.state.mode = InputMode::Normal;
@@ -139,18 +228,18 @@ impl App {
     }
 
     fn submit_query_prompt(&mut self, prompt: PromptState) -> Result<()> {
+        if matches!(
+            prompt.kind,
+            PromptKind::GitStatus | PromptKind::CommitMessage
+        ) {
+            return self.submit_git_prompt(prompt);
+        }
         match prompt.kind {
             PromptKind::CommandPalette => {
                 let Some(name) = prompt.selected_candidate() else {
                     return Ok(());
                 };
-                match Command::from_name(name) {
-                    Some(command) => self.dispatch(command),
-                    None => {
-                        self.notify(format!("unknown command {name}"));
-                        Ok(())
-                    }
-                }
+                self.submit_palette(name)
             }
             PromptKind::Messages => Ok(()),
             PromptKind::Find => self.commit_search(prompt.fields[0].clone()),
@@ -177,6 +266,16 @@ impl App {
                 }
             }
             PromptKind::Replace => self.replace_all(&prompt.fields[0], &prompt.fields[1]),
+            PromptKind::Symbols => {
+                let selected = prompt.filtered.get(prompt.selected).copied();
+                let Some(symbol) = selected
+                    .and_then(|index| prompt.symbols.get(index))
+                    .cloned()
+                else {
+                    return Ok(());
+                };
+                self.goto_symbol(symbol)
+            }
             PromptKind::GoToLine => {
                 let line: usize = prompt.fields[0]
                     .trim()
@@ -188,7 +287,47 @@ impl App {
         }
     }
 
+    fn submit_palette(&mut self, name: &str) -> Result<()> {
+        match Command::from_name(name) {
+            Some(command) => self.dispatch(command),
+            None if self.run_plugin_command(name) => Ok(()),
+            None => {
+                self.notify(format!("unknown command {name}"));
+                Ok(())
+            }
+        }
+    }
+
+    fn palette_candidates(&self) -> Vec<String> {
+        let mut candidates: Vec<String> = Command::palette()
+            .iter()
+            .map(|command| command.name().to_string())
+            .collect();
+        for index in 1..=self.state.workspaces.workspaces.len() {
+            candidates.push(format!("switch_workspace_{index}"));
+        }
+        for name in self.plugin_command_names() {
+            if !candidates.contains(&name) {
+                candidates.push(name);
+            }
+        }
+        candidates
+    }
+
     fn submit_file_prompt(&mut self, prompt: PromptState) -> Result<()> {
+        match prompt.kind {
+            PromptKind::OpenPath
+            | PromptKind::QuickOpen
+            | PromptKind::SaveAs
+            | PromptKind::NewFile
+            | PromptKind::NewDir
+            | PromptKind::WorkspaceRoot
+            | PromptKind::Rename => self.submit_path_prompt(prompt),
+            _ => self.submit_dialog_prompt(prompt),
+        }
+    }
+
+    fn submit_path_prompt(&mut self, prompt: PromptState) -> Result<()> {
         let root = self.state.explorer.root.clone();
         match prompt.kind {
             PromptKind::OpenPath => {
@@ -202,11 +341,6 @@ impl App {
                 self.open_document(root.join(relative))
             }
             PromptKind::SaveAs => self.submit_save_as(&root, &prompt.fields[0]),
-            PromptKind::Overwrite => match prompt.target.clone() {
-                Some(path) => self.dispatch(Command::SaveTo(path)),
-                None => Ok(()),
-            },
-            PromptKind::ExternalChange => self.submit_external_change(&prompt),
             PromptKind::NewFile => {
                 let path = resolve(&self.state.explorer.target_dir(), &prompt.fields[0])?;
                 self.dispatch(Command::CreateFile(path))
@@ -215,16 +349,50 @@ impl App {
                 let path = resolve(&self.state.explorer.target_dir(), &prompt.fields[0])?;
                 self.dispatch(Command::CreateDir(path))
             }
+            PromptKind::WorkspaceRoot => self.submit_workspace_root(&prompt.fields[0]),
             PromptKind::Rename => {
                 let name = prompt.fields[0].clone();
                 self.dispatch(Command::RenameTo(PathBuf::from(name)))
             }
+            _ => Ok(()),
+        }
+    }
+
+    fn submit_dialog_prompt(&mut self, prompt: PromptState) -> Result<()> {
+        match prompt.kind {
+            PromptKind::Overwrite => match prompt.target.clone() {
+                Some(path) => self.dispatch(Command::SaveTo(path)),
+                None => Ok(()),
+            },
+            PromptKind::ExternalChange => self.submit_external_change(&prompt),
             PromptKind::Delete => match prompt.target.clone() {
                 Some(path) => self.dispatch(Command::DeleteTarget(path)),
                 None => Ok(()),
             },
             _ => Ok(()),
         }
+    }
+
+    fn submit_git_prompt(&mut self, prompt: PromptState) -> Result<()> {
+        match prompt.kind {
+            PromptKind::CommitMessage => self.submit_commit(&prompt.fields[0]),
+            PromptKind::GitStatus => {
+                let selected = prompt.filtered.get(prompt.selected).copied();
+                let Some(entry) = selected
+                    .and_then(|index| self.git_status_entries.get(index))
+                    .cloned()
+                else {
+                    return Ok(());
+                };
+                self.open_git_entry(entry)
+            }
+            _ => Ok(()),
+        }
+    }
+
+    fn submit_workspace_root(&mut self, field: &str) -> Result<()> {
+        let path = resolve(&self.state.explorer.root, field)?;
+        self.set_workspace_root(path)
     }
 
     fn submit_save_as(&mut self, root: &Path, field: &str) -> Result<()> {
@@ -284,6 +452,16 @@ impl App {
                 }
                 Ok(())
             }
+            PromptKind::Recovery => {
+                let choice = prompt
+                    .selected_candidate()
+                    .unwrap_or("Keep unsaved buffer")
+                    .to_string();
+                if let Some(id) = prompt.document {
+                    self.resolve_recovery(id, &choice)?;
+                }
+                Ok(())
+            }
             _ => Ok(()),
         }
     }
@@ -298,7 +476,8 @@ impl App {
         if !filled {
             return;
         }
-        let project_query = (kind == PromptKind::FindInFiles).then(|| prompt.input().to_string());
+        let project_query = matches!(kind, PromptKind::FindInFiles | PromptKind::ReplaceInFiles)
+            .then(|| prompt.fields.first().cloned().unwrap_or_default());
         self.state.mode = InputMode::Prompt(prompt);
         if let Some(query) = project_query {
             self.start_project_search(query);
@@ -306,16 +485,12 @@ impl App {
     }
 
     fn fill_query_prompt(&mut self, kind: PromptKind, prompt: &mut PromptState) -> bool {
+        if kind == PromptKind::GitStatus {
+            return self.fill_git_status(prompt);
+        }
         match kind {
             PromptKind::CommandPalette => {
-                let mut candidates: Vec<String> = Command::palette()
-                    .iter()
-                    .map(|command| command.name().to_string())
-                    .collect();
-                for index in 1..=self.state.workspaces.workspaces.len() {
-                    candidates.push(format!("switch_workspace_{index}"));
-                }
-                prompt.set_candidates(candidates);
+                prompt.set_candidates(self.palette_candidates());
             }
             PromptKind::Messages => {
                 if self.state.warnings.is_empty() {
@@ -329,7 +504,7 @@ impl App {
                     prompt.set_input(search.query.clone());
                 }
             }
-            PromptKind::FindInFiles => {
+            PromptKind::FindInFiles | PromptKind::ReplaceInFiles => {
                 if let Some(search) = &self.state.project_search {
                     prompt.set_input(search.query.clone());
                 }
@@ -341,9 +516,58 @@ impl App {
                     prompt.set_input((document.line_of_char(pane.cursor) + 1).to_string());
                 }
             }
+            PromptKind::Symbols => {
+                let Some(document) = self.state.active_document() else {
+                    self.notify("no active document");
+                    return false;
+                };
+                let language = crate::syntax::Language::from_path(document.path.as_deref());
+                let symbols = crate::structure::symbols(&document.rope, language);
+                if symbols.is_empty() {
+                    self.notify("no symbols in this document");
+                    return false;
+                }
+                prompt.set_candidates(
+                    symbols
+                        .iter()
+                        .map(|symbol| {
+                            format!("{:>5}  {:<8} {}", symbol.line + 1, symbol.kind, symbol.name)
+                        })
+                        .collect(),
+                );
+                prompt.symbols = symbols;
+            }
             _ => {}
         }
         true
+    }
+
+    fn fill_git_status(&mut self, prompt: &mut PromptState) -> bool {
+        let binary = self.state.config.git.binary.clone();
+        let Some(repo) = crate::git::discover(&binary, &self.state.explorer.root) else {
+            self.notify("not a git repository");
+            return false;
+        };
+        match crate::git::status(&binary, &repo) {
+            Ok(entries) if entries.is_empty() => {
+                self.notify("working tree clean");
+                false
+            }
+            Ok(entries) => {
+                prompt.set_candidates(
+                    entries
+                        .iter()
+                        .map(|entry| format!("{}  {}", entry.code, entry.relative))
+                        .collect(),
+                );
+                self.git_status_entries = entries;
+                true
+            }
+            Err(error) => {
+                self.notify(error);
+                false
+            }
+        }
     }
 
     fn fill_file_prompt(&mut self, kind: PromptKind, prompt: &mut PromptState) -> bool {
@@ -372,6 +596,9 @@ impl App {
                 }
             }
             PromptKind::NewFile | PromptKind::NewDir => prompt.set_input(""),
+            PromptKind::WorkspaceRoot => {
+                prompt.set_input(self.state.explorer.root.to_string_lossy().into_owned())
+            }
             PromptKind::Rename => {
                 if let Some(row) = self.state.explorer.selected_row() {
                     prompt.set_input(row.name.clone());
@@ -399,7 +626,7 @@ impl App {
 
     pub(crate) fn quick_open_candidates(&mut self) -> Vec<String> {
         // Without a watcher the list cannot be invalidated, so keep rescanning.
-        if self.watcher.is_none() {
+        if self.watchers.is_empty() {
             return self.scan_quick_open();
         }
         let revision = self.state.explorer.revision;

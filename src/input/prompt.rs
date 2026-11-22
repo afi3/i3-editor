@@ -16,6 +16,7 @@ pub enum PromptKind {
     Find,
     FindInFiles,
     Replace,
+    ReplaceInFiles,
     SaveAs,
     Overwrite,
     ExternalChange,
@@ -26,6 +27,11 @@ pub enum PromptKind {
     Discard,
     QuitDirty,
     GoToLine,
+    Symbols,
+    WorkspaceRoot,
+    Recovery,
+    GitStatus,
+    CommitMessage,
     Theme,
 }
 
@@ -57,7 +63,11 @@ impl PromptKind {
                 | PromptKind::Find
                 | PromptKind::FindInFiles
                 | PromptKind::Replace
+                | PromptKind::ReplaceInFiles
                 | PromptKind::GoToLine
+                | PromptKind::Symbols
+                | PromptKind::GitStatus
+                | PromptKind::CommitMessage
         )
     }
 
@@ -73,6 +83,7 @@ impl PromptKind {
                 | PromptKind::NewDir
                 | PromptKind::Rename
                 | PromptKind::Delete
+                | PromptKind::WorkspaceRoot
         )
     }
 
@@ -91,7 +102,11 @@ impl PromptKind {
             PromptKind::Find => "Find",
             PromptKind::FindInFiles => "Find in Files",
             PromptKind::Replace => "Replace",
+            PromptKind::ReplaceInFiles => "Replace in Files",
             PromptKind::GoToLine => "Go to Line",
+            PromptKind::Symbols => "Go to Symbol",
+            PromptKind::GitStatus => "Git Status",
+            PromptKind::CommitMessage => "Commit Message",
             _ => "",
         }
     }
@@ -107,6 +122,7 @@ impl PromptKind {
             PromptKind::NewDir => "New Directory",
             PromptKind::Rename => "Rename",
             PromptKind::Delete => "Delete",
+            PromptKind::WorkspaceRoot => "Workspace Root",
             _ => "",
         }
     }
@@ -116,6 +132,7 @@ impl PromptKind {
             PromptKind::Discard => "Unsaved changes: Enter discards, Esc cancels",
             PromptKind::QuitDirty => "Unsaved changes",
             PromptKind::Theme => "Theme",
+            PromptKind::Recovery => "Recover unsaved changes",
             _ => "",
         }
     }
@@ -123,13 +140,14 @@ impl PromptKind {
     /// Number of text fields. Replace has two: pattern and replacement.
     pub fn fields(self) -> usize {
         match self {
-            PromptKind::Replace => 2,
+            PromptKind::Replace | PromptKind::ReplaceInFiles => 2,
             PromptKind::Delete
             | PromptKind::Messages
             | PromptKind::Discard
             | PromptKind::QuitDirty
             | PromptKind::Overwrite
-            | PromptKind::ExternalChange => 0,
+            | PromptKind::ExternalChange
+            | PromptKind::Recovery => 0,
             _ => 1,
         }
     }
@@ -141,7 +159,11 @@ impl PromptKind {
                 | PromptKind::Messages
                 | PromptKind::QuickOpen
                 | PromptKind::FindInFiles
+                | PromptKind::ReplaceInFiles
                 | PromptKind::Theme
+                | PromptKind::Symbols
+                | PromptKind::GitStatus
+                | PromptKind::Recovery
                 | PromptKind::QuitDirty
                 | PromptKind::ExternalChange
         )
@@ -174,6 +196,8 @@ pub struct PromptState {
     /// Set when the user moves the selection with arrows, so typing keeps that
     /// candidate instead of jumping back to the best match.
     keep_selection: bool,
+    /// Definitions backing the candidate rows for `PromptKind::Symbols`.
+    pub symbols: Vec<crate::structure::Symbol>,
 }
 
 impl PromptState {
@@ -189,6 +213,7 @@ impl PromptState {
             target: None,
             document: None,
             keep_selection: false,
+            symbols: Vec::new(),
         }
     }
 
@@ -224,7 +249,10 @@ impl PromptState {
     pub fn refilter(&mut self) {
         // Project-search candidates are matches for the query, not fuzzy
         // candidates; filtering them again would hide results.
-        if self.kind == PromptKind::FindInFiles {
+        if matches!(
+            self.kind,
+            PromptKind::FindInFiles | PromptKind::ReplaceInFiles
+        ) {
             self.filtered = (0..self.candidates.len()).collect();
             self.selected = self.selected.min(self.candidates.len().saturating_sub(1));
             return;

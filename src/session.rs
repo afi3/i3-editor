@@ -36,6 +36,8 @@ struct Session {
 #[derive(Debug, Serialize, Deserialize)]
 struct WorkspaceSession {
     name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    root: Option<PathBuf>,
     focus: usize,
     panes: Vec<PaneSession>,
     layout: Node,
@@ -221,6 +223,7 @@ fn snapshot(state: &AppState) -> Option<Session> {
         }
         workspaces.push(WorkspaceSession {
             name: workspace.name.clone(),
+            root: Some(workspace.root.clone()),
             focus: pane_indices.get(&workspace.focus).copied().unwrap_or(0),
             panes,
             layout,
@@ -289,6 +292,23 @@ pub fn restore_from(path: &Path, state: &mut AppState) -> std::result::Result<Ve
     state.panes.clear();
     state.workspaces.workspaces.clear();
 
+    let (warnings, documents) = restore_documents(&session, state);
+    restore_workspaces(&session, state, &documents);
+
+    state.workspaces.active = session.active;
+    state.focus = Focus::Pane(state.workspaces.active().focus);
+    state.fullscreen = None;
+    state.moving = false;
+    state.search = None;
+    state.explorer.show_hidden = session.show_hidden;
+    state.explorer.refresh();
+    Ok(warnings)
+}
+
+fn restore_documents(
+    session: &Session,
+    state: &mut AppState,
+) -> (Vec<String>, Vec<Option<DocumentId>>) {
     let mut warnings = Vec::new();
     let mut documents: Vec<Option<DocumentId>> = Vec::with_capacity(session.documents.len());
     for path in &session.documents {
@@ -304,7 +324,10 @@ pub fn restore_from(path: &Path, state: &mut AppState) -> std::result::Result<Ve
             }
         }
     }
+    (warnings, documents)
+}
 
+fn restore_workspaces(session: &Session, state: &mut AppState, documents: &[Option<DocumentId>]) {
     for workspace in &session.workspaces {
         let mut pane_ids = Vec::new();
         for pane in &workspace.panes {
@@ -336,22 +359,23 @@ pub fn restore_from(path: &Path, state: &mut AppState) -> std::result::Result<Ve
             .copied()
             .unwrap_or(pane_ids[0]);
         let id = state.ids.workspace();
+        let root = workspace_root(workspace, &session.root);
         state.workspaces.workspaces.push(Workspace {
             id,
             name: workspace.name.clone(),
             layout,
             focus,
+            root,
         });
     }
+}
 
-    state.workspaces.active = session.active;
-    state.focus = Focus::Pane(state.workspaces.active().focus);
-    state.fullscreen = None;
-    state.moving = false;
-    state.search = None;
-    state.explorer.show_hidden = session.show_hidden;
-    state.explorer.refresh();
-    Ok(warnings)
+fn workspace_root(workspace: &WorkspaceSession, fallback: &Path) -> PathBuf {
+    workspace
+        .root
+        .clone()
+        .filter(|root| root.is_dir())
+        .unwrap_or_else(|| fallback.to_path_buf())
 }
 
 fn build_node(node: &Node, panes: &[PaneId]) -> LayoutNode {
@@ -499,7 +523,12 @@ mod tests {
         let mut panes = HashMap::new();
         panes.insert(pane_id, Pane::new(pane_id));
         let mut workspaces = WorkspaceManager::default();
-        workspaces.push(Workspace::new(workspace_id, "main", pane_id));
+        workspaces.push(Workspace::new(
+            workspace_id,
+            "main",
+            pane_id,
+            root.to_path_buf(),
+        ));
         AppState {
             should_quit: false,
             explorer: ExplorerState::new(root.to_path_buf(), false).expect("explorer"),
@@ -516,7 +545,14 @@ mod tests {
             warnings: Vec::new(),
             clipboard: String::new(),
             search: None,
+            search_options: crate::search_options::Options::default(),
             project_search: None,
+            lsp_diagnostics: HashMap::new(),
+            completions: None,
+            hover: None,
+            git_marks: HashMap::new(),
+            git_diff: None,
+            plugin_status: Vec::new(),
             fullscreen: None,
             moving: false,
             terminals: Default::default(),
@@ -660,6 +696,38 @@ mod tests {
         let mut restored = state_with(&dir);
         restore_from(&session_path, &mut restored).expect("restore");
         assert!(restored.documents.is_empty());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn workspace_roots_round_trip() {
+        let dir = temp_dir("roots");
+        let other = dir.join("other");
+        std::fs::create_dir_all(&other).expect("other");
+        let a = dir.join("a.rs");
+        std::fs::write(&a, "fn a() {}\n").expect("a");
+
+        let mut state = state_with(&dir);
+        let first = first_pane_id(&state);
+        let a_id = add_document(&mut state, &a);
+        state.panes.get_mut(&first).expect("pane").tabs.push(a_id);
+        state.panes.get_mut(&first).expect("pane").active = Some(a_id);
+
+        let second = state.ids.pane();
+        state.panes.insert(second, Pane::new(second));
+        let workspace = state.ids.workspace();
+        state
+            .workspaces
+            .workspaces
+            .push(Workspace::new(workspace, "other", second, other.clone()));
+
+        let session_path = dir.join("session.toml");
+        save_to(&session_path, &state).expect("save session");
+
+        let mut restored = state_with(&dir);
+        restore_from(&session_path, &mut restored).expect("restore");
+        assert_eq!(restored.workspaces.workspaces.len(), 2);
+        assert_eq!(restored.workspaces.workspaces[1].root, other);
         std::fs::remove_dir_all(&dir).ok();
     }
 }

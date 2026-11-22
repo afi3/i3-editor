@@ -9,6 +9,91 @@ use crate::state::{AppState, Focus, PaneId};
 
 use super::App;
 
+/// Horizontal and document-edge movements. Returns false for vertical moves so
+/// the caller can handle wrapping.
+fn horizontal_move(
+    pane: &mut crate::state::Pane,
+    rope: &Rope,
+    line: usize,
+    movement: &Move,
+) -> bool {
+    let cursor = pane.cursor;
+    match movement {
+        Move::Left => pane.cursor = textutil::prev_grapheme(rope, cursor),
+        Move::Right => pane.cursor = textutil::next_grapheme(rope, cursor),
+        Move::WordLeft => pane.cursor = textutil::prev_word(rope, cursor),
+        Move::WordRight => pane.cursor = textutil::next_word(rope, cursor),
+        Move::LineStart => pane.cursor = rope.line_to_char(line),
+        Move::LineEnd => pane.cursor = line_content_end(rope, line),
+        Move::DocStart => pane.cursor = 0,
+        Move::DocEnd => pane.cursor = rope.len_chars(),
+        _ => return false,
+    }
+    true
+}
+
+#[allow(clippy::too_many_arguments)]
+fn vertical_move(
+    pane: &mut crate::state::Pane,
+    document: &crate::editor::document::Document,
+    rope: &Rope,
+    line: usize,
+    target_column: usize,
+    step: isize,
+    wrap_width: Option<u16>,
+    tab_width: usize,
+) {
+    if let Some(width) = wrap_width {
+        if let Some((position, desired)) = wrapped_vertical(
+            rope,
+            document,
+            width,
+            tab_width,
+            pane.cursor,
+            step,
+            pane.target_col,
+        ) {
+            pane.cursor = position;
+            pane.target_col = desired;
+        }
+    } else {
+        let new_line =
+            (line as isize + step).clamp(0, rope.len_lines().saturating_sub(1) as isize) as usize;
+        let content_end = line_content_end(rope, new_line);
+        let line_start = rope.line_to_char(new_line);
+        pane.cursor = line_start + target_column.min(content_end - line_start);
+        pane.target_col = Some(target_column);
+    }
+}
+
+fn wrapped_vertical(
+    rope: &Rope,
+    document: &crate::editor::document::Document,
+    width: u16,
+    tab_width: usize,
+    cursor: usize,
+    step: isize,
+    target_col: Option<usize>,
+) -> Option<(usize, Option<usize>)> {
+    let line = rope.char_to_line(cursor);
+    let rows = textutil::visual_rows(document, 0, width, tab_width, usize::MAX);
+    if rows.is_empty() {
+        return None;
+    }
+    let current = cursor.saturating_sub(rope.line_to_char(line));
+    let index = rows
+        .iter()
+        .rposition(|row| row.line == line && current >= row.start)?;
+    let target_index = (index as isize + step).clamp(0, rows.len() as isize - 1) as usize;
+    let target = rows[target_index];
+    let desired = target_col.unwrap_or(current.saturating_sub(rows[index].start));
+    let column = desired.min(target.end - target.start);
+    Some((
+        rope.line_to_char(target.line) + target.start + column,
+        Some(desired),
+    ))
+}
+
 fn line_content_end(rope: &Rope, line: usize) -> usize {
     let start = rope.line_to_char(line);
     let mut end = start + rope.line(line).len_chars();
@@ -25,6 +110,8 @@ impl App {
             Focus::Explorer | Focus::Shell => return Ok(()),
         };
         let page = self.page_size(pane_id);
+        let wrap_width = self.wrap_width(pane_id);
+        let tab_width = self.state.config.editor.tab_size.max(1);
         {
             let AppState {
                 documents, panes, ..
@@ -40,7 +127,6 @@ impl App {
             };
             let rope = &document.rope;
             let cursor = pane.cursor;
-            let line_count = rope.len_lines();
 
             if extend && pane.anchor.is_none() {
                 pane.anchor = Some(cursor);
@@ -61,30 +147,23 @@ impl App {
                 current_column
             };
 
-            match movement {
-                Move::Left => pane.cursor = textutil::prev_grapheme(rope, cursor),
-                Move::Right => pane.cursor = textutil::next_grapheme(rope, cursor),
-                Move::WordLeft => pane.cursor = textutil::prev_word(rope, cursor),
-                Move::WordRight => pane.cursor = textutil::next_word(rope, cursor),
-                Move::LineStart => pane.cursor = rope.line_to_char(line),
-                Move::LineEnd => pane.cursor = line_content_end(rope, line),
-                Move::DocStart => pane.cursor = 0,
-                Move::DocEnd => pane.cursor = rope.len_chars(),
-                Move::Up | Move::Down | Move::PageUp | Move::PageDown => {
-                    let step: isize = match movement {
-                        Move::Up => -1,
-                        Move::Down => 1,
-                        Move::PageUp => -page,
-                        _ => page,
-                    };
-                    let new_line = (line as isize + step)
-                        .clamp(0, line_count.saturating_sub(1) as isize)
-                        as usize;
-                    let content_end = line_content_end(rope, new_line);
-                    let line_start = rope.line_to_char(new_line);
-                    pane.cursor = line_start + target_column.min(content_end - line_start);
-                    pane.target_col = Some(target_column);
-                }
+            if !horizontal_move(pane, rope, line, &movement) {
+                let step: isize = match movement {
+                    Move::Up => -1,
+                    Move::Down => 1,
+                    Move::PageUp => -page,
+                    _ => page,
+                };
+                vertical_move(
+                    pane,
+                    document,
+                    rope,
+                    line,
+                    target_column,
+                    step,
+                    wrap_width,
+                    tab_width,
+                );
             }
             if !vertical {
                 pane.target_col = None;
@@ -92,6 +171,62 @@ impl App {
         }
         self.ensure_cursor_visible();
         Ok(())
+    }
+
+    pub(crate) fn add_cursor(&mut self, direction: isize) -> Result<()> {
+        let message = {
+            let pane_id = match self.state.focus {
+                Focus::Pane(id) => id,
+                Focus::Explorer | Focus::Shell => return Ok(()),
+            };
+            let AppState {
+                documents, panes, ..
+            } = &mut self.state;
+            let Some(pane) = panes.get_mut(&pane_id) else {
+                return Ok(());
+            };
+            let Some(id) = pane.active else {
+                return Ok(());
+            };
+            let Some(document) = documents.get(&id) else {
+                return Ok(());
+            };
+            let line = document.line_of_char(pane.cursor);
+            let target = line as isize + direction;
+            if target < 0 || target as usize >= document.line_count() {
+                "no line to add a cursor on".to_string()
+            } else {
+                let target = target as usize;
+                let column = pane.cursor.saturating_sub(document.char_of_line(line));
+                let text = document.line_text(target);
+                let column = column.min(text.chars().count());
+                let position = document.char_of_line(target) + column;
+                pane.add_cursor(position);
+                format!("{} cursor(s)", pane.extra.len() + 1)
+            }
+        };
+        self.notify(message);
+        Ok(())
+    }
+
+    pub(crate) fn clear_cursors(&mut self) {
+        let Some(pane) = self.state.focused_pane_mut() else {
+            return;
+        };
+        pane.clear_extra();
+        pane.anchor = None;
+        self.notify("secondary cursors cleared");
+    }
+
+    pub(crate) fn toggle_word_wrap(&mut self) {
+        self.state.config.editor.word_wrap = !self.state.config.editor.word_wrap;
+        let state = if self.state.config.editor.word_wrap {
+            "on"
+        } else {
+            "off"
+        };
+        self.notify(format!("word wrap {state}"));
+        self.ensure_cursor_visible();
     }
 
     pub(crate) fn duplicate_line(&mut self) -> Result<()> {
@@ -114,11 +249,12 @@ impl App {
             };
             let line = document.line_of_char(pane.cursor);
             let text = document.line_text(line);
+            let eol = document.line_ending();
             let insert_at = line_content_end(&document.rope, line);
             let scroll = (pane.scroll_top, pane.scroll_left);
-            document.insert(insert_at, &format!("\n{text}"), pane.cursor, scroll);
+            document.insert(insert_at, &format!("{eol}{text}"), pane.cursor, scroll);
             document.history.break_run();
-            pane.cursor = insert_at + 1 + text.chars().count();
+            pane.cursor = insert_at + eol.len() + text.chars().count();
             pane.anchor = None;
             pane.target_col = None;
         }
@@ -136,6 +272,17 @@ impl App {
             .unwrap_or(10)
     }
 
+    fn wrap_width(&self, pane_id: PaneId) -> Option<u16> {
+        if !self.state.config.editor.word_wrap {
+            return None;
+        }
+        let pane = self.state.panes.get(&pane_id)?;
+        let rect = self.state.ui.pane_rects.get(&pane_id).copied()?;
+        let document = self.state.documents.get(&pane.active?)?;
+        crate::ui::pane::text_geometry(&self.state, pane, document, rect)
+            .map(|geometry| geometry.text_width)
+    }
+
     pub(crate) fn ensure_cursor_visible(&mut self) {
         let Some(pane_id) = self.state.focused_pane_id() else {
             return;
@@ -146,6 +293,7 @@ impl App {
         let tab_width = self.state.config.editor.tab_size.max(1);
         let show_tabs = self.state.config.appearance.show_document_tabs;
         let show_numbers = self.state.config.editor.line_numbers;
+        let wrap = self.state.config.editor.word_wrap;
 
         let AppState {
             documents, panes, ..
@@ -162,6 +310,22 @@ impl App {
 
         let rows = rect.height.saturating_sub(2 + u16::from(show_tabs)).max(1) as usize;
         let line = document.line_of_char(pane.cursor);
+        if wrap {
+            let digits = document.line_count().to_string().len() as u16;
+            let gutter = if show_numbers { digits + 2 } else { 0 };
+            let width = rect.width.saturating_sub(2 + gutter).max(1);
+            let column = pane.cursor.saturating_sub(document.char_of_line(line));
+            let visual =
+                textutil::visual_rows(document, pane.scroll_top, width, tab_width, rows + 1);
+            let index = visual
+                .iter()
+                .position(|row| row.line == line && column >= row.start && column <= row.end);
+            if index.is_none_or(|index| index >= rows) {
+                pane.scroll_top = line;
+            }
+            pane.scroll_left = 0;
+            return;
+        }
         if line < pane.scroll_top {
             pane.scroll_top = line;
         } else if line >= pane.scroll_top + rows {
@@ -169,7 +333,7 @@ impl App {
         }
 
         let digits = document.line_count().to_string().len() as u16;
-        let gutter = if show_numbers { digits + 1 } else { 0 };
+        let gutter = if show_numbers { digits + 2 } else { 0 };
         let width = rect.width.saturating_sub(2 + gutter).max(1);
         let line_start = document.char_of_line(line);
         let text = document.line_text(line);

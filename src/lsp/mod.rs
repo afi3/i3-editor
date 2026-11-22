@@ -1,0 +1,1051 @@
+//! Minimal LSP client: one stdio server per configured language, full document
+//! sync, diagnostics, completion, hover, and go-to-definition.
+//!
+//! There is no async runtime. A reader thread per server turns framed JSON-RPC
+//! messages into a channel; `LspManager::pump` drains that channel once per
+//! frame, routes responses by request id, and keeps every write on the UI
+//! thread. A server that fails to start is reported once and never retried.
+
+use std::collections::{HashMap, HashSet};
+use std::io::{BufRead, BufReader, Read, Write};
+use std::path::{Path, PathBuf};
+use std::process::{Child, Command, Stdio};
+use std::sync::mpsc::{self, Receiver};
+
+use serde_json::{Value, json};
+
+use crate::config::LspConfig;
+use crate::editor::document::Document;
+use crate::state::DocumentId;
+
+/// Largest JSON-RPC body accepted from a server.
+const MAX_MESSAGE_BYTES: usize = 8 << 20;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Severity {
+    Error,
+    Warning,
+    Info,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Diagnostic {
+    pub line: usize,
+    /// Char column (converted from the protocol's UTF-16 units).
+    pub column: usize,
+    pub severity: Severity,
+    pub message: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CompletionItem {
+    pub label: String,
+    /// Text inserted on Enter; `textEdit.newText`, `insertText`, or the label.
+    pub insert: String,
+    pub detail: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Location {
+    pub path: PathBuf,
+    pub line: usize,
+    /// UTF-16 code units; the app converts against the target line.
+    pub character: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Event {
+    Diagnostics {
+        path: PathBuf,
+        diagnostics: Vec<Diagnostic>,
+    },
+    Completion(Vec<CompletionItem>),
+    Hover(String),
+    Definition(Option<Location>),
+    Warning(String),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ReplyKind {
+    Initialize,
+    Completion,
+    Hover,
+    Definition,
+}
+
+struct QueuedRequest {
+    key: String,
+    method: &'static str,
+    params: Value,
+    kind: ReplyKind,
+}
+
+struct OpenDocument {
+    key: String,
+    version: i64,
+    text: String,
+}
+
+struct Server {
+    writer: Box<dyn Write + Send>,
+    incoming: Receiver<Value>,
+    child: Option<Child>,
+    next_id: i64,
+    initialized: bool,
+    pending: HashMap<i64, ReplyKind>,
+}
+
+impl Server {
+    fn spawn(
+        key: &str,
+        config: &crate::config::LspServerConfig,
+        root: &Path,
+    ) -> std::io::Result<Self> {
+        let mut child = Command::new(&config.command)
+            .args(&config.args)
+            .current_dir(root)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()?;
+        let stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| std::io::Error::other(format!("{key}: server has no stdin")))?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| std::io::Error::other(format!("{key}: server has no stdout")))?;
+        Ok(Self::from_parts(
+            Box::new(stdin),
+            Box::new(stdout),
+            Some(child),
+        ))
+    }
+
+    fn from_parts(
+        writer: Box<dyn Write + Send>,
+        reader: Box<dyn Read + Send>,
+        child: Option<Child>,
+    ) -> Self {
+        let (sender, incoming) = mpsc::channel();
+        std::thread::spawn(move || {
+            let mut reader = BufReader::new(reader);
+            while let Some(message) = read_frame(&mut reader) {
+                if sender.send(message).is_err() {
+                    break;
+                }
+            }
+        });
+        Self {
+            writer,
+            incoming,
+            child,
+            next_id: 1,
+            initialized: false,
+            pending: HashMap::new(),
+        }
+    }
+
+    fn request(&mut self, method: &str, params: Value, kind: ReplyKind) -> Option<i64> {
+        let id = self.next_id;
+        self.next_id += 1;
+        write_frame(
+            &mut self.writer,
+            &json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}),
+        )
+        .ok()?;
+        self.pending.insert(id, kind);
+        Some(id)
+    }
+
+    fn notify(&mut self, method: &str, params: Value) {
+        let _ = write_frame(
+            &mut self.writer,
+            &json!({"jsonrpc": "2.0", "method": method, "params": params}),
+        );
+    }
+
+    fn did_open(&mut self, path: &Path, text: &str) {
+        self.notify(
+            "textDocument/didOpen",
+            json!({"textDocument": {
+                "uri": uri(path),
+                "languageId": language_id(path),
+                "version": 1,
+                "text": text,
+            }}),
+        );
+    }
+
+    fn did_change(&mut self, path: &Path, version: i64, text: &str) {
+        self.notify(
+            "textDocument/didChange",
+            json!({
+                "textDocument": {"uri": uri(path), "version": version},
+                "contentChanges": [{"text": text}],
+            }),
+        );
+    }
+
+    fn did_close(&mut self, path: &Path) {
+        self.notify(
+            "textDocument/didClose",
+            json!({"textDocument": {"uri": uri(path)}}),
+        );
+    }
+}
+
+impl Drop for Server {
+    fn drop(&mut self) {
+        if let Some(child) = &mut self.child {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+}
+
+/// Language servers for the open documents. Empty configuration means every
+/// command reports that no server is configured.
+pub struct LspManager {
+    root: PathBuf,
+    configs: Vec<(String, crate::config::LspServerConfig)>,
+    servers: HashMap<String, Server>,
+    failed: HashSet<String>,
+    opened: HashMap<PathBuf, OpenDocument>,
+    queued: Vec<QueuedRequest>,
+    diagnostics: HashMap<PathBuf, Vec<Diagnostic>>,
+}
+
+impl LspManager {
+    pub fn new(config: &LspConfig, root: PathBuf) -> Self {
+        let configs = config
+            .servers
+            .iter()
+            .filter(|(_, server)| !server.command.trim().is_empty())
+            .map(|(key, server)| (key.clone(), server.clone()))
+            .collect();
+        Self {
+            root,
+            configs,
+            servers: HashMap::new(),
+            failed: HashSet::new(),
+            opened: HashMap::new(),
+            queued: Vec::new(),
+            diagnostics: HashMap::new(),
+        }
+    }
+
+    pub fn is_configured(&self) -> bool {
+        !self.configs.is_empty()
+    }
+
+    /// Sync open documents and dispatch every queued server message.
+    pub fn pump(&mut self, documents: &HashMap<DocumentId, Document>) -> Vec<Event> {
+        let mut events = Vec::new();
+        let mut desired: Vec<(PathBuf, String, String)> = Vec::new();
+        for document in documents.values() {
+            let Some(path) = &document.path else {
+                continue;
+            };
+            let Some(key) = self.config_key(path) else {
+                continue;
+            };
+            desired.push((canonical(path), key, document.rope.to_string()));
+        }
+
+        for (path, key, text) in &desired {
+            self.ensure_server(key, &mut events);
+            let Some(server) = self.servers.get_mut(key) else {
+                continue;
+            };
+            if !server.initialized {
+                continue;
+            }
+            match self.opened.get_mut(path) {
+                None => {
+                    server.did_open(path, text);
+                    self.opened.insert(
+                        path.clone(),
+                        OpenDocument {
+                            key: key.clone(),
+                            version: 1,
+                            text: text.clone(),
+                        },
+                    );
+                }
+                Some(open) if open.key == *key && open.text != *text => {
+                    open.version += 1;
+                    server.did_change(path, open.version, text);
+                    open.text = text.clone();
+                }
+                Some(_) => {}
+            }
+        }
+
+        let desired_paths: HashSet<PathBuf> = desired.iter().map(|(p, _, _)| p.clone()).collect();
+        let closed: Vec<PathBuf> = self
+            .opened
+            .keys()
+            .filter(|path| !desired_paths.contains(*path))
+            .cloned()
+            .collect();
+        for path in closed {
+            if let Some(open) = self.opened.remove(&path)
+                && let Some(server) = self.servers.get_mut(&open.key)
+            {
+                server.did_close(&path);
+            }
+        }
+
+        let keys: Vec<String> = self.servers.keys().cloned().collect();
+        for key in keys {
+            self.drain(&key, &mut events);
+        }
+        events
+    }
+
+    fn ensure_server(&mut self, key: &str, events: &mut Vec<Event>) {
+        if self.servers.contains_key(key) || self.failed.contains(key) {
+            return;
+        }
+        let Some(config) = self
+            .configs
+            .iter()
+            .find(|(name, _)| name == key)
+            .map(|(_, config)| config.clone())
+        else {
+            return;
+        };
+        match Server::spawn(key, &config, &self.root) {
+            Ok(mut server) => {
+                let params = initialize_params(&self.root);
+                if server
+                    .request("initialize", params, ReplyKind::Initialize)
+                    .is_none()
+                {
+                    self.failed.insert(key.to_string());
+                    events.push(Event::Warning(format!("LSP {key}: cannot send initialize")));
+                    return;
+                }
+                self.servers.insert(key.to_string(), server);
+            }
+            Err(error) => {
+                self.failed.insert(key.to_string());
+                events.push(Event::Warning(format!(
+                    "LSP {key} failed to start: {error}"
+                )));
+            }
+        }
+    }
+
+    fn drain(&mut self, key: &str, events: &mut Vec<Event>) {
+        let mut published = Vec::new();
+        let mut initialized = false;
+        {
+            let Some(server) = self.servers.get_mut(key) else {
+                return;
+            };
+            while let Ok(message) = server.incoming.try_recv() {
+                let Some(id) = message.get("id").and_then(Value::as_i64) else {
+                    if message.get("method").and_then(Value::as_str)
+                        == Some("textDocument/publishDiagnostics")
+                        && let Some((path, diagnostics)) = parse_diagnostics(message.get("params"))
+                    {
+                        published.push((path, diagnostics));
+                    }
+                    continue;
+                };
+                let Some(kind) = server.pending.remove(&id) else {
+                    continue;
+                };
+                match kind {
+                    ReplyKind::Initialize => {
+                        initialized = true;
+                        server.initialized = true;
+                        server.notify("initialized", json!({}));
+                    }
+                    ReplyKind::Completion => {
+                        let items = parse_completion(message.get("result"));
+                        events.push(Event::Completion(items));
+                    }
+                    ReplyKind::Hover => {
+                        let text = parse_hover(message.get("result"));
+                        if !text.is_empty() {
+                            events.push(Event::Hover(text));
+                        }
+                    }
+                    ReplyKind::Definition => {
+                        events.push(Event::Definition(parse_definition(message.get("result"))));
+                    }
+                }
+            }
+        }
+        for (path, diagnostics) in published {
+            self.diagnostics.insert(path.clone(), diagnostics.clone());
+            events.push(Event::Diagnostics { path, diagnostics });
+        }
+        if initialized {
+            let queued: Vec<QueuedRequest> = self
+                .queued
+                .iter()
+                .filter(|request| request.key == key)
+                .map(|request| QueuedRequest {
+                    key: request.key.clone(),
+                    method: request.method,
+                    params: request.params.clone(),
+                    kind: request.kind,
+                })
+                .collect();
+            self.queued.retain(|request| request.key != key);
+            if let Some(server) = self.servers.get_mut(key) {
+                for request in queued {
+                    server.request(request.method, request.params, request.kind);
+                }
+            }
+        }
+    }
+
+    pub fn completion(&mut self, document: &Document, cursor: usize) -> Result<(), String> {
+        self.request(
+            document,
+            cursor,
+            "textDocument/completion",
+            ReplyKind::Completion,
+        )
+    }
+
+    pub fn hover(&mut self, document: &Document, cursor: usize) -> Result<(), String> {
+        self.request(document, cursor, "textDocument/hover", ReplyKind::Hover)
+    }
+
+    pub fn definition(&mut self, document: &Document, cursor: usize) -> Result<(), String> {
+        self.request(
+            document,
+            cursor,
+            "textDocument/definition",
+            ReplyKind::Definition,
+        )
+    }
+
+    fn request(
+        &mut self,
+        document: &Document,
+        cursor: usize,
+        method: &'static str,
+        kind: ReplyKind,
+    ) -> Result<(), String> {
+        let Some(path) = document.path.as_deref() else {
+            return Err("language server: document has no path".to_string());
+        };
+        let Some(key) = self.config_key(path) else {
+            return Err(format!(
+                "no language server configured for {}",
+                path.display()
+            ));
+        };
+        let path = canonical(path);
+        let params = position_params(document, &path, cursor);
+        match self.servers.get_mut(&key) {
+            Some(server) if server.initialized => {
+                server
+                    .request(method, params, kind)
+                    .ok_or_else(|| format!("LSP {key}: cannot send {method}"))?;
+            }
+            Some(_) => self.queued.push(QueuedRequest {
+                key,
+                method,
+                params,
+                kind,
+            }),
+            None => {
+                let mut events = Vec::new();
+                self.ensure_server(&key, &mut events);
+                self.queued.push(QueuedRequest {
+                    key,
+                    method,
+                    params,
+                    kind,
+                });
+            }
+        }
+        Ok(())
+    }
+
+    fn config_key(&self, path: &Path) -> Option<String> {
+        let extension = path
+            .extension()
+            .map(|extension| extension.to_string_lossy().to_ascii_lowercase())?;
+        for (key, config) in &self.configs {
+            if !config.extensions.is_empty() {
+                if config
+                    .extensions
+                    .iter()
+                    .any(|ext| ext.trim_start_matches('.').eq_ignore_ascii_case(&extension))
+                {
+                    return Some(key.clone());
+                }
+                continue;
+            }
+            if default_extensions(key).contains(&extension.as_str()) {
+                return Some(key.clone());
+            }
+        }
+        None
+    }
+}
+
+fn initialize_params(root: &Path) -> Value {
+    json!({
+        "processId": std::process::id(),
+        "rootUri": uri(root),
+        "rootPath": root.to_string_lossy(),
+        "capabilities": {
+            "textDocument": {
+                "synchronization": {"dynamicRegistration": false},
+                "completion": {"completionItem": {"snippetSupport": false}},
+                "hover": {"contentFormat": ["plaintext", "markdown"]},
+                "definition": {}
+            }
+        },
+    })
+}
+
+fn position_params(document: &Document, path: &Path, cursor: usize) -> Value {
+    let line = document.line_of_char(cursor);
+    let line_start = document.char_of_line(line);
+    let text = document.line_text(line);
+    let character = char_to_utf16(&text, cursor.saturating_sub(line_start));
+    json!({
+        "textDocument": {"uri": uri(path)},
+        "position": {"line": line, "character": character},
+    })
+}
+
+fn parse_diagnostics(params: Option<&Value>) -> Option<(PathBuf, Vec<Diagnostic>)> {
+    let params = params?;
+    let path = path_from_uri(params.get("uri")?.as_str()?)?;
+    let items = params.get("diagnostics")?.as_array()?;
+    let diagnostics = items
+        .iter()
+        .map(|item| {
+            let range = item.get("range").and_then(|range| range.get("start"));
+            let line = range
+                .and_then(|start| start.get("line"))
+                .and_then(Value::as_u64)
+                .unwrap_or(0) as usize;
+            let character = range
+                .and_then(|start| start.get("character"))
+                .and_then(Value::as_u64)
+                .unwrap_or(0) as usize;
+            let severity = match item.get("severity").and_then(Value::as_u64) {
+                Some(1) => Severity::Error,
+                Some(2) => Severity::Warning,
+                _ => Severity::Info,
+            };
+            Diagnostic {
+                line,
+                column: character,
+                severity,
+                message: item
+                    .get("message")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .lines()
+                    .next()
+                    .unwrap_or_default()
+                    .to_string(),
+            }
+        })
+        .collect();
+    Some((path, diagnostics))
+}
+
+fn parse_completion(result: Option<&Value>) -> Vec<CompletionItem> {
+    let Some(result) = result else {
+        return Vec::new();
+    };
+    let items = result
+        .as_array()
+        .or_else(|| result.get("items").and_then(Value::as_array));
+    let Some(items) = items else {
+        return Vec::new();
+    };
+    items
+        .iter()
+        .map(|item| {
+            let label = item
+                .get("label")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            let insert = item
+                .get("textEdit")
+                .and_then(|edit| edit.get("newText"))
+                .and_then(Value::as_str)
+                .or_else(|| item.get("insertText").and_then(Value::as_str))
+                .unwrap_or(&label)
+                .to_string();
+            let detail = item
+                .get("detail")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            CompletionItem {
+                label,
+                insert,
+                detail,
+            }
+        })
+        .collect()
+}
+
+fn parse_hover(result: Option<&Value>) -> String {
+    fn content(value: &Value) -> Option<String> {
+        if let Some(text) = value.as_str() {
+            return Some(text.to_string());
+        }
+        if let Some(text) = value.get("value").and_then(Value::as_str) {
+            return Some(text.to_string());
+        }
+        if let Some(items) = value.as_array() {
+            let parts: Vec<String> = items.iter().filter_map(content).collect();
+            if !parts.is_empty() {
+                return Some(parts.join("\n"));
+            }
+        }
+        None
+    }
+    result
+        .and_then(|result| result.get("contents"))
+        .and_then(content)
+        .unwrap_or_default()
+}
+
+fn parse_definition(result: Option<&Value>) -> Option<Location> {
+    let result = result?;
+    let first = match result.as_array() {
+        Some(items) => items.first()?,
+        None => result,
+    };
+    let uri = first
+        .get("uri")
+        .or_else(|| first.get("targetUri"))
+        .and_then(Value::as_str)?;
+    let path = path_from_uri(uri)?;
+    let start = first
+        .get("range")
+        .and_then(|range| range.get("start"))
+        .or_else(|| {
+            first
+                .get("targetSelectionRange")
+                .and_then(|range| range.get("start"))
+        })?;
+    Some(Location {
+        path,
+        line: start.get("line").and_then(Value::as_u64).unwrap_or(0) as usize,
+        character: start.get("character").and_then(Value::as_u64).unwrap_or(0) as usize,
+    })
+}
+
+fn default_extensions(key: &str) -> &'static [&'static str] {
+    match key.to_ascii_lowercase().as_str() {
+        "rust" | "rust-analyzer" => &["rs"],
+        "python" | "pyright" | "pylsp" => &["py", "pyi"],
+        "javascript" | "typescript" | "tsserver" => &["js", "jsx", "mjs", "cjs", "ts", "tsx"],
+        "go" | "gopls" => &["go"],
+        "c" | "clangd" | "cpp" => &["c", "h", "cc", "cpp", "hpp", "cxx"],
+        "lua" | "lua-language-server" => &["lua"],
+        "shell" | "bash" | "bash-language-server" => &["sh", "bash", "zsh"],
+        "toml" | "taplo" => &["toml"],
+        "json" | "jsonls" => &["json"],
+        "markdown" | "marksman" => &["md", "markdown"],
+        _ => &[],
+    }
+}
+
+pub fn language_id(path: &Path) -> &'static str {
+    match path
+        .extension()
+        .map(|extension| extension.to_string_lossy().to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("rs") => "rust",
+        Some("py") | Some("pyi") => "python",
+        Some("js") | Some("jsx") | Some("mjs") | Some("cjs") => "javascript",
+        Some("ts") | Some("tsx") => "typescript",
+        Some("go") => "go",
+        Some("c") | Some("h") | Some("cc") | Some("cpp") | Some("hpp") | Some("cxx") => "c",
+        Some("sh") | Some("bash") | Some("zsh") => "shellscript",
+        Some("lua") => "lua",
+        Some("md") | Some("markdown") => "markdown",
+        Some("toml") => "toml",
+        Some("json") => "json",
+        _ => "plaintext",
+    }
+}
+
+fn canonical(path: &Path) -> PathBuf {
+    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+}
+
+pub fn uri(path: &Path) -> String {
+    let path = canonical(path);
+    let mut out = String::from("file://");
+    for &byte in path.to_string_lossy().as_bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' | b'/' => {
+                out.push(byte as char)
+            }
+            _ => out.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    out
+}
+
+pub fn path_from_uri(uri: &str) -> Option<PathBuf> {
+    let rest = uri.strip_prefix("file://")?;
+    if !rest.starts_with('/') {
+        return None;
+    }
+    let mut bytes = Vec::with_capacity(rest.len());
+    let bytes_in = rest.as_bytes();
+    let mut index = 0;
+    while index < bytes_in.len() {
+        match bytes_in[index] {
+            b'%' if index + 2 < bytes_in.len() => {
+                let hex = std::str::from_utf8(&bytes_in[index + 1..index + 3]).ok()?;
+                bytes.push(u8::from_str_radix(hex, 16).ok()?);
+                index += 3;
+            }
+            byte => {
+                bytes.push(byte);
+                index += 1;
+            }
+        }
+    }
+    Some(PathBuf::from(String::from_utf8(bytes).ok()?))
+}
+
+/// Convert a UTF-16 column into a char column, clamped to `text`.
+pub fn utf16_to_char(text: &str, utf16: usize) -> usize {
+    let mut units = 0;
+    for (chars, ch) in text.chars().enumerate() {
+        if units >= utf16 {
+            return chars;
+        }
+        units += ch.len_utf16();
+    }
+    text.chars().count()
+}
+
+/// Convert a char column into a UTF-16 column.
+pub fn char_to_utf16(text: &str, chars: usize) -> usize {
+    text.chars().take(chars).map(char::len_utf16).sum()
+}
+
+pub fn read_frame(reader: &mut impl BufRead) -> Option<Value> {
+    let mut length = None;
+    let mut line = String::new();
+    loop {
+        line.clear();
+        if reader.read_line(&mut line).ok()? == 0 {
+            return None;
+        }
+        let trimmed = line.trim_end();
+        if trimmed.is_empty() {
+            break;
+        }
+        if let Some(value) = trimmed.strip_prefix("Content-Length:") {
+            length = value.trim().parse::<usize>().ok();
+        }
+    }
+    let length = length?;
+    if length > MAX_MESSAGE_BYTES {
+        return None;
+    }
+    let mut body = vec![0; length];
+    reader.read_exact(&mut body).ok()?;
+    serde_json::from_slice(&body).ok()
+}
+
+pub fn write_frame(writer: &mut impl Write, message: &Value) -> std::io::Result<()> {
+    let body = serde_json::to_vec(message).map_err(std::io::Error::other)?;
+    write!(writer, "Content-Length: {}\r\n\r\n", body.len())?;
+    writer.write_all(&body)?;
+    writer.flush()
+}
+
+#[cfg(test)]
+impl LspManager {
+    /// Attach an in-process transport instead of spawning a process. The peer
+    /// end stays with the caller for the fake server thread.
+    pub(crate) fn attach_for_test(
+        &mut self,
+        key: &str,
+        stream: std::os::unix::net::UnixStream,
+    ) -> std::io::Result<()> {
+        let reader = Box::new(stream.try_clone()?);
+        let writer = Box::new(stream);
+        let mut server = Server::from_parts(writer, reader, None);
+        if server
+            .request(
+                "initialize",
+                initialize_params(&self.root),
+                ReplyKind::Initialize,
+            )
+            .is_none()
+        {
+            return Err(std::io::Error::other("initialize failed"));
+        }
+        self.servers.insert(key.to_string(), server);
+        Ok(())
+    }
+
+    pub(crate) fn config_for_test(&self, key: &str) -> bool {
+        self.configs.iter().any(|(name, _)| name == key)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::LspConfig;
+    use serde_json::json;
+    use std::os::unix::net::UnixStream;
+    use std::time::{Duration, Instant};
+
+    fn manager() -> LspManager {
+        let mut config = LspConfig::default();
+        config.servers.insert(
+            "fake".to_string(),
+            crate::config::LspServerConfig {
+                command: "fake".to_string(),
+                args: Vec::new(),
+                extensions: vec!["rs".to_string()],
+            },
+        );
+        LspManager::new(&config, std::env::temp_dir())
+    }
+
+    fn document(dir: &Path) -> (DocumentId, Document) {
+        let path = dir.join("main.rs");
+        std::fs::write(&path, "fn main() {}\n").expect("seed");
+        let id = DocumentId(1);
+        (id, Document::open(id, path).expect("open"))
+    }
+
+    fn fake_server(peer: UnixStream, script: impl Fn(&Value) -> Option<Value> + Send + 'static) {
+        std::thread::spawn(move || {
+            let read = peer.try_clone().expect("clone");
+            let mut reader = BufReader::new(read);
+            let mut writer = peer;
+            while let Some(message) = read_frame(&mut reader) {
+                if let Some(reply) = script(&message)
+                    && write_frame(&mut writer, &reply).is_err()
+                {
+                    break;
+                }
+            }
+        });
+    }
+
+    #[derive(Default)]
+    struct FeatureReplies {
+        completion: Option<Vec<CompletionItem>>,
+        hover: Option<String>,
+        definition: Option<Option<Location>>,
+    }
+
+    impl FeatureReplies {
+        fn ready(&self) -> bool {
+            self.completion.is_some() && self.hover.is_some() && self.definition.is_some()
+        }
+    }
+
+    fn collect_features(
+        manager: &mut LspManager,
+        documents: &HashMap<DocumentId, Document>,
+        replies: &mut FeatureReplies,
+    ) {
+        for event in manager.pump(documents) {
+            match event {
+                Event::Completion(items) => replies.completion = Some(items),
+                Event::Hover(text) => replies.hover = Some(text),
+                Event::Definition(location) => replies.definition = Some(location),
+                _ => {}
+            }
+        }
+    }
+
+    fn pump_until(
+        manager: &mut LspManager,
+        documents: &HashMap<DocumentId, Document>,
+        deadline: Duration,
+    ) -> Vec<Event> {
+        let end = Instant::now() + deadline;
+        let mut events = Vec::new();
+        while Instant::now() < end {
+            events.extend(manager.pump(documents));
+            if events
+                .iter()
+                .any(|event| matches!(event, Event::Diagnostics { .. }))
+            {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        events
+    }
+
+    #[test]
+    fn initialize_opens_the_document_and_reports_diagnostics() {
+        let dir = std::env::temp_dir().join(format!("i3-lsp-diag-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let (id, document) = document(&dir);
+        let mut manager = manager();
+        let (stream, peer) = UnixStream::pair().expect("pair");
+        manager.attach_for_test("fake", stream).expect("attach");
+        assert!(manager.config_for_test("fake"));
+        fake_server(peer, |message| {
+            match message.get("method").and_then(Value::as_str) {
+                Some("initialize") => Some(json!({
+                    "jsonrpc": "2.0",
+                    "id": message["id"],
+                    "result": {"capabilities": {}}
+                })),
+                Some("textDocument/didOpen") => Some(json!({
+                    "jsonrpc": "2.0",
+                    "method": "textDocument/publishDiagnostics",
+                    "params": {
+                        "uri": message["params"]["textDocument"]["uri"],
+                        "diagnostics": [{
+                            "range": {"start": {"line": 0, "character": 3}, "end": {"line": 0, "character": 7}},
+                            "severity": 1,
+                            "message": "unknown name"
+                        }]
+                    }
+                })),
+                _ => None,
+            }
+        });
+        let mut documents = HashMap::new();
+        documents.insert(id, document);
+        let events = pump_until(&mut manager, &documents, Duration::from_secs(5));
+        let diagnostics = events
+            .iter()
+            .find_map(|event| match event {
+                Event::Diagnostics { diagnostics, .. } => Some(diagnostics.clone()),
+                _ => None,
+            })
+            .expect("diagnostics");
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].line, 0);
+        assert_eq!(diagnostics[0].severity, Severity::Error);
+        assert_eq!(diagnostics[0].message, "unknown name");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn completion_hover_and_definition_replies_are_parsed() {
+        let dir = std::env::temp_dir().join(format!("i3-lsp-features-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let (id, document) = document(&dir);
+        let target = dir.join("other.rs");
+        std::fs::write(&target, "fn other() {}\n").expect("target");
+        let target_uri = uri(&target);
+        let mut manager = manager();
+        let (stream, peer) = UnixStream::pair().expect("pair");
+        manager.attach_for_test("fake", stream).expect("attach");
+        fake_server(peer, move |message| {
+            let method = message.get("method").and_then(Value::as_str);
+            let result = match method {
+                Some("initialize") => json!({"capabilities": {}}),
+                Some("textDocument/completion") => json!({
+                    "items": [{"label": "answer", "detail": "u32", "insertText": "answer"}]
+                }),
+                Some("textDocument/hover") => {
+                    json!({"contents": {"kind": "plaintext", "value": "u32"}})
+                }
+                Some("textDocument/definition") => json!([{
+                    "uri": target_uri,
+                    "range": {"start": {"line": 0, "character": 3}, "end": {"line": 0, "character": 8}}
+                }]),
+                _ => return None,
+            };
+            Some(json!({"jsonrpc": "2.0", "id": message["id"], "result": result}))
+        });
+        let mut documents = HashMap::new();
+        documents.insert(id, document);
+
+        // Let initialize and didOpen settle.
+        let end = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < end && !manager.servers["fake"].initialized {
+            manager.pump(&documents);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(manager.servers["fake"].initialized);
+
+        let document = &documents[&id];
+        manager.completion(document, 3).expect("completion");
+        manager.hover(document, 3).expect("hover");
+        manager.definition(document, 3).expect("definition");
+
+        let mut replies = FeatureReplies::default();
+        let end = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < end && !replies.ready() {
+            collect_features(&mut manager, &documents, &mut replies);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let completion = replies.completion.expect("completion");
+        assert_eq!(completion[0].label, "answer");
+        assert_eq!(completion[0].detail, "u32");
+        assert_eq!(replies.hover.expect("hover"), "u32");
+        let definition = replies.definition.expect("definition").expect("location");
+        assert_eq!(
+            definition.path,
+            std::fs::canonicalize(&target).expect("canonical target")
+        );
+        assert_eq!(definition.line, 0);
+        assert_eq!(definition.character, 3);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn utf16_columns_round_trip() {
+        let text = "a😀b";
+        assert_eq!(char_to_utf16(text, 2), 3);
+        assert_eq!(utf16_to_char(text, 3), 2);
+        assert_eq!(utf16_to_char(text, 99), 3);
+    }
+
+    #[test]
+    fn uris_round_trip_percent_encoding() {
+        let path = PathBuf::from("/tmp/a b/ü.txt");
+        let encoded = uri(&path);
+        assert!(encoded.contains("%20"), "{encoded}");
+        assert_eq!(path_from_uri(&encoded).as_deref(), Some(path.as_path()));
+    }
+
+    #[test]
+    fn extension_mapping_selects_a_server() {
+        let manager = manager();
+        assert_eq!(
+            manager.config_key(Path::new("/tmp/main.rs")).as_deref(),
+            Some("fake")
+        );
+        assert!(manager.config_key(Path::new("/tmp/main.py")).is_none());
+    }
+
+    #[test]
+    fn no_configuration_reports_missing_server() {
+        let config = LspConfig::default();
+        let mut manager = LspManager::new(&config, std::env::temp_dir());
+        let dir = std::env::temp_dir().join(format!("i3-lsp-none-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let (_, document) = document(&dir);
+        let error = manager.completion(&document, 0).expect_err("no server");
+        assert!(error.contains("no language server"), "{error}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+}

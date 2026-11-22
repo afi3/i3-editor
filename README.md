@@ -199,6 +199,10 @@ the title), and the cursor jumps to the selected match.
   active; `next_match` from the palette (`F1`) continues from there.
 - The list shows up to eight rows around the selection; the buffer may hold more.
 - `Ctrl+R` replaces every occurrence of the first field with the second.
+- `Alt+R` toggles regex mode, `Alt+W` whole word, `Alt+C` case sensitivity. The
+  title shows the active flags (`.*`, `W`, `Aa`), and the same options apply to
+  Find, Replace, Find in Files, and Replace in Files. Literal queries ignore
+  case until `Alt+C`; regex replacements expand `$1` groups.
 
 ### Find in files
 
@@ -212,8 +216,8 @@ cannot distinguish `Ctrl+Shift+F`; run `find_in_files` from the command palette
 "ctrl+shift+f" = "find_in_files"
 ```
 
-- Matching is literal and smart-case: an all-lowercase query ignores case, any
-  uppercase character makes it case-sensitive.
+- Matching uses the shared search options above: literal or regex, whole word,
+  and case-insensitive unless `Alt+C` is on.
 - Results show `path:line:column` plus the matching line. `Up` / `Down` choose a
   result; `Enter` opens that file and puts the cursor on the match; `Esc` cancels
   the scan and closes the prompt.
@@ -224,6 +228,186 @@ cannot distinguish `Ctrl+Shift+F`; run `find_in_files` from the command palette
   the count with a `+`).
 - Files hidden by `.gitignore` are excluded unless the explorer's hidden toggle
   is on, matching quick open.
+
+### Replace in files
+
+`replace_in_files` from the palette (`F1`) opens the same scan with a second
+field. Nothing is written while the preview streams:
+
+- `Tab` moves from the query to the replacement. `Enter` on the query moves to
+  the replacement; `Enter` there is the per-file confirmation and writes only the
+  selected file. `Ctrl+Enter` performs the same confirmation from either field.
+- The title counts matches and files, with `+` when the scan was truncated.
+- Clean open buffers are rewritten through their undo history and saved
+  atomically, so `Ctrl+Z` restores the pre-replace text. Dirty buffers are
+  skipped with a message; save them first.
+- Files that are not open are read, replaced, and written atomically. The scan
+  refreshes after each write and the prompt stays open for the next file; `Esc`
+  cancels.
+
+### Symbols and folding
+
+Both commands are in the palette (`F1`); neither has a default key because
+terminals disagree about `Ctrl+Shift` combinations.
+
+- `go_to_symbol` lists the definitions tree-sitter finds in the active document
+  (Rust, Python, JavaScript/TypeScript, Go, C, Shell, Lua, Markdown headings,
+  TOML tables). Typing filters the list; `Enter` jumps to the definition and
+  opens any fold covering it.
+- `toggle_fold` folds the smallest block starting at the cursor line: functions,
+  classes, `impl`/`mod`, match and block expressions, Markdown sections and
+  fenced code, and TOML tables. The header line stays visible and the rest of the
+  range disappears from the viewport; fold headers keep their original line
+  numbers.
+- A second `toggle_fold` on the header opens it. Any edit unfolds the document,
+  because tree-sitter line ranges move under edits.
+
+### Workspace roots
+
+Each workspace owns its explorer root and a recursive watcher for that root:
+
+- `workspace_root` from the palette prompts for a directory and rebuilds the
+  explorer, quick-open list, and watcher for the active workspace. A new
+  workspace (`F7`) inherits the active root.
+- Switching workspaces (`Ctrl+1`..`Ctrl+9`, `F7`/`F8`, or the palette) swaps the
+  explorer to that workspace's root and clears the quick-open cache; the tree is
+  rebuilt for the new root.
+- Every workspace root is watched. File events from an inactive workspace still
+  reload open buffers but do not rebuild the active explorer tree.
+- `session.toml` stores each workspace root, so a restored session keeps the
+  independent environments.
+
+### Crash recovery
+
+- Dirty buffers with a path are written at most once per second to
+  `<config>/i3-editor/swap/`, using an unpredictable temporary file and an
+  atomic rename. Untitled buffers and files above 16 MiB are skipped.
+- On the next start each swap reopens the file as a tab and asks once per file:
+  **Save recovered buffer** (overwrite the file), **Reload from disk** (drop the
+  recovered text), or **Keep unsaved buffer**. `Esc` keeps the buffer.
+- A saved or discarded buffer drops its swap on the next pass. A graceful exit
+  deletes the swap directory, so choosing "discard all and quit" cannot resurrect
+  the discarded text on the next start.
+
+### Language servers (LSP)
+
+The editor speaks a minimal subset of LSP over stdio: full document sync,
+diagnostics, completion, hover, and go-to-definition. Servers start lazily when a
+matching document opens; a missing or crashing server never blocks editing.
+
+- Configure one table per server. The table name is the default language match;
+  `extensions` overrides it:
+
+```toml
+[lsp.rust]
+command = "rust-analyzer"
+args = []
+
+[lsp.python]
+command = "pylsp"
+extensions = ["py", "pyi"]
+```
+
+- Diagnostics appear as `•` markers in the gutter (red error, yellow warning,
+  cyan info) and as `LSP nE mW` in the status bar for the active document.
+- `lsp_completion` (palette) opens a popup above the status bar. `Up` / `Down`
+  choose an item, `Enter` inserts its text, and `Esc` or any other key closes the
+  popup without eating that key.
+- `lsp_hover` (palette) shows the server's hover text in a bordered popup; any
+  key closes it.
+- `lsp_definition` (palette) opens the target file, unfolds the line, and puts
+  the cursor on the definition. `lsp_completion`, `lsp_hover`, and
+  `lsp_definition` are palette-only so no terminal binding is assumed.
+- Sync is full-text on every change; positions convert between char offsets and
+  LSP's UTF-16 columns. Server failures and protocol errors surface through the
+  status bar once per server.
+
+None of the commands has a default key. Bind one under `[keys.editing]` if the
+terminal can emit it, for example `"ctrl+space" = "lsp_completion"`.
+
+### Git
+
+Git runs through the configured binary (`[git] binary`, default `git`); there is
+no library dependency. The active workspace root must be inside a work tree.
+
+- The gutter marks changed lines against `HEAD`: `+` added (green), `~` modified
+  (yellow), `-` deleted (red). Markers refresh after open/save, after Git
+  commands, and at most once per second.
+- `git_status` opens a prompt listing `XY path` porcelain codes. Filtering works
+  normally; `Enter` opens a read-only diff for that file.
+- `git_diff` shows the active file's unstaged diff (falling back to the staged
+  diff when the worktree is clean). The overlay scrolls with `Up`/`Down`,
+  `PageUp`/`PageDown`, `Home`/`End`; `Esc` or `q` closes it. It never writes.
+- `git_stage` and `git_unstage` act on the active file. `git_commit` prompts for
+  a message and commits the staged index.
+- Every failure (not a repository, nothing staged, git missing) is reported in
+  the status bar.
+
+All five commands are palette-only; bind them under `[keys.editing]` if wanted.
+
+### Multi-cursor, wrapping, and line endings
+
+- `add_cursor_below` / `add_cursor_above` (palette) add secondary cursors at the
+  same column on the next/previous line. `clear_cursors` removes them.
+- Typing, `Enter`, `Tab`, `Backspace`, `Delete`, paste, `Copy`, and `Cut` apply
+  to every cursor. Each multi-cursor edit is one undo step, and undoing it drops
+  the secondary cursors back to the primary.
+- Alt-drag inside a pane is a rectangular (column) selection: every line in the
+  dragged range gets a selection between the anchor column and the release
+  column. Copy joins the selections with newlines; Cut removes them as one step.
+- `toggle_word_wrap` (palette) or `[editor] word_wrap = true` enables soft wrap.
+  Wrapped rows break at spaces when possible; long words break at the width.
+  `Up`/`Down` move by visual row, clicking maps to the clicked visual row, and
+  the cursor/selection/gutter all follow the same mapping. Horizontal scrolling
+  is disabled while wrapped.
+- `line_endings_lf` and `line_endings_crlf` (palette) convert the whole document
+  as one undo step. The status bar shows the new `LF`/`CRLF`, new lines use that
+  ending, and the next save writes exactly those bytes. Mixed endings are
+  normalized by the conversion only; a normal save never rewrites them.
+- Non-UTF-8 files are still refused when opened, with a status-bar message.
+
+### Lua plugins
+
+Every `*.lua` file in `<config>/i3-editor/plugins/` is loaded at startup and
+reloaded when the directory changes. The API is versioned (`api_version == 1`):
+
+```lua
+commands.register("my_command", function()
+  fs.write_file("/tmp/ran", "yes")       -- only with [lua] allow_file = true
+end)
+
+keymap.set("ctrl+alt+m", "my_command")   -- palette remains the fallback
+
+events.on("save", function()             -- open | save | change | focus
+  marker = editor.path()
+end)
+
+statusline.register(function()
+  local selections = editor.selections()
+  return editor.language() .. ":" .. #selections
+end)
+```
+
+- `editor.path()`, `editor.language()`, `editor.cursor()` (returns 0-based line
+  and char column), and `editor.selections()` (always a list of
+  `{start, end}` char ranges, including carets).
+- Plugin commands appear in the command palette; `keymap.set` adds a binding
+  without touching `config.toml`.
+- Callbacks run on the UI thread with an instruction budget (`[lua]
+  time_budget_ms`, 10–5000 ms). A callback that exceeds it is aborted and
+  reported. Re-entrancy is limited to four nested callbacks.
+- Sandbox default: no `io`, `os`, or `package`. `[lua] allow_file = true` loads
+  `io` and exposes `fs.write_file(path, contents)`; `allow_process = true` loads
+  `os` and exposes `process.run(program, [args])`. Both are explicit opt-ins.
+- Errors include the plugin file and line, are stored in `messages`, and a
+  plugin is disabled after three failures. Reloading unregisters that plugin's
+  commands, keymaps, events, and statusline segments before loading again.
+- `statusline` strings render after the LSP counts in the status bar.
+- TOML remains the validated source of truth for settings; an `init.lua` overlay
+  is not supported.
+
+Demo plugins live in `plugins/` in this repository; copy them into the config
+directory to try the API.
 
 ### Open two files side by side
 
@@ -430,6 +614,7 @@ tab_size = 4
 insert_spaces = true
 line_numbers = true
 auto_indent = true
+word_wrap = false          # toggle at runtime with `toggle_word_wrap`
 
 [explorer]
 visible = true
@@ -446,6 +631,20 @@ show_workspace_tabs = true
 height = 12                # rows for the bottom panel, clamped to 3..=60
 shell = "/bin/zsh"         # optional: default $SHELL, then /bin/sh
 scrollback = 2000          # lines kept, clamped to 100..=100000
+
+[lsp.rust]
+command = "rust-analyzer"
+args = []
+extensions = ["rs"]        # optional; empty means the table name
+
+[git]
+binary = "git"             # executable used for every git command
+
+[lua]
+enabled = true             # load <config>/i3-editor/plugins/*.lua
+allow_file = false         # io + fs.write_file
+allow_process = false      # os + process.run
+time_budget_ms = 100       # per callback, clamped to 10..=5000
 
 [keys]
 preset = "default"         # "default" | "safe"
@@ -522,9 +721,26 @@ every check.
 
 - Syntax highlighting is structural for every supported language. An unknown
   fence language stays plain text.
-- Only the workspace root is watched. A document saved outside it is not
+- Only workspace roots are watched. A document saved outside every root is not
   reloaded automatically, and quick open still caps its cached list at 5000
   files.
+- Folds are per-session and close on the next edit; the editor does not persist
+  them. `go_to_symbol` uses a per-language node-kind table rather than each
+  grammar's locals query, so unusual definitions can be missing.
+- Lua plugins are synchronous on the UI thread and have no async or network
+  API; file/process access is off unless the matching capability is enabled.
+  The API is v1 only and config changes do not reload existing plugin code until
+  the plugin directory changes or the editor restarts.
+- Soft wrap maps rows by rescanning the document for `Up`/`Down`; very large
+  files can make those keys slower. Secondary carets are edited and copied
+  together but only the primary caret is drawn as a cursor.
+- Git shows only the current worktree's `HEAD` diff: no branch, log, push/pull,
+  hunk staging, or conflict UI. Untracked files are marked as all-added; binary
+  files have no line markers, and markers can lag by up to one second.
+- The LSP client keeps the root captured at startup and has no request timeout;
+  a server that starts but never answers leaves its requests pending. Full-text
+  sync is used instead of incremental ranges, and shutdown/restart on config or
+  workspace-root changes is not implemented.
 - `--update` uses the unauthenticated GitHub API (60 requests per hour per IP)
   and trusts the checksum published in the same release; there is no signature.
 - Saving replaces the file by rename, so an extra hard link keeps pointing at the

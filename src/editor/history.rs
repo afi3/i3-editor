@@ -181,6 +181,28 @@ impl History {
         self.last_edit = None;
     }
 
+    /// One batch for several independent edits, applied in the given order.
+    pub fn record_edits(
+        &mut self,
+        edits: Vec<Edit>,
+        cursor_before: usize,
+        cursor_after: usize,
+        scroll_before: (usize, u16),
+    ) {
+        if edits.is_empty() {
+            return;
+        }
+        self.push_batch(Batch {
+            edits,
+            cursor_before,
+            cursor_after,
+            scroll_before,
+            id: self.next_id,
+            parent: self.current,
+        });
+        self.last_edit = None;
+    }
+
     fn push_batch(&mut self, batch: Batch) {
         self.next_id = self.next_id.saturating_add(1);
         self.current = batch.id;

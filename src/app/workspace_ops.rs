@@ -1,6 +1,7 @@
 //! Splits, panes, and workspaces.
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 use crate::command::Direction;
 use crate::error::{Error, Result};
@@ -126,15 +127,17 @@ impl App {
         let pane_id = self.state.ids.pane();
         let workspace_id = self.state.ids.workspace();
         self.state.panes.insert(pane_id, Pane::new(pane_id));
+        let root = self.state.workspaces.active().root.clone();
         let name = format!("ws{}", workspace_id.0);
-        let index = self
-            .state
-            .workspaces
-            .push(Workspace::new(workspace_id, name, pane_id));
+        let index =
+            self.state
+                .workspaces
+                .push(Workspace::new(workspace_id, name, pane_id, root.clone()));
         self.state.workspaces.switch(index);
         self.state.focus = Focus::Pane(pane_id);
         self.state.fullscreen = None;
         self.refresh_layout_rects();
+        self.replace_watcher(workspace_id, &root);
         self.notify(format!("workspace {index} created"));
         Ok(())
     }
@@ -171,6 +174,34 @@ impl App {
         self.state.focus = Focus::Pane(target);
         self.state.fullscreen = None;
         self.refresh_layout_rects();
+        if let Err(error) = self.apply_active_root() {
+            self.notify(format!("workspace root unavailable: {error}"));
+        }
+        self.plugin_event("focus");
+        Ok(())
+    }
+
+    /// Point the active workspace at another directory and rebuild its explorer.
+    pub(crate) fn set_workspace_root(&mut self, root: PathBuf) -> Result<()> {
+        let root = root
+            .canonicalize()
+            .map_err(|error| Error::io("resolve", &root, error))?;
+        if !root.is_dir() {
+            return Err(Error::InvalidPath(root));
+        }
+        let id = self.state.workspaces.active().id;
+        if self.state.workspaces.active().root == root {
+            self.notify("workspace already uses that root");
+            return Ok(());
+        }
+        self.state.workspaces.active_mut().root = root.clone();
+        self.apply_active_root()?;
+        self.replace_watcher(id, &root);
+        self.state.workspaces.active_mut().name = root
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| root.display().to_string());
+        self.notify(format!("workspace root: {}", root.display()));
         Ok(())
     }
 
@@ -200,6 +231,7 @@ impl App {
 
         let removed = self.state.workspaces.close(active)?;
         let closed_id = removed.id;
+        self.watchers.retain(|(id, _)| *id != closed_id);
         for leaf in removed.layout.leaves() {
             if let Some(pane) = self.state.panes.remove(&leaf) {
                 for id in pane.tabs {
@@ -226,6 +258,9 @@ impl App {
         self.state.focus = Focus::Pane(target);
         self.state.fullscreen = None;
         self.refresh_layout_rects();
+        if let Err(error) = self.apply_active_root() {
+            self.notify(format!("workspace root unavailable: {error}"));
+        }
         self.notify(format!("closed workspace {closed_id}"));
         Ok(())
     }

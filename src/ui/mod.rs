@@ -254,6 +254,8 @@ pub fn render(frame: &mut Frame, state: &AppState) {
     if state.ui.status.height > 0 {
         render_status(frame, state);
     }
+    overlay::render_diff(frame, state);
+    overlay::render_popups(frame, state);
     if let InputMode::Prompt(prompt) = &state.mode {
         overlay::render_prompt(frame, state, prompt);
     }
@@ -342,8 +344,31 @@ fn render_status(frame: &mut Frame, state: &AppState) {
     let encoding = document
         .map(|document| document.eol.as_str())
         .unwrap_or("-");
+    let problems = document
+        .and_then(|document| state.lsp_diagnostics.get(&document.id))
+        .filter(|diagnostics| !diagnostics.is_empty())
+        .map(|diagnostics| {
+            let errors = diagnostics
+                .iter()
+                .filter(|diagnostic| diagnostic.severity == crate::lsp::Severity::Error)
+                .count();
+            let warnings = diagnostics
+                .iter()
+                .filter(|diagnostic| diagnostic.severity == crate::lsp::Severity::Warning)
+                .count();
+            format!(" | LSP {errors}E {warnings}W")
+        })
+        .unwrap_or_default();
 
-    let left = format!(" {name} | {line}:{column} | {total} lines | UTF-8 {encoding} | {focus} ");
+    let plugins = if state.plugin_status.is_empty() {
+        String::new()
+    } else {
+        format!(" | {}", state.plugin_status.join(" | "))
+    };
+
+    let left = format!(
+        " {name} | {line}:{column} | {total} lines | UTF-8 {encoding} | {focus}{problems}{plugins} "
+    );
     let left = if state.moving {
         format!("{left} | MOVE: arrows move the pane, Esc exits ")
     } else {
@@ -401,6 +426,7 @@ mod tests {
                 dirty: false,
                 eol: Eol::Lf,
                 history: History::default(),
+                folded: Vec::new(),
                 syntax: Default::default(),
                 disk_modified: None,
                 disk_len: 0,
@@ -408,7 +434,7 @@ mod tests {
         );
 
         let mut workspaces = WorkspaceManager::default();
-        workspaces.push(Workspace::new(WorkspaceId(1), "test", pane_id));
+        workspaces.push(Workspace::new(WorkspaceId(1), "test", pane_id, dir.clone()));
 
         let state = AppState {
             should_quit: false,
@@ -426,7 +452,14 @@ mod tests {
             warnings: Vec::new(),
             clipboard: String::new(),
             search: None,
+            search_options: crate::search_options::Options::default(),
             project_search: None,
+            lsp_diagnostics: HashMap::new(),
+            completions: None,
+            hover: None,
+            git_marks: HashMap::new(),
+            git_diff: None,
+            plugin_status: Vec::new(),
             fullscreen: None,
             moving: false,
             terminals: Default::default(),
@@ -763,6 +796,43 @@ mod tests {
     }
 
     #[test]
+    fn replace_in_files_prompt_shows_files_and_counts() {
+        let (mut state, dir) = state("needle\n");
+        let mut search = crate::state::ProjectSearch {
+            query: "needle".to_string(),
+            ..Default::default()
+        };
+        search.results = vec![
+            crate::project_search::Match {
+                path: dir.join("a.txt"),
+                relative: "a.txt".to_string(),
+                line: 0,
+                column: 0,
+                preview: "needle one".to_string(),
+            },
+            crate::project_search::Match {
+                path: dir.join("a.txt"),
+                relative: "a.txt".to_string(),
+                line: 2,
+                column: 0,
+                preview: "needle two".to_string(),
+            },
+        ];
+        state.project_search = Some(search);
+        let mut prompt = PromptState::new(PromptKind::ReplaceInFiles);
+        prompt.set_input("needle");
+        prompt.fields[1] = "done".to_string();
+        prompt.candidates = vec!["a.txt  (2 matches)".to_string()];
+        prompt.refilter();
+        state.mode = InputMode::Prompt(prompt);
+
+        let screen = draw(&mut state, 80, 24);
+        assert!(screen.contains("Replace in Files 2 in 1 files"), "{screen}");
+        assert!(screen.contains("a.txt  (2 matches)"), "{screen}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
     fn find_prompt_lists_matches_and_highlights_all_of_them() {
         use ratatui::style::Modifier;
 
@@ -772,7 +842,9 @@ mod tests {
         state.search = Some(Search {
             document: DocumentId(1),
             query: "alpha".to_string(),
-            matches: vec![0, 11],
+            options: crate::search_options::Options::default(),
+            matches: vec![0..5, 11..16],
+            truncated: false,
             index: 1,
         });
         let mut prompt = PromptState::new(PromptKind::Find);
@@ -795,6 +867,119 @@ mod tests {
         let screen = draw(&mut state, 80, 24);
         assert!(screen.contains("Find 2/2"), "{screen}");
         assert!(screen.contains("    2  beta alpha"), "{screen}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn lsp_diagnostics_and_popups_render() {
+        use crate::lsp::{CompletionItem, Diagnostic, Severity};
+        use crate::state::CompletionPopup;
+
+        let (mut state, dir) = state("fn main() {}\n");
+        state.lsp_diagnostics.insert(
+            DocumentId(1),
+            vec![Diagnostic {
+                line: 0,
+                column: 3,
+                severity: Severity::Error,
+                message: "unknown name".to_string(),
+            }],
+        );
+        let screen = draw(&mut state, 80, 24);
+        assert!(screen.contains("LSP 1E 0W"), "{screen}");
+        assert!(screen.contains('•'), "{screen}");
+
+        state.completions = Some(CompletionPopup {
+            items: vec![CompletionItem {
+                label: "answer".to_string(),
+                insert: "answer".to_string(),
+                detail: "u32".to_string(),
+            }],
+            selected: 0,
+        });
+        let screen = draw(&mut state, 80, 24);
+        assert!(screen.contains("Completion"), "{screen}");
+        assert!(screen.contains("answer"), "{screen}");
+        assert!(screen.contains("u32"), "{screen}");
+
+        state.completions = None;
+        state.hover = Some("u32 value".to_string());
+        let screen = draw(&mut state, 80, 24);
+        assert!(screen.contains("Hover"), "{screen}");
+        assert!(screen.contains("u32 value"), "{screen}");
+
+        state.hover = None;
+        state.plugin_status = vec!["LUA:on".to_string(), "2 sel".to_string()];
+        let screen = draw(&mut state, 80, 24);
+        assert!(screen.contains("LUA:on | 2 sel"), "{screen}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn git_markers_and_diff_overlay_render() {
+        use crate::state::DiffView;
+
+        let (mut state, dir) = state("one\ntwo\n");
+        state.git_marks.insert(
+            DocumentId(1),
+            vec![
+                Some(crate::git::Change::Modified),
+                Some(crate::git::Change::Added),
+            ],
+        );
+        let screen = draw(&mut state, 80, 24);
+        assert!(screen.contains('~'), "{screen}");
+        assert!(screen.contains('+'), "{screen}");
+
+        state.git_diff = Some(DiffView {
+            title: " Diff: note.txt ".to_string(),
+            lines: vec![
+                "@@ -1 +1 @@".to_string(),
+                "-one".to_string(),
+                "+two".to_string(),
+            ],
+            scroll: 0,
+        });
+        let screen = draw(&mut state, 80, 24);
+        assert!(screen.contains("Diff: note.txt"), "{screen}");
+        assert!(screen.contains("@@ -1 +1 @@"), "{screen}");
+        assert!(screen.contains("-one"), "{screen}");
+        assert!(screen.contains("+two"), "{screen}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn wrapped_lines_render_on_multiple_rows() {
+        let source = format!("{}\n", "word ".repeat(30));
+        let (mut state, dir) = state(&source);
+        state.config.editor.word_wrap = true;
+        let buffer = draw_buffer(&mut state, 40, 14);
+        let rows: Vec<String> = (0..14)
+            .map(|y| {
+                (0..40)
+                    .map(|x| buffer[(x, y)].symbol().to_string())
+                    .collect::<String>()
+            })
+            .collect();
+        let wrapped = rows.iter().filter(|row| row.contains("word")).count();
+        assert!(wrapped >= 2, "wrapped rows: {rows:?}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn folded_lines_are_not_rendered() {
+        let (mut state, dir) = state("fn alpha() {\n    one();\n    two();\n}\n\nafter\n");
+        let id = DocumentId(1);
+        {
+            let document = state.documents.get_mut(&id).expect("document");
+            document.path = Some(dir.join("note.rs"));
+            document.folded.push(0..3);
+        }
+        let screen = draw(&mut state, 80, 24);
+        assert!(screen.contains("fn alpha"), "{screen}");
+        assert!(screen.contains("after"), "{screen}");
+        assert!(!screen.contains("one()"), "{screen}");
+        assert!(!screen.contains("two()"), "{screen}");
         std::fs::remove_dir_all(&dir).ok();
     }
 }

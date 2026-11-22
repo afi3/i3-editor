@@ -5,7 +5,7 @@ use std::ops::Range;
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::{Modifier, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 use unicode_width::UnicodeWidthStr;
@@ -46,8 +46,8 @@ pub fn text_geometry(
         return None;
     }
     let digits = document.line_count().to_string().len() as u16;
-    let show_numbers = state.config.editor.line_numbers && body.width > digits + 4;
-    let gutter = if show_numbers { digits + 1 } else { 0 };
+    let show_numbers = state.config.editor.line_numbers && body.width > digits + 5;
+    let gutter = if show_numbers { digits + 2 } else { 0 };
     let text_width = body.width.saturating_sub(gutter);
     if text_width == 0 {
         return None;
@@ -116,52 +116,65 @@ pub fn render(
     let line_count = document.line_count();
     let digits = line_count.to_string().len() as u16;
     let tab_width = state.config.editor.tab_size.max(1);
-    let selection = pane.selection();
+    let selections = pane.selected_ranges();
     let selected = theme.selection_style();
     let search = state
         .search
         .as_ref()
         .filter(|search| search.document == document.id);
-    let match_starts = search.map(|search| search.matches.as_slice());
-    let match_len = search
-        .map(|search| search.query.chars().count())
-        .unwrap_or(0);
+    let match_ranges = search.map(|search| search.matches.as_slice());
     let matched = selected.add_modifier(Modifier::UNDERLINED);
     let number_style = Style::default().bg(theme.background).fg(theme.gutter);
     let cursor_line = document.line_of_char(pane.cursor);
 
     let buffer = frame.buffer_mut();
-    let visible = line_count
-        .saturating_sub(pane.scroll_top)
-        .min(text_area.height as usize);
-    let highlight = document.syntax_spans_range(pane.scroll_top, visible);
-    for row in 0..text_area.height as usize {
-        let line_index = pane.scroll_top + row;
-        if line_index >= line_count {
-            break;
-        }
-        let y = text_area.y.saturating_add(row as u16);
+    let wrap = state.config.editor.word_wrap;
+    let rows = visual_rows_for(
+        state,
+        document,
+        pane,
+        text_width,
+        tab_width,
+        text_area.height as usize,
+    );
+    for (row, visual) in rows.iter().enumerate() {
+        let line_index = visual.line;
+        let first_row = visual.start == 0;
         let highlighted = focused && line_index == cursor_line;
+        let y = text_area.y.saturating_add(row as u16);
         let row_style = if highlighted {
             theme.current_line()
         } else {
             theme.base()
         };
         buffer.set_style(Rect::new(text_area.x, y, text_area.width, 1), row_style);
-        if show_numbers {
-            let label = format!("{:>width$} ", line_index + 1, width = digits as usize);
-            let style = if highlighted {
-                Style::default()
-                    .bg(theme.current_line)
-                    .fg(theme.gutter_active)
+        if show_numbers && first_row {
+            let background = if highlighted {
+                theme.current_line
             } else {
-                number_style
+                theme.background
             };
-            buffer.set_stringn(text_area.x, y, &label, gutter as usize, style);
+            render_gutter_cell(
+                buffer,
+                state,
+                document,
+                line_index,
+                text_area.x,
+                y,
+                usize::from(digits),
+                highlighted,
+                number_style,
+                background,
+            );
         }
-        let text = document.line_text(line_index);
-        let line_start = document.char_of_line(line_index);
-        let spans = highlight.get(row).map(Vec::as_slice).unwrap_or(&[]);
+        let full = document.line_text(line_index);
+        let text: String = full
+            .chars()
+            .skip(visual.start)
+            .take(visual.end - visual.start)
+            .collect();
+        let line_start = document.char_of_line(line_index) + visual.start;
+        let spans = row_spans(document, *visual, wrap);
         draw_text_line(
             buffer,
             text_area.x.saturating_add(gutter),
@@ -169,39 +182,198 @@ pub fn render(
             text_width,
             &text,
             line_start,
-            pane.scroll_left,
+            if wrap { 0 } else { pane.scroll_left },
             tab_width,
-            &selection,
+            &selections,
             row_style,
             selected,
-            spans,
+            &spans,
             &theme,
-            match_starts,
-            match_len,
+            match_ranges,
             matched,
         );
     }
 
-    if focused {
+    if focused && !wrap {
         highlight_brackets(frame, pane, document, text_area, gutter, tab_width);
     }
 
     if focused {
-        let line = document.line_of_char(pane.cursor);
-        let line_start = document.char_of_line(line);
-        let text = document.line_text(line);
-        let column =
-            textutil::cells_prefix(&text, pane.cursor.saturating_sub(line_start), tab_width);
-        let visible_row = line.saturating_sub(pane.scroll_top);
+        let (visible_row, column) = cursor_visual_row(&rows, pane, document, wrap, tab_width);
         let x = text_area
             .x
             .saturating_add(gutter)
-            .saturating_add(column.saturating_sub(pane.scroll_left));
+            .saturating_add(column.saturating_sub(if wrap { 0 } else { pane.scroll_left }));
         let y = text_area.y.saturating_add(visible_row as u16);
         if visible_row < text_area.height as usize && x < text_area.x + text_area.width {
             frame.set_cursor_position((x, y));
         }
     }
+}
+
+/// Document lines that fit in `rows`, skipping closed folds.
+fn visible_lines(
+    document: &crate::editor::document::Document,
+    start: usize,
+    rows: usize,
+) -> Vec<usize> {
+    let mut lines = Vec::with_capacity(rows);
+    for line in start..document.line_count() {
+        if lines.len() >= rows {
+            break;
+        }
+        if !document.is_hidden(line) {
+            lines.push(line);
+        }
+    }
+    lines
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_gutter_cell(
+    buffer: &mut Buffer,
+    state: &AppState,
+    document: &Document,
+    line_index: usize,
+    x: u16,
+    y: u16,
+    digits: usize,
+    highlighted: bool,
+    number_style: Style,
+    background: Color,
+) {
+    let digit_cells = u16::try_from(digits).unwrap_or(u16::MAX);
+    let label = format!("{:>width$}", line_index + 1, width = digits);
+    let style = if highlighted {
+        Style::default()
+            .bg(background)
+            .fg(state.theme.gutter_active)
+    } else {
+        number_style
+    };
+    buffer.set_stringn(x, y, &label, digits, style);
+    if let Some(change) = state
+        .git_marks
+        .get(&document.id)
+        .and_then(|marks| marks.get(line_index).copied().flatten())
+    {
+        let (symbol, color) = match change {
+            crate::git::Change::Added => ('+', Color::Green),
+            crate::git::Change::Modified => ('~', Color::Yellow),
+            crate::git::Change::Deleted => ('-', Color::Red),
+        };
+        buffer.set_stringn(
+            x.saturating_add(digit_cells),
+            y,
+            symbol.to_string(),
+            1,
+            Style::default().bg(background).fg(color),
+        );
+    }
+    let severity = state
+        .lsp_diagnostics
+        .get(&document.id)
+        .and_then(|diagnostics| {
+            diagnostics
+                .iter()
+                .filter(|diagnostic| diagnostic.line == line_index)
+                .map(|diagnostic| diagnostic.severity)
+                .min()
+        });
+    let Some(severity) = severity else {
+        return;
+    };
+    let color = match severity {
+        crate::lsp::Severity::Error => Color::Red,
+        crate::lsp::Severity::Warning => Color::Yellow,
+        crate::lsp::Severity::Info => Color::Cyan,
+    };
+    buffer.set_stringn(
+        x.saturating_add(digit_cells.saturating_add(1)),
+        y,
+        "•",
+        1,
+        Style::default().bg(background).fg(color),
+    );
+}
+
+fn visual_rows_for(
+    state: &AppState,
+    document: &crate::editor::document::Document,
+    pane: &Pane,
+    width: u16,
+    tab_width: usize,
+    height: usize,
+) -> Vec<textutil::VisualRow> {
+    if state.config.editor.word_wrap {
+        return textutil::visual_rows(document, pane.scroll_top, width, tab_width, height);
+    }
+    visible_lines(document, pane.scroll_top, height)
+        .into_iter()
+        .map(|line| textutil::VisualRow {
+            line,
+            start: 0,
+            end: document.line_text(line).chars().count(),
+        })
+        .collect()
+}
+
+fn row_spans(
+    document: &crate::editor::document::Document,
+    visual: textutil::VisualRow,
+    wrap: bool,
+) -> Vec<crate::syntax::Span> {
+    let spans = document
+        .syntax_spans_range(visual.line, 1)
+        .first()
+        .cloned()
+        .unwrap_or_default();
+    if !wrap {
+        return spans;
+    }
+    spans
+        .into_iter()
+        .filter(|span| span.end > visual.start && span.start < visual.end)
+        .map(|span| crate::syntax::Span {
+            start: span.start.saturating_sub(visual.start),
+            end: span
+                .end
+                .saturating_sub(visual.start)
+                .min(visual.end - visual.start),
+            kind: span.kind,
+        })
+        .collect()
+}
+
+fn cursor_visual_row(
+    rows: &[textutil::VisualRow],
+    pane: &Pane,
+    document: &crate::editor::document::Document,
+    wrap: bool,
+    tab_width: usize,
+) -> (usize, u16) {
+    let line = document.line_of_char(pane.cursor);
+    let column = pane.cursor.saturating_sub(document.char_of_line(line));
+    if wrap {
+        let full = document.line_text(line);
+        let row = rows
+            .iter()
+            .enumerate()
+            .rev()
+            .find(|(_, row)| row.line == line && column >= row.start);
+        if let Some((index, row)) = row {
+            let prefix: String = full
+                .chars()
+                .skip(row.start)
+                .take(column - row.start)
+                .collect();
+            return (index, textutil::cells(&prefix, tab_width, 0));
+        }
+        return (0, 0);
+    }
+    let index = rows.iter().position(|row| row.line == line).unwrap_or(0);
+    let text = document.line_text(line);
+    (index, textutil::cells_prefix(&text, column, tab_width))
 }
 
 fn render_tabs(frame: &mut Frame, state: &AppState, pane: &Pane, area: Rect) {
@@ -248,7 +420,10 @@ fn highlight_brackets(
     let buffer = frame.buffer_mut();
     for position in [first, second] {
         let line = document.line_of_char(position);
-        if line < pane.scroll_top || line >= pane.scroll_top + usize::from(text_area.height) {
+        if line < pane.scroll_top
+            || line >= pane.scroll_top + usize::from(text_area.height)
+            || document.is_hidden(line)
+        {
             continue;
         }
         let line_start = document.char_of_line(line);
@@ -264,7 +439,10 @@ fn highlight_brackets(
         if x >= text_area.x.saturating_add(text_area.width) {
             continue;
         }
-        let y = text_area.y.saturating_add((line - pane.scroll_top) as u16);
+        let visible_row = (pane.scroll_top..line)
+            .filter(|candidate| !document.is_hidden(*candidate))
+            .count();
+        let y = text_area.y.saturating_add(visible_row as u16);
         buffer[(x, y)].modifier |= Modifier::BOLD | Modifier::UNDERLINED;
     }
 }
@@ -279,13 +457,12 @@ fn draw_text_line(
     line_start_char: usize,
     skip: u16,
     tab_width: usize,
-    selection: &Option<Range<usize>>,
+    selection: &[Range<usize>],
     base: Style,
     selected: Style,
     spans: &[crate::syntax::Span],
     theme: &crate::theme::Theme,
-    match_starts: Option<&[usize]>,
-    match_len: usize,
+    match_ranges: Option<&[std::ops::Range<usize>]>,
     matched: Style,
 ) {
     if width == 0 {
@@ -298,8 +475,8 @@ fn draw_text_line(
     let mut run = String::new();
     let mut run_style = base;
     let mut span_index = 0usize;
-    let mut match_index = match_starts.map_or(0, |starts| {
-        starts.partition_point(|start| start.saturating_add(match_len) <= line_start_char)
+    let mut match_index = match_ranges.map_or(0, |ranges| {
+        ranges.partition_point(|range| range.end <= line_start_char)
     });
 
     for (offset, ch) in text.chars().enumerate() {
@@ -313,23 +490,11 @@ fn draw_text_line(
         };
         let next = cell.saturating_add(advance);
         let absolute = line_start_char + offset;
-        let in_match = match match_starts {
-            Some(starts) => {
-                while match_index < starts.len()
-                    && starts[match_index].saturating_add(match_len) <= absolute
-                {
-                    match_index += 1;
-                }
-                starts
-                    .get(match_index)
-                    .is_some_and(|start| *start <= absolute)
-            }
-            None => false,
-        };
-        let selected_char = matches!(
-            selection,
-            Some(range) if absolute >= range.start && absolute < range.end
-        );
+        let in_match =
+            match_ranges.is_some_and(|ranges| in_match(ranges, &mut match_index, absolute));
+        let selected_char = selection
+            .iter()
+            .any(|range| absolute >= range.start && absolute < range.end);
         let style = if selected_char {
             selected
         } else if in_match {
@@ -362,6 +527,15 @@ fn draw_text_line(
         }
     }
     flush(buffer, &mut cursor_x, &mut run, run_style, y);
+}
+
+fn in_match(ranges: &[std::ops::Range<usize>], index: &mut usize, absolute: usize) -> bool {
+    while *index < ranges.len() && ranges[*index].end <= absolute {
+        *index += 1;
+    }
+    ranges
+        .get(*index)
+        .is_some_and(|range| range.start <= absolute)
 }
 
 fn flush(buffer: &mut Buffer, x: &mut u16, run: &mut String, style: Style, y: u16) {

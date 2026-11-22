@@ -5,10 +5,16 @@ pub mod config_ops;
 pub mod cursor;
 pub mod dispatch;
 pub mod editing;
+pub mod folds;
+pub mod git_ops;
 pub mod lines;
+pub mod lsp_ops;
 pub mod mouse;
+pub mod outline;
+pub mod plugin_ops;
 pub mod project_search;
 pub mod prompt;
+pub mod recovery_ops;
 pub mod search;
 pub mod shell_ops;
 pub mod watch_ops;
@@ -35,11 +41,19 @@ impl App {
             terminal,
             drag: None,
             last_explorer_click: None,
-            watcher: None,
+            watchers: Vec::new(),
             quick_open_files: None,
             project_task: None,
             selecting: None,
             enhanced: false,
+            recoveries: Vec::new(),
+            swap_dir: None,
+            last_swap: std::time::Instant::now(),
+            lsp: None,
+            plugins: None,
+            block_anchor: None,
+            git_status_entries: Vec::new(),
+            last_git: std::time::Instant::now(),
         }
     }
 }
@@ -70,8 +84,8 @@ pub struct App {
     pub(crate) drag: Option<mouse::Drag>,
     /// Last explorer row click, for double-click detection.
     pub(crate) last_explorer_click: Option<(usize, std::time::Instant)>,
-    /// Recursive watcher on the workspace root; `None` when unavailable.
-    pub(crate) watcher: Option<crate::watch::Watcher>,
+    /// Recursive watcher per workspace root; empty when unavailable.
+    pub(crate) watchers: Vec<(crate::state::WorkspaceId, crate::watch::Watcher)>,
     /// Quick-open paths with the explorer revision they were scanned at.
     pub(crate) quick_open_files: Option<(u64, Vec<String>)>,
     /// Running Find in Files scan, if any.
@@ -80,6 +94,22 @@ pub struct App {
     pub(crate) selecting: Option<crate::state::PaneId>,
     /// Probe result, reused when the config is reloaded.
     pub(crate) enhanced: bool,
+    /// Documents restored from swap files, resolved one prompt at a time.
+    pub(crate) recoveries: Vec<crate::state::DocumentId>,
+    /// Swap directory; `None` when no config directory can be resolved.
+    pub(crate) swap_dir: Option<PathBuf>,
+    /// Time of the last swap pass, to bound writes.
+    pub(crate) last_swap: std::time::Instant,
+    /// Language servers for open documents; `None` in headless fixtures.
+    pub(crate) lsp: Option<crate::lsp::LspManager>,
+    /// Alt-drag block selection: pane, anchor line, anchor char column.
+    pub(crate) block_anchor: Option<(crate::state::PaneId, usize, usize)>,
+    /// Lua plugins; `None` when disabled or unavailable.
+    pub(crate) plugins: Option<crate::plugins::Plugins>,
+    /// Entries backing the Git status prompt.
+    pub(crate) git_status_entries: Vec<crate::git::StatusEntry>,
+    /// Time of the last git marker refresh.
+    pub(crate) last_git: std::time::Instant,
 }
 
 impl App {
@@ -105,7 +135,7 @@ impl App {
         let mut panes = HashMap::new();
         panes.insert(pane_id, Pane::new(pane_id));
         let workspaces = WorkspaceManager {
-            workspaces: vec![Workspace::new(workspace_id, name, pane_id)],
+            workspaces: vec![Workspace::new(workspace_id, name, pane_id, root.clone())],
             active: 0,
         };
         let config_path = crate::config::default_path();
@@ -133,7 +163,14 @@ impl App {
             warnings,
             clipboard: String::new(),
             search: None,
+            search_options: crate::search_options::Options::default(),
             project_search: None,
+            lsp_diagnostics: std::collections::HashMap::new(),
+            completions: None,
+            hover: None,
+            git_marks: std::collections::HashMap::new(),
+            git_diff: None,
+            plugin_status: Vec::new(),
             fullscreen: None,
             moving: false,
             terminals: crate::shell::Terminals::default(),
@@ -149,33 +186,105 @@ impl App {
             let session_warnings = crate::session::restore(&mut state);
             state.warnings.extend(session_warnings);
         }
-        let watcher = match crate::watch::Watcher::new(&state.explorer.root, config_path.as_deref())
-        {
-            Ok(watcher) => Some(watcher),
-            Err(error) => {
-                state
-                    .warnings
-                    .push(format!("file watching disabled: {error}"));
-                None
-            }
-        };
-        state.ui.message = startup_message(&state.warnings);
-
         let mut app = Self {
             state,
             terminal: setup.terminal,
             drag: None,
             last_explorer_click: None,
-            watcher,
+            watchers: Vec::new(),
             quick_open_files: None,
             project_task: None,
             selecting: None,
             enhanced: false,
+            recoveries: Vec::new(),
+            swap_dir: None,
+            last_swap: std::time::Instant::now(),
+            lsp: None,
+            plugins: None,
+            block_anchor: None,
+            git_status_entries: Vec::new(),
+            last_git: std::time::Instant::now(),
         };
+        if let Err(error) = app.apply_active_root() {
+            app.state
+                .warnings
+                .push(format!("workspace root unavailable: {error}"));
+        }
+        app.lsp = Some(crate::lsp::LspManager::new(
+            &app.state.config.lsp,
+            app.state.explorer.root.clone(),
+        ));
+        if app.state.config.lua.enabled
+            && let Some(dir) = crate::plugins::Plugins::default_dir()
+        {
+            match crate::plugins::Plugins::new(dir, &app.state.config.lua) {
+                Ok(mut plugins) => {
+                    let warnings = plugins.take_warnings();
+                    app.state.warnings.extend(warnings);
+                    app.plugins = Some(plugins);
+                }
+                Err(error) => app
+                    .state
+                    .warnings
+                    .push(format!("Lua plugins disabled: {error}")),
+            }
+        }
+        app.init_watchers(config_path.as_deref());
         if let Some(path) = file {
             app.open_document(path)?;
         }
+        app.load_recoveries();
+        app.refresh_plugin_status();
+        app.state.ui.message = startup_message(&app.state.warnings);
         Ok(app)
+    }
+
+    /// Make the explorer match the active workspace. Called after a session
+    /// restore, a workspace switch, or a root change.
+    pub(crate) fn apply_active_root(&mut self) -> Result<()> {
+        let root = self.state.workspaces.active().root.clone();
+        if self.state.explorer.root == root {
+            return Ok(());
+        }
+        let visible = self.state.explorer.visible;
+        let show_hidden = self.state.explorer.show_hidden;
+        let mut explorer = ExplorerState::new(root, show_hidden)?;
+        explorer.visible = visible;
+        self.state.explorer = explorer;
+        self.quick_open_files = None;
+        self.state.project_search = None;
+        Ok(())
+    }
+
+    fn init_watchers(&mut self, config: Option<&Path>) {
+        let roots: Vec<(crate::state::WorkspaceId, PathBuf)> = self
+            .state
+            .workspaces
+            .workspaces
+            .iter()
+            .map(|workspace| (workspace.id, workspace.root.clone()))
+            .collect();
+        for (index, (id, root)) in roots.into_iter().enumerate() {
+            let watched_config = if index == 0 { config } else { None };
+            match crate::watch::Watcher::new(&root, watched_config) {
+                Ok(watcher) => self.watchers.push((id, watcher)),
+                Err(error) => self.state.warnings.push(format!(
+                    "file watching disabled for {}: {error}",
+                    root.display()
+                )),
+            }
+        }
+    }
+
+    pub(crate) fn replace_watcher(&mut self, id: crate::state::WorkspaceId, root: &Path) {
+        self.watchers.retain(|(watched, _)| *watched != id);
+        match crate::watch::Watcher::new(root, None) {
+            Ok(watcher) => self.watchers.push((id, watcher)),
+            Err(error) => self.state.warnings.push(format!(
+                "file watching disabled for {}: {error}",
+                root.display()
+            )),
+        }
     }
 
     pub fn run(mut self) -> Result<()> {
@@ -183,6 +292,9 @@ impl App {
             self.pump_shell();
             self.pump_watcher();
             self.pump_project_search();
+            self.pump_lsp();
+            self.refresh_git_if_due();
+            self.autosave_swaps();
             self.draw()?;
             let timeout = if !self.state.terminals.is_empty() && self.state.focus == Focus::Shell {
                 Duration::from_millis(30)
@@ -203,6 +315,12 @@ impl App {
                 }
                 _ => {}
             }
+            // Never run Lua from `draw`: once per input event keeps the
+            // statusline fresh without a per-frame callback cost.
+            self.refresh_plugin_status();
+        }
+        if let Some(dir) = &self.swap_dir {
+            crate::recovery::clear_all(dir);
         }
         crate::session::persist(&self.state)?;
         Ok(())
@@ -262,6 +380,15 @@ impl App {
             self.handle_prompt_key(combo);
             return;
         }
+        if self.handle_diff_key(combo) {
+            return;
+        }
+        if self.handle_completion_key(combo) {
+            return;
+        }
+        if self.handle_hover_key(combo) {
+            return;
+        }
         if matches!(self.state.focus, Focus::Shell) {
             if let Some(command) = self.state.keymap.global.get(&combo).cloned()
                 && matches!(
@@ -292,6 +419,10 @@ impl App {
         if let Some(command) = self.state.keymap.resolve(self.state.focus, combo) {
             let result = self.dispatch(command);
             self.finish(result);
+            return;
+        }
+        if let Some(command) = self.plugin_binding(combo) {
+            self.run_plugin_command(&command);
             return;
         }
         if matches!(self.state.focus, Focus::Pane(_))
@@ -346,6 +477,8 @@ impl App {
         self.state.documents.insert(id, document);
         self.activate_document(id)?;
         self.notify(format!("opened {}", path.display()));
+        self.refresh_git_marks();
+        self.plugin_event("open");
         Ok(())
     }
 
@@ -371,6 +504,7 @@ impl App {
         pane.anchor = None;
         pane.cursor = pane.cursor.min(self.state.documents[&id].len_chars());
         self.state.focus = Focus::Pane(pane.id);
+        self.plugin_event("focus");
         Ok(())
     }
 

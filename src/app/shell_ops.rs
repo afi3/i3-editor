@@ -131,7 +131,7 @@ impl App {
 
     pub(crate) fn paste_to_shell(&mut self, text: &str) {
         if let Some(shell) = self.state.terminals.active_mut() {
-            shell.write(text.as_bytes());
+            shell.paste(text);
         }
     }
 

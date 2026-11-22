@@ -12,25 +12,34 @@ impl App {
             self.state.search = None;
             return;
         }
+        let options = self.state.search_options;
         let Some(document_id) = self.state.active_document_id() else {
             return;
         };
         let Some(document) = self.state.documents.get(&document_id) else {
             return;
         };
-        let matches = match_positions(&document.rope.to_string(), &query);
+        let text = document.rope.to_string();
+        let matcher = match crate::search_options::Matcher::new(&query, options) {
+            Ok(matcher) => matcher,
+            Err(error) => {
+                self.state.search = None;
+                self.notify(format!("invalid search: {error}"));
+                return;
+            }
+        };
+        let (matches, truncated) = matcher.find(&text);
         let total = matches.len();
         self.state.search = Some(Search {
             document: document_id,
-            query,
+            query: query.clone(),
+            options,
             matches,
             index: 0,
+            truncated,
         });
         if total == 0 {
-            let query = self.state.search.as_ref().map(|s| s.query.clone());
-            if let Some(query) = query {
-                self.notify(format!("no match for {query}"));
-            }
+            self.notify(format!("no match for {query}"));
             return;
         }
         self.show_match(0);
@@ -45,11 +54,16 @@ impl App {
             return Ok(());
         }
         let active = self.state.active_document_id();
+        let options = self.state.search_options;
         let live = self
             .state
             .search
             .as_ref()
-            .filter(|search| search.query == query && Some(search.document) == active)
+            .filter(|search| {
+                search.query == query
+                    && Some(search.document) == active
+                    && search.options == options
+            })
             .map(|search| (search.index, search.matches.len()));
         match live {
             Some((_, 0)) => self.notify(format!("no match for {query}")),
@@ -97,18 +111,26 @@ impl App {
             return;
         }
         let index = index % total;
-        let start = search.matches[index];
+        let range = search.matches[index].clone();
         let document = search.document;
-        let length = search.query.chars().count();
         let query = search.query.clone();
+        let line = self
+            .state
+            .documents
+            .get(&document)
+            .map(|document| document.line_of_char(range.start))
+            .unwrap_or(0);
+        if let Some(document) = self.state.documents.get_mut(&document) {
+            document.unfold_line(line);
+        }
         if let Some(search) = self.state.search.as_mut() {
             search.index = index;
         }
         if let Some(pane) = self.state.focused_pane_mut()
             && pane.active == Some(document)
         {
-            pane.cursor = start;
-            pane.anchor = Some(start + length);
+            pane.cursor = range.start;
+            pane.anchor = Some(range.end);
             pane.target_col = None;
         }
         self.notify(format!("{query}: match {}/{total}", index + 1));
@@ -121,6 +143,10 @@ impl App {
         };
         let line = line.min(document.line_count().saturating_sub(1));
         let char_idx = document.char_of_line(line);
+        let id = document.id;
+        if let Some(document) = self.state.documents.get_mut(&id) {
+            document.unfold_line(line);
+        }
         if let Some(pane) = self.state.focused_pane_mut() {
             pane.cursor = char_idx;
             pane.anchor = None;
@@ -134,6 +160,14 @@ impl App {
         if needle.is_empty() {
             return Ok(());
         }
+        let options = self.state.search_options;
+        let matcher = match crate::search_options::Matcher::new(needle, options) {
+            Ok(matcher) => matcher,
+            Err(error) => {
+                self.notify(format!("invalid search: {error}"));
+                return Ok(());
+            }
+        };
         let count;
         {
             let AppState {
@@ -156,60 +190,35 @@ impl App {
                 return Ok(());
             };
             let haystack = document.rope.to_string();
-            let positions = match_positions(&haystack, needle);
+            let (matches, _) = matcher.find(&haystack);
+            count = matches.len();
+            if count == 0 {
+                self.state.ui.message = "nothing replaced".to_string();
+                return Ok(());
+            }
+            let new_text = matcher.replace_all(&haystack, replacement);
+            let first = matches.first().map(|range| range.start).unwrap_or(0);
             let scroll = (pane.scroll_top, pane.scroll_left);
-            let cursor_before = pane.cursor;
-            let needle_len = needle.chars().count();
-            for position in positions.iter().rev() {
-                document.remove(*position..*position + needle_len, cursor_before, scroll);
-                document.insert(*position, replacement, cursor_before, scroll);
-                document.history.break_run();
-            }
-            count = positions.len();
-            if let Some(first) = positions.first() {
-                pane.cursor = (*first).min(document.len_chars());
-                pane.anchor = None;
-            }
+            document.replace(
+                0..document.len_chars(),
+                &new_text,
+                pane.cursor,
+                first,
+                scroll,
+            );
+            pane.cursor = first.min(document.len_chars());
+            pane.anchor = None;
+            pane.target_col = None;
+            pane.scroll_top = pane.scroll_top.min(document.line_count().saturating_sub(1));
         }
+        self.state.search = None;
         if count == 0 {
             self.notify("nothing replaced");
-            return Ok(());
+        } else {
+            self.notify(format!("replaced {count} occurrence(s)"));
         }
-        self.notify(format!("replaced {count} occurrence(s)"));
         self.ensure_cursor_visible();
+        self.plugin_event("change");
         Ok(())
-    }
-}
-
-/// Char offsets of every non-overlapping match.
-fn match_positions(haystack: &str, needle: &str) -> Vec<usize> {
-    if needle.is_empty() {
-        return Vec::new();
-    }
-    let mut out = Vec::new();
-    let mut offset = 0usize;
-    while let Some(found) = haystack[offset..].find(needle) {
-        let byte = offset + found;
-        out.push(haystack[..byte].chars().count());
-        offset = byte + needle.len();
-    }
-    out
-}
-
-#[cfg(test)]
-mod tests {
-    use super::match_positions;
-
-    #[test]
-    fn finds_non_overlapping_matches() {
-        assert_eq!(match_positions("aaaa", "aa"), vec![0, 2]);
-        assert_eq!(match_positions("abcabc", "bc"), vec![1, 4]);
-        assert!(match_positions("abc", "zz").is_empty());
-        assert!(match_positions("abc", "").is_empty());
-    }
-
-    #[test]
-    fn reports_char_offsets_not_bytes() {
-        assert_eq!(match_positions("\u{4f60}\u{597d}!", "!"), vec![2]);
     }
 }

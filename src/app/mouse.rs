@@ -7,7 +7,7 @@ use ratatui::crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEven
 use ratatui::layout::Rect;
 
 use crate::editor::text as textutil;
-use crate::state::{Focus, InputMode, PaneId};
+use crate::state::{AppState, Focus, InputMode, PaneId};
 use crate::workspace::SplitAxis;
 use crate::workspace::layout::{LayoutNode, Separator, SplitMode, split_area, tabbed_regions};
 
@@ -36,6 +36,8 @@ impl App {
             MouseEventKind::Drag(MouseButton::Left) => {
                 if let Some(drag) = self.drag.take() {
                     self.resize_to(drag, mouse.column, mouse.row);
+                } else if let Some((pane_id, line, column)) = self.block_anchor {
+                    self.extend_block(pane_id, line, column, mouse.column, mouse.row);
                 } else if let Some(pane_id) = self.selecting {
                     self.place_cursor(pane_id, mouse.column, mouse.row, true);
                 }
@@ -43,6 +45,7 @@ impl App {
             MouseEventKind::Up(MouseButton::Left) => {
                 self.drag = None;
                 self.selecting = None;
+                self.block_anchor = None;
             }
             MouseEventKind::ScrollUp => self.on_wheel(mouse.column, mouse.row, -1),
             MouseEventKind::ScrollDown => self.on_wheel(mouse.column, mouse.row, 1),
@@ -118,7 +121,14 @@ impl App {
         if let Some(pane_id) = self.pane_at(mouse.column, mouse.row) {
             self.state.focus = Focus::Pane(pane_id);
             self.state.workspaces.active_mut().focus = pane_id;
-            if self.place_cursor(pane_id, mouse.column, mouse.row, extend) {
+            if mouse.modifiers.contains(KeyModifiers::ALT) {
+                if let Some((line, column, _)) =
+                    self.cursor_location(pane_id, mouse.column, mouse.row)
+                {
+                    self.start_block(pane_id, line, column);
+                    self.selecting = Some(pane_id);
+                }
+            } else if self.place_cursor(pane_id, mouse.column, mouse.row, extend) {
                 self.selecting = Some(pane_id);
             }
         }
@@ -208,42 +218,64 @@ impl App {
             .map(|(id, _)| *id)
     }
 
+    /// Line, char column within the line, and absolute char position under the
+    /// mouse, honoring folds.
+    fn cursor_location(
+        &self,
+        pane_id: PaneId,
+        column: u16,
+        row: u16,
+    ) -> Option<(usize, usize, usize)> {
+        let pane = self.state.panes.get(&pane_id)?;
+        let rect = self.state.ui.pane_rects.get(&pane_id).copied()?;
+        let document = self.state.documents.get(&pane.active?)?;
+        let geometry = crate::ui::pane::text_geometry(&self.state, pane, document, rect)?;
+        if !contains(geometry.area, column, row) {
+            return None;
+        }
+        let line_offset = usize::from(row.saturating_sub(geometry.area.y));
+        let tab_width = self.state.config.editor.tab_size.max(1);
+        if self.state.config.editor.word_wrap {
+            let rows = textutil::visual_rows(
+                document,
+                pane.scroll_top,
+                geometry.text_width,
+                tab_width,
+                line_offset + 1,
+            );
+            let row = rows.get(line_offset)?;
+            let full = document.line_text(row.line);
+            let segment: String = full
+                .chars()
+                .skip(row.start)
+                .take(row.end - row.start)
+                .collect();
+            let cell = column.saturating_sub(geometry.area.x.saturating_add(geometry.gutter));
+            let offset = row.start + textutil::char_at_cell(&segment, cell, tab_width);
+            return Some((row.line, offset, document.char_of_line(row.line) + offset));
+        }
+        let line = (pane.scroll_top..document.line_count())
+            .filter(|line| !document.is_hidden(*line))
+            .nth(line_offset)
+            .unwrap_or_else(|| document.line_count().saturating_sub(1));
+        let text = document.line_text(line);
+        let cell = column
+            .saturating_sub(geometry.area.x.saturating_add(geometry.gutter))
+            .saturating_add(pane.scroll_left);
+        let offset = textutil::char_at_cell(&text, cell, tab_width);
+        Some((line, offset, document.char_of_line(line) + offset))
+    }
+
     /// Move the cursor of `pane_id` to the clicked cell.
     fn place_cursor(&mut self, pane_id: PaneId, column: u16, row: u16, extend: bool) -> bool {
-        let placement = {
-            let Some(pane) = self.state.panes.get(&pane_id) else {
-                return false;
-            };
-            let Some(rect) = self.state.ui.pane_rects.get(&pane_id).copied() else {
-                return false;
-            };
-            let Some(document_id) = pane.active else {
-                return false;
-            };
-            let Some(document) = self.state.documents.get(&document_id) else {
-                return false;
-            };
-            let Some(geometry) = crate::ui::pane::text_geometry(&self.state, pane, document, rect)
-            else {
-                return false;
-            };
-            if !contains(geometry.area, column, row) {
-                return false;
-            }
-            let line_offset = usize::from(row.saturating_sub(geometry.area.y));
-            let line = (pane.scroll_top + line_offset).min(document.line_count().saturating_sub(1));
-            let text = document.line_text(line);
-            let tab_width = self.state.config.editor.tab_size.max(1);
-            let cell = column
-                .saturating_sub(geometry.area.x.saturating_add(geometry.gutter))
-                .saturating_add(pane.scroll_left);
-            let offset = textutil::char_at_cell(&text, cell, tab_width);
-            (document.char_of_line(line) + offset, pane.cursor)
+        let Some((_, _, cursor)) = self.cursor_location(pane_id, column, row) else {
+            return false;
         };
-        let (cursor, previous) = placement;
         let Some(pane) = self.state.panes.get_mut(&pane_id) else {
             return false;
         };
+        let previous = pane.cursor;
+        pane.extra.clear();
         if extend && pane.anchor.is_none() {
             pane.anchor = Some(previous);
         } else if !extend {
@@ -252,6 +284,50 @@ impl App {
         pane.cursor = cursor;
         pane.target_col = None;
         true
+    }
+
+    fn start_block(&mut self, pane_id: PaneId, line: usize, column: usize) {
+        self.block_anchor = Some((pane_id, line, column));
+        let AppState {
+            documents, panes, ..
+        } = &mut self.state;
+        let Some(pane) = panes.get_mut(&pane_id) else {
+            return;
+        };
+        let Some(id) = pane.active else {
+            return;
+        };
+        let Some(document) = documents.get(&id) else {
+            return;
+        };
+        pane.column_selection(document, line, column, line, column);
+        self.state.focus = Focus::Pane(pane_id);
+    }
+
+    fn extend_block(
+        &mut self,
+        pane_id: PaneId,
+        anchor_line: usize,
+        anchor_column: usize,
+        column: u16,
+        row: u16,
+    ) {
+        let Some((line, offset, _)) = self.cursor_location(pane_id, column, row) else {
+            return;
+        };
+        let AppState {
+            documents, panes, ..
+        } = &mut self.state;
+        let Some(pane) = panes.get_mut(&pane_id) else {
+            return;
+        };
+        let Some(id) = pane.active else {
+            return;
+        };
+        let Some(document) = documents.get(&id) else {
+            return;
+        };
+        pane.column_selection(document, anchor_line, anchor_column, line, offset);
     }
 
     /// Scroll a pane without moving its cursor.
@@ -278,6 +354,7 @@ impl App {
             let tab_width = self.state.config.editor.tab_size.max(1);
             let last = (pane.scroll_top + rows).min(document.line_count());
             let max_width = (pane.scroll_top..last)
+                .filter(|line| !document.is_hidden(*line))
                 .map(|line| textutil::cells(&document.line_text(line), tab_width, 0))
                 .max()
                 .unwrap_or(0);

@@ -15,7 +15,7 @@ use crate::state::DocumentId;
 use crate::syntax::tree::Highlighter;
 use crate::syntax::{self, Language, LexState, Span};
 
-use super::history::History;
+use super::history::{Edit, History};
 
 /// Derived highlighting state: the lexer state at the start of each line whose
 /// start has been computed, plus the tree-sitter parse tree for grammars that
@@ -51,12 +51,11 @@ impl Eol {
         }
     }
 
-    /// Convert any line endings to `self`.
-    pub fn normalize(self, text: &str) -> String {
-        let lf = text.replace("\r\n", "\n").replace('\r', "\n");
+    /// Terminator inserted for a new line. Existing bytes are never rewritten.
+    pub fn ending(self) -> &'static str {
         match self {
-            Eol::Lf => lf,
-            Eol::Crlf => lf.replace('\n', "\r\n"),
+            Eol::Lf => "\n",
+            Eol::Crlf => "\r\n",
         }
     }
 }
@@ -69,6 +68,8 @@ pub struct Document {
     pub dirty: bool,
     pub eol: Eol,
     pub history: History,
+    /// Closed folds as inclusive document line ranges. Cleared by any edit.
+    pub folded: Vec<Range<usize>>,
     /// Highlighting memo; derived from `rope`, never part of the file identity.
     pub(crate) syntax: RefCell<SyntaxCache>,
     /// Modification time and size seen at the last load or save, to detect
@@ -87,6 +88,7 @@ impl Document {
             dirty: false,
             eol: Eol::Lf,
             history: History::default(),
+            folded: Vec::new(),
             syntax: RefCell::new(SyntaxCache::default()),
             disk_modified: None,
             disk_len: 0,
@@ -101,10 +103,11 @@ impl Document {
         let mut document = Self {
             id,
             path: Some(path),
-            rope: Rope::from_str(&Eol::Lf.normalize(&text)),
+            rope: Rope::from_str(&text),
             dirty: false,
             eol,
             history: History::default(),
+            folded: Vec::new(),
             syntax: RefCell::new(SyntaxCache::default()),
             disk_modified: None,
             disk_len: 0,
@@ -145,6 +148,48 @@ impl Document {
             text.pop();
         }
         text
+    }
+
+    /// Line terminator used for newly inserted lines.
+    pub fn line_ending(&self) -> &'static str {
+        self.eol.ending()
+    }
+
+    /// True when `line` sits inside a closed fold (the header stays visible).
+    pub fn is_hidden(&self, line: usize) -> bool {
+        self.folded
+            .iter()
+            .any(|range| line > range.start && line <= range.end)
+    }
+
+    /// Open every fold that starts at or covers `line`.
+    pub fn unfold_line(&mut self, line: usize) -> bool {
+        let before = self.folded.len();
+        self.folded
+            .retain(|range| range.start != line && !(line > range.start && line <= range.end));
+        self.folded.len() != before
+    }
+
+    /// Toggle the innermost fold at `line`. Returns the number of hidden lines
+    /// when it folds, `Some(0)` when it unfolds, and `None` when nothing is
+    /// foldable there.
+    pub fn toggle_fold(&mut self, line: usize) -> Option<usize> {
+        if self
+            .folded
+            .iter()
+            .any(|range| range.start == line || (line > range.start && line <= range.end))
+        {
+            self.unfold_line(line);
+            return Some(0);
+        }
+        let language = Language::from_path(self.path.as_deref());
+        let range = crate::structure::folds(&self.rope, language)
+            .into_iter()
+            .filter(|range| range.start == line)
+            .min_by_key(|range| range.end)?;
+        let hidden = range.end - range.start;
+        self.folded.push(range);
+        Some(hidden)
     }
 
     /// Highlight spans for `line`, using the cached lexer state from the lines
@@ -263,6 +308,7 @@ impl Document {
         let char_idx = char_idx.min(self.len_chars());
         let line = self.line_of_char(char_idx);
         let edit = self.input_edit(char_idx, char_idx, text);
+        self.folded.clear();
         self.rope.insert(char_idx, text);
         self.history
             .record_insert(char_idx, text, cursor_before, scroll_before);
@@ -285,6 +331,7 @@ impl Document {
         let line = self.line_of_char(start);
         let text: String = self.rope.slice(start..end).to_string();
         let edit = self.input_edit(start, end, "");
+        self.folded.clear();
         self.rope.remove(start..end);
         self.history
             .record_remove(start, &text, cursor_before, scroll_before);
@@ -313,6 +360,7 @@ impl Document {
         let line = self.line_of_char(start);
         let removed: String = self.rope.slice(start..end).to_string();
         let edit = self.input_edit(start, end, text);
+        self.folded.clear();
         self.rope.remove(start..end);
         self.rope.insert(start, text);
         self.history.record_replace(
@@ -332,6 +380,7 @@ impl Document {
     pub fn undo(&mut self) -> Option<(usize, (usize, u16))> {
         let restore = self.history.undo(&mut self.rope)?;
         self.dirty = self.history.is_modified();
+        self.folded.clear();
         self.reset_syntax();
         Some(restore)
     }
@@ -339,6 +388,7 @@ impl Document {
     pub fn redo(&mut self) -> Option<(usize, (usize, u16))> {
         let restore = self.history.redo(&mut self.rope)?;
         self.dirty = self.history.is_modified();
+        self.folded.clear();
         self.reset_syntax();
         Some(restore)
     }
@@ -353,13 +403,105 @@ impl Document {
     }
 
     fn write_to(&mut self, path: PathBuf) -> Result<()> {
-        let text = self.eol.normalize(&self.rope.to_string());
+        let text = self.rope.to_string();
         write_atomic(&path, text.as_bytes()).map_err(|error| Error::io("write", &path, error))?;
         self.path = Some(path);
         self.history.mark_saved();
         self.dirty = false;
         self.record_disk_state();
         Ok(())
+    }
+
+    /// Replace the buffer with recovered text, dropping undo history.
+    pub fn restore(&mut self, text: &str) {
+        self.rope = Rope::from_str(text);
+        self.history = History::default();
+        self.dirty = true;
+        self.folded.clear();
+        self.reset_syntax();
+        self.record_disk_state();
+    }
+
+    /// Replace several non-overlapping ranges as one undo step. Ranges must be
+    /// ascending; they are applied from the end so earlier offsets stay valid.
+    pub fn replace_ranges(
+        &mut self,
+        ranges: &[Range<usize>],
+        text: &str,
+        cursor_before: usize,
+        cursor_after: usize,
+        scroll_before: (usize, u16),
+    ) -> bool {
+        if let [range] = ranges {
+            if range.is_empty() {
+                if text.is_empty() {
+                    return false;
+                }
+                self.insert(range.start, text, cursor_before, scroll_before);
+                return true;
+            }
+            if text.is_empty() {
+                self.remove(range.clone(), cursor_before, scroll_before);
+                return true;
+            }
+            self.replace(
+                range.clone(),
+                text,
+                cursor_before,
+                cursor_after,
+                scroll_before,
+            );
+            return true;
+        }
+        let mut edits = Vec::new();
+        let inserted = text.chars().count();
+        for range in ranges.iter().rev() {
+            let start = range.start.min(self.len_chars());
+            let end = range.end.min(self.len_chars());
+            if start < end {
+                let removed: String = self.rope.slice(start..end).to_string();
+                self.rope.remove(start..end);
+                edits.push(Edit::Remove {
+                    char_idx: start,
+                    text: removed,
+                });
+            }
+            if inserted > 0 && start <= self.len_chars() {
+                self.rope.insert(start, text);
+                edits.push(Edit::Insert {
+                    char_idx: start,
+                    text: text.to_string(),
+                });
+            }
+        }
+        if edits.is_empty() {
+            return false;
+        }
+        self.history
+            .record_edits(edits, cursor_before, cursor_after, scroll_before);
+        self.dirty = self.history.is_modified();
+        self.folded.clear();
+        self.reset_syntax();
+        true
+    }
+
+    /// Convert every line ending to `target` as one undo step. Returns whether
+    /// the buffer changed. New lines use the new ending afterwards.
+    pub fn convert_eol(&mut self, target: Eol) -> bool {
+        let text = self.rope.to_string();
+        let lf = text.replace("\r\n", "\n").replace('\r', "\n");
+        let converted = match target {
+            Eol::Lf => lf,
+            Eol::Crlf => lf.replace('\n', "\r\n"),
+        };
+        self.eol = target;
+        if converted == text {
+            return false;
+        }
+        let end = self.len_chars();
+        let range = 0..end;
+        self.replace_ranges(std::slice::from_ref(&range), &converted, 0, 0, (0, 0));
+        true
     }
 
     /// True when another program changed or removed the file since the last
@@ -383,9 +525,10 @@ impl Document {
         let text =
             String::from_utf8(bytes).map_err(|_| Error::InvalidUtf8 { path: path.clone() })?;
         self.eol = Eol::detect(&text);
-        self.rope = Rope::from_str(&Eol::Lf.normalize(&text));
+        self.rope = Rope::from_str(&text);
         self.history = History::default();
         self.dirty = false;
+        self.folded.clear();
         self.reset_syntax();
         self.record_disk_state();
         Ok(())
@@ -409,34 +552,51 @@ impl Document {
     }
 }
 
-/// Replace `path` without ever truncating the original: write a sibling temp
-/// file, flush it, then rename over the target. Symlinks are followed so the
-/// link survives. Existing permissions are preserved.
-fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+/// Replace `path` without ever truncating the original: write an unpredictable
+/// sibling temp file, flush it, then rename over the target. Symlinks are
+/// followed so the link survives. Existing permissions are preserved. When the
+/// rename itself fails (bind mounts, some network filesystems), the bytes are
+/// written in place as a last resort.
+pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let target = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     let parent = target
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."));
-    let name = target
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "document".to_string());
-    let temporary = parent.join(format!(".{name}.i3-{}.tmp", std::process::id()));
-    let result = (|| {
-        let mut file = std::fs::File::create(&temporary)?;
-        file.write_all(bytes)?;
-        if let Ok(metadata) = std::fs::metadata(&target) {
-            file.set_permissions(metadata.permissions())?;
+    let permissions = std::fs::metadata(&target).ok().map(|m| m.permissions());
+    let mut temporary = tempfile::Builder::new()
+        .prefix(".i3-save-")
+        .suffix(".tmp")
+        .tempfile_in(parent)?;
+    temporary.write_all(bytes)?;
+    temporary.as_file().set_permissions(match permissions {
+        Some(permissions) => permissions,
+        #[cfg(unix)]
+        None => {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::Permissions::from_mode(0o644)
         }
-        file.sync_all()?;
-        drop(file);
-        std::fs::rename(&temporary, &target)
-    })();
-    if result.is_err() {
-        let _ = std::fs::remove_file(&temporary);
+        #[cfg(not(unix))]
+        None => std::fs::metadata(&temporary)?.permissions(),
+    })?;
+    temporary.as_file().sync_all()?;
+    match temporary.persist(&target) {
+        Ok(_) => Ok(()),
+        Err(error) => {
+            drop(error.file);
+            write_in_place(&target, bytes)
+        }
     }
-    result
+}
+
+fn write_in_place(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .truncate(true)
+        .create(true)
+        .open(path)?;
+    file.write_all(bytes)?;
+    file.sync_all()
 }
 
 #[cfg(test)]
@@ -497,16 +657,38 @@ mod tests {
     }
 
     #[test]
-    fn save_as_preserves_line_endings() {
-        let dir = std::env::temp_dir().join(format!("i3-editor-test-{}", std::process::id()));
+    fn save_preserves_a_lone_carriage_return() {
+        let dir = std::env::temp_dir().join(format!("i3-editor-cr-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("temp dir");
-        let path = dir.join("crlf.txt");
-        let mut document = doc("one\ntwo");
-        document.eol = Eol::Crlf;
-        document.save_as(path.clone()).expect("save");
-        let written = std::fs::read_to_string(&path).expect("read");
-        assert_eq!(written, "one\r\ntwo");
-        assert!(!document.dirty);
+        let path = dir.join("progress.txt");
+        std::fs::write(&path, "progress 10%\rprogress 100%\n").expect("seed");
+
+        let mut document = Document::open(DocumentId(1), path.clone()).expect("open");
+        assert_eq!(document.line_count(), 3);
+        assert_eq!(document.line_text(0), "progress 10%");
+        assert_eq!(document.line_text(1), "progress 100%");
+
+        document.insert(0, "X", 0, (0, 0));
+        document.save().expect("save");
+        assert_eq!(
+            std::fs::read(&path).expect("read"),
+            b"Xprogress 10%\rprogress 100%\n"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn mixed_line_endings_are_not_normalized() {
+        let dir = std::env::temp_dir().join(format!("i3-editor-mixed-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join("mixed.txt");
+        std::fs::write(&path, "a\r\nb\nc\r\n").expect("seed");
+
+        let mut document = Document::open(DocumentId(1), path.clone()).expect("open");
+        assert_eq!(document.eol, Eol::Crlf);
+        document.insert(0, "X", 0, (0, 0));
+        document.save().expect("save");
+        assert_eq!(std::fs::read(&path).expect("read"), b"Xa\r\nb\nc\r\n");
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -880,6 +1062,42 @@ mod tests {
         );
         assert_eq!(std::fs::read_to_string(&target).expect("read"), "new\n");
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn save_ignores_a_prepared_temp_symlink() {
+        let dir = std::env::temp_dir().join(format!("i3-save-symlink-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let target = dir.join("doc.txt");
+        std::fs::write(&target, "old\n").expect("seed");
+        let victim = dir.join("victim.txt");
+        std::fs::write(&victim, "victim\n").expect("victim");
+        let predicted = dir.join(format!(".doc.txt.i3-{}.tmp", std::process::id()));
+        std::os::unix::fs::symlink(&victim, &predicted).expect("symlink");
+
+        let mut document = doc("new\n");
+        document.save_as(target.clone()).expect("save");
+        assert_eq!(
+            std::fs::read_to_string(&victim).expect("victim"),
+            "victim\n"
+        );
+        assert_eq!(std::fs::read_to_string(&target).expect("read"), "new\n");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn toggle_fold_uses_tree_sitter_ranges() {
+        let mut document = doc("fn alpha() {\n    one();\n}\n\nafter\n");
+        document.path = Some(PathBuf::from("/tmp/note.rs"));
+        assert_eq!(document.toggle_fold(0), Some(2));
+        assert!(document.is_hidden(1));
+        assert!(document.is_hidden(2));
+        assert!(!document.is_hidden(3));
+        assert!(!document.is_hidden(4));
+        assert_eq!(document.toggle_fold(0), Some(0));
+        assert!(!document.is_hidden(1));
+        assert_eq!(document.toggle_fold(4), None);
     }
 
     #[test]

@@ -93,9 +93,10 @@ fn toggle_line_comments(
     };
     let trailing =
         document.rope.char(block_end.saturating_sub(1)) == '\n' && block_end > block_start;
-    let mut text = lines.join("\n");
+    let eol = document.line_ending();
+    let mut text = lines.join(eol);
     if trailing {
-        text.push('\n');
+        text.push_str(eol);
     }
     let cursor = remap_position(pane.cursor, document, start_line, &deltas);
     let anchor = pane

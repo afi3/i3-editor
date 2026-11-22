@@ -40,6 +40,7 @@ fn fixture(text: &str) -> (App, PathBuf) {
         dirty: false,
         eol: Eol::Lf,
         history: History::default(),
+        folded: Vec::new(),
         syntax: Default::default(),
         disk_modified: None,
         disk_len: 0,
@@ -48,7 +49,7 @@ fn fixture(text: &str) -> (App, PathBuf) {
     documents.insert(document_id, document);
 
     let mut workspaces = WorkspaceManager::default();
-    workspaces.push(Workspace::new(workspace_id, "test", pane_id));
+    workspaces.push(Workspace::new(workspace_id, "test", pane_id, dir.clone()));
 
     let mut state = AppState {
         should_quit: false,
@@ -66,7 +67,14 @@ fn fixture(text: &str) -> (App, PathBuf) {
         warnings: Vec::new(),
         clipboard: String::new(),
         search: None,
+        search_options: crate::search_options::Options::default(),
         project_search: None,
+        lsp_diagnostics: std::collections::HashMap::new(),
+        completions: None,
+        hover: None,
+        git_marks: std::collections::HashMap::new(),
+        git_diff: None,
+        plugin_status: Vec::new(),
         fullscreen: None,
         moving: false,
         terminals: Default::default(),
@@ -429,7 +437,11 @@ fn config_file_changes_reload_settings() {
     std::fs::write(&config, "[editor]\ntab_size = 2\n").expect("config");
     app.state.config_path = Some(config.clone());
     app.enhanced = true;
-    app.watcher = Some(crate::watch::Watcher::new(&dir, Some(&config)).expect("watch"));
+    let workspace = app.state.workspaces.active().id;
+    app.watchers = vec![(
+        workspace,
+        crate::watch::Watcher::new(&dir, Some(&config)).expect("watch"),
+    )];
     std::fs::write(&config, "[editor]\ntab_size = 6\n").expect("rewrite");
 
     let deadline = Instant::now() + Duration::from_secs(5);
@@ -1350,10 +1362,58 @@ fn find_previews_every_match_while_typing() {
     type_query(&mut app, "alpha");
 
     let search = app.state.search.as_ref().expect("live search");
-    assert_eq!(search.matches, vec![0, 11]);
+    assert_eq!(search.matches, vec![0..5, 11..16]);
     assert_eq!(search.index, 0);
     assert_eq!(cursor(&app), 0);
     assert_eq!(app.state.ui.message, "alpha: match 1/2");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn regex_toggle_changes_find_matches() {
+    use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    let (mut app, dir) = fixture("alpha beta\n");
+    app.dispatch(Command::FindPrompt).expect("find");
+    type_query(&mut app, "a.*a");
+    let search = app.state.search.as_ref().expect("search");
+    assert!(search.matches.is_empty(), "literal mode should not match");
+
+    app.handle_key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::ALT));
+    assert!(app.state.search_options.regex);
+    let search = app.state.search.as_ref().expect("search");
+    assert_eq!(search.matches, vec![0..10]);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn case_toggle_narrows_find_matches() {
+    use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    let (mut app, dir) = fixture("Alpha alpha\n");
+    app.dispatch(Command::FindPrompt).expect("find");
+    type_query(&mut app, "alpha");
+    assert_eq!(app.state.search.as_ref().expect("search").matches.len(), 2);
+
+    app.handle_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::ALT));
+    assert!(app.state.search_options.case_sensitive);
+    let search = app.state.search.as_ref().expect("search");
+    assert_eq!(search.matches, vec![6..11]);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn regex_replace_expands_capture_groups() {
+    let (mut app, dir) = fixture("one two\n");
+    app.dispatch(Command::ReplacePrompt).expect("replace");
+    app.state.search_options.regex = true;
+    let InputMode::Prompt(prompt) = &mut app.state.mode else {
+        panic!("replace prompt")
+    };
+    prompt.fields[0] = r"(\w+)".to_string();
+    prompt.fields[1] = "$1!".to_string();
+    app.submit_prompt().expect("replace");
+    assert_eq!(text(&app), "one! two!\n");
     std::fs::remove_dir_all(&dir).ok();
 }
 
@@ -1748,7 +1808,11 @@ fn watcher_reloads_a_clean_buffer_and_refreshes_the_explorer() {
         .active_document()
         .and_then(|document| document.path.clone())
         .expect("path");
-    app.watcher = Some(crate::watch::Watcher::new(&dir, None).expect("watch"));
+    let workspace = app.state.workspaces.active().id;
+    app.watchers = vec![(
+        workspace,
+        crate::watch::Watcher::new(&dir, None).expect("watch"),
+    )];
 
     // Warm the quick-open cache so the assertions below prove invalidation.
     app.open_prompt(crate::input::PromptKind::QuickOpen);
@@ -1842,5 +1906,677 @@ fn deleting_an_open_file_is_reported() {
         "{}",
         app.state.ui.message
     );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn enter_inserts_the_detected_line_ending() {
+    let (mut app, dir) = fixture("x\r\n");
+    let id = app.state.active_document_id().expect("doc");
+    app.state.documents.get_mut(&id).expect("doc").eol = Eol::Crlf;
+
+    app.dispatch(Command::InsertNewline).expect("newline");
+    app.dispatch(Command::InsertText("y".to_string()))
+        .expect("type");
+    app.dispatch(Command::Save).expect("save");
+
+    let path = app
+        .state
+        .active_document()
+        .and_then(|document| document.path.clone())
+        .expect("path");
+    assert_eq!(std::fs::read(&path).expect("read"), b"\r\nyx\r\n".to_vec());
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn replace_in_files_previews_then_writes_one_file_at_a_time() {
+    use std::time::{Duration, Instant};
+
+    use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    let (mut app, dir) = fixture("needle one\n");
+    let first = dir.join("note.txt");
+    let second = dir.join("second.txt");
+    std::fs::write(&second, "needle two\n").expect("file");
+
+    app.dispatch(Command::ReplaceInFiles).expect("open");
+    for ch in "needle".chars() {
+        app.handle_key(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
+    }
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        app.pump_project_search();
+        if app.project_task.is_none() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(app.project_task.is_none(), "search did not finish");
+    assert_eq!(
+        std::fs::read_to_string(&first).expect("first"),
+        "needle one\n",
+        "preview must not write"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&second).expect("second"),
+        "needle two\n",
+        "preview must not write"
+    );
+
+    app.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    for ch in "done".chars() {
+        app.handle_key(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
+    }
+    app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    assert_eq!(
+        std::fs::read_to_string(&first).expect("first"),
+        "done one\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&second).expect("second"),
+        "needle two\n"
+    );
+    assert!(
+        matches!(app.state.mode, InputMode::Prompt(_)),
+        "prompt closes after the first file"
+    );
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        app.pump_project_search();
+        if app.project_task.is_none() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let InputMode::Prompt(prompt) = &app.state.mode else {
+        panic!("prompt missing")
+    };
+    assert_eq!(prompt.candidates.len(), 1, "{:?}", prompt.candidates);
+    app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert_eq!(
+        std::fs::read_to_string(&second).expect("second"),
+        "done two\n"
+    );
+
+    app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn replace_in_files_refuses_a_dirty_open_buffer() {
+    use std::time::{Duration, Instant};
+
+    use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    let (mut app, dir) = fixture("needle\n");
+    let path = dir.join("note.txt");
+    app.dispatch(Command::InsertText("x".to_string()))
+        .expect("type");
+    assert!(app.state.active_document().expect("doc").dirty);
+
+    app.dispatch(Command::ReplaceInFiles).expect("open");
+    for ch in "needle".chars() {
+        app.handle_key(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
+    }
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        app.pump_project_search();
+        if app.project_task.is_none() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    app.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    for ch in "done".chars() {
+        app.handle_key(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
+    }
+    app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    assert_eq!(
+        std::fs::read_to_string(&path).expect("read"),
+        "needle\n",
+        "a dirty buffer must not be overwritten"
+    );
+    assert!(
+        app.state.ui.message.contains("unsaved changes"),
+        "{}",
+        app.state.ui.message
+    );
+    app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn go_to_symbol_jumps_to_the_definition() {
+    use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    let (mut app, dir) = fixture("fn alpha() {\n    one();\n}\n\nfn beta() {}\n");
+    let id = app.state.active_document_id().expect("doc");
+    app.state.documents.get_mut(&id).expect("doc").path = Some(dir.join("note.rs"));
+
+    app.dispatch(Command::GoToSymbol).expect("open symbols");
+    let InputMode::Prompt(prompt) = &app.state.mode else {
+        panic!("symbol prompt missing")
+    };
+    assert_eq!(prompt.candidates.len(), 2, "{:?}", prompt.candidates);
+    for ch in "beta".chars() {
+        app.handle_key(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
+    }
+    app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    let cursor = app.state.focused_pane().expect("pane").cursor;
+    let document = app.state.active_document().expect("doc");
+    assert_eq!(document.line_of_char(cursor), 4);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn toggle_fold_hides_the_block_and_an_edit_clears_it() {
+    let (mut app, dir) = fixture("fn alpha() {\n    one();\n    two();\n}\n\nafter\n");
+    let id = app.state.active_document_id().expect("doc");
+    app.state.documents.get_mut(&id).expect("doc").path = Some(dir.join("note.rs"));
+
+    app.dispatch(Command::ToggleFold).expect("fold");
+    {
+        let document = app.state.active_document().expect("doc");
+        assert!(document.is_hidden(1), "folded");
+        assert!(document.is_hidden(3), "folded");
+        assert!(!document.is_hidden(4), "blank line visible");
+        assert_eq!(document.folded.len(), 1);
+    }
+    assert!(
+        app.state.ui.message.contains("folded 3"),
+        "{}",
+        app.state.ui.message
+    );
+
+    app.dispatch(Command::InsertText("x".to_string()))
+        .expect("type");
+    assert!(app.state.active_document().expect("doc").folded.is_empty());
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn workspaces_keep_their_own_roots_and_quick_open_lists() {
+    let (mut app, dir) = fixture("one\n");
+    let other = std::env::temp_dir().join(format!("i3-ws-other-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&other);
+    std::fs::create_dir_all(&other).expect("other dir");
+    std::fs::write(other.join("extra.txt"), "other\n").expect("extra");
+    let dir_root = std::fs::canonicalize(&dir).expect("canonical dir");
+    let other_root = std::fs::canonicalize(&other).expect("canonical other");
+
+    app.dispatch(Command::NewWorkspace).expect("new workspace");
+    assert_eq!(app.state.workspaces.active, 1);
+    app.dispatch(Command::SetWorkspaceRoot)
+        .expect("root prompt");
+    if let InputMode::Prompt(prompt) = &mut app.state.mode {
+        prompt.set_input(other.to_string_lossy().into_owned());
+    }
+    app.submit_prompt().expect("set root");
+    assert_eq!(app.state.explorer.root, other_root);
+
+    app.dispatch(Command::SwitchWorkspace(0))
+        .expect("first workspace");
+    assert_eq!(app.state.explorer.root, dir_root);
+    let files = app.quick_open_candidates();
+    assert!(files.contains(&"note.txt".to_string()), "{files:?}");
+    assert!(!files.contains(&"other/extra.txt".to_string()), "{files:?}");
+
+    app.dispatch(Command::SwitchWorkspace(1))
+        .expect("second workspace");
+    assert_eq!(app.state.explorer.root, other_root);
+    let files = app.quick_open_candidates();
+    assert!(files.contains(&"extra.txt".to_string()), "{files:?}");
+    std::fs::remove_dir_all(&dir).ok();
+    std::fs::remove_dir_all(&other).ok();
+}
+
+#[test]
+fn crash_recovery_restores_a_dirty_buffer_and_can_save_it() {
+    let (mut app, dir) = fixture("one\n");
+    let path = dir.join("note.txt");
+    app.dispatch(Command::InsertText("x".to_string()))
+        .expect("type");
+    let swap = dir.join("swap");
+    app.swap_dir = Some(swap.clone());
+    app.flush_swaps();
+
+    let mut documents = std::collections::HashMap::new();
+    let mut ids = crate::state::Ids::default();
+    let recovered = crate::recovery::recover_from(&swap, &mut documents, &mut ids);
+    assert_eq!(recovered.len(), 1);
+    let id = recovered[0];
+    let document = documents.remove(&id).expect("recovered document");
+    assert_eq!(document.rope.to_string(), "xone\n");
+    assert!(document.dirty);
+    assert_eq!(document.path.as_deref(), Some(path.as_path()));
+
+    app.state.documents.insert(id, document);
+    app.recoveries = vec![id];
+    app.begin_recovery_prompt();
+    let InputMode::Prompt(prompt) = &app.state.mode else {
+        panic!("recovery prompt missing")
+    };
+    assert!(prompt.candidates[0].starts_with("Save recovered buffer"));
+
+    app.submit_prompt().expect("save recovery");
+    assert_eq!(std::fs::read_to_string(&path).expect("read"), "xone\n");
+    assert!(!app.state.documents[&id].dirty);
+    assert!(
+        std::fs::read_dir(&swap)
+            .expect("swap dir")
+            .flatten()
+            .all(|entry| !entry.file_name().to_string_lossy().ends_with(".swap"))
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn lsp_diagnostics_completion_hover_and_definition_reach_the_ui() {
+    use std::io::BufReader;
+    use std::os::unix::net::UnixStream;
+    use std::time::{Duration, Instant};
+
+    use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use serde_json::{Value, json};
+
+    use crate::lsp::{LspManager, read_frame, write_frame};
+
+    let (mut app, dir) = fixture("fn main() {}\n");
+    let id = app.state.active_document_id().expect("doc");
+    let source = dir.join("main.rs");
+    std::fs::write(&source, "fn main() {}\n").expect("source");
+    app.state.documents.get_mut(&id).expect("doc").path = Some(source.clone());
+    let target = dir.join("other.rs");
+    std::fs::write(&target, "fn other() {}\n").expect("target");
+    let target_uri = crate::lsp::uri(&target);
+
+    let mut config = crate::config::LspConfig::default();
+    config.servers.insert(
+        "fake".to_string(),
+        crate::config::LspServerConfig {
+            command: "fake".to_string(),
+            args: Vec::new(),
+            extensions: vec!["rs".to_string()],
+        },
+    );
+    let mut manager = LspManager::new(&config, dir.clone());
+    let (stream, peer) = UnixStream::pair().expect("pair");
+    manager.attach_for_test("fake", stream).expect("attach");
+    std::thread::spawn(move || {
+        let read = peer.try_clone().expect("clone");
+        let mut reader = BufReader::new(read);
+        let mut writer = peer;
+        while let Some(message) = read_frame(&mut reader) {
+            let reply: Option<Value> = match message.get("method").and_then(Value::as_str) {
+                Some("initialize") => Some(json!({
+                    "jsonrpc": "2.0", "id": message["id"], "result": {"capabilities": {}}
+                })),
+                Some("textDocument/didOpen") => Some(json!({
+                    "jsonrpc": "2.0",
+                    "method": "textDocument/publishDiagnostics",
+                    "params": {
+                        "uri": message["params"]["textDocument"]["uri"],
+                        "diagnostics": [{
+                            "range": {"start": {"line": 0, "character": 3}, "end": {"line": 0, "character": 7}},
+                            "severity": 1,
+                            "message": "unknown name"
+                        }]
+                    }
+                })),
+                Some("textDocument/completion") => Some(json!({
+                    "jsonrpc": "2.0", "id": message["id"],
+                    "result": {"items": [{"label": "answer", "detail": "u32", "insertText": "answer"}]}
+                })),
+                Some("textDocument/hover") => Some(json!({
+                    "jsonrpc": "2.0", "id": message["id"],
+                    "result": {"contents": {"kind": "plaintext", "value": "u32"}}
+                })),
+                Some("textDocument/definition") => Some(json!({
+                    "jsonrpc": "2.0", "id": message["id"],
+                    "result": [{
+                        "uri": target_uri,
+                        "range": {"start": {"line": 0, "character": 3}, "end": {"line": 0, "character": 8}}
+                    }]
+                })),
+                _ => None,
+            };
+            if let Some(reply) = reply {
+                write_frame(&mut writer, &reply).expect("reply");
+            }
+        }
+    });
+    app.lsp = Some(manager);
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline && !app.state.lsp_diagnostics.contains_key(&id) {
+        app.pump_lsp();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(app.state.lsp_diagnostics[&id][0].message, "unknown name");
+
+    app.dispatch(Command::LspCompletion).expect("completion");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline && app.state.completions.is_none() {
+        app.pump_lsp();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let popup = app.state.completions.as_ref().expect("completion popup");
+    assert_eq!(popup.items[0].label, "answer");
+    app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert!(text(&app).starts_with("answerfn main"), "{}", text(&app));
+    assert!(app.state.completions.is_none());
+
+    app.dispatch(Command::LspHover).expect("hover");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline && app.state.hover.is_none() {
+        app.pump_lsp();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(app.state.hover.as_deref(), Some("u32"));
+    app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    assert!(app.state.hover.is_none());
+
+    app.dispatch(Command::LspDefinition).expect("definition");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        app.pump_lsp();
+        if app
+            .state
+            .active_document()
+            .and_then(|document| document.path.clone())
+            .is_some_and(|path| path == std::fs::canonicalize(&target).expect("canonical"))
+        {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let document = app.state.active_document().expect("definition target");
+    assert_eq!(
+        document.path.as_deref(),
+        Some(target.canonicalize().expect("canonical").as_path())
+    );
+    let cursor = app.state.focused_pane().expect("pane").cursor;
+    assert_eq!(document.line_of_char(cursor), 0);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn git_markers_diff_staging_and_commit_work() {
+    use std::process::Command as Process;
+
+    if Process::new("git").arg("--version").output().is_err() {
+        return;
+    }
+    let (mut app, dir) = fixture("one\ntwo\n");
+    let git = |args: &[&str]| {
+        let status = Process::new("git")
+            .args(args)
+            .current_dir(&dir)
+            .status()
+            .expect("git");
+        assert!(status.success(), "git {args:?}");
+    };
+    let output = |args: &[&str]| {
+        let output = Process::new("git")
+            .args(args)
+            .current_dir(&dir)
+            .output()
+            .expect("git");
+        String::from_utf8_lossy(&output.stdout).trim().to_string()
+    };
+
+    let path = dir.join("note.txt");
+    git(&["init", "-q"]);
+    git(&["config", "user.email", "test@example.com"]);
+    git(&["config", "user.name", "Test"]);
+    git(&["add", "."]);
+    git(&["commit", "-q", "-m", "base"]);
+
+    app.dispatch(Command::InsertText("x".to_string()))
+        .expect("type");
+    app.dispatch(Command::Save).expect("save");
+    app.refresh_git_marks();
+    let id = app.state.active_document_id().expect("doc");
+    let marks = app.state.git_marks.get(&id).expect("marks");
+    assert_eq!(marks[0], Some(crate::git::Change::Modified), "{marks:?}");
+
+    app.dispatch(Command::GitDiff).expect("diff");
+    let view = app.state.git_diff.as_ref().expect("diff view");
+    assert!(view.title.contains("note.txt"), "{}", view.title);
+    assert!(view.lines.iter().any(|line| line == "+xone"), "{view:?}");
+    assert_eq!(std::fs::read_to_string(&path).expect("file"), "xone\ntwo\n");
+    app.handle_key(ratatui::crossterm::event::KeyEvent::new(
+        ratatui::crossterm::event::KeyCode::Esc,
+        ratatui::crossterm::event::KeyModifiers::NONE,
+    ));
+    assert!(app.state.git_diff.is_none());
+
+    app.dispatch(Command::GitStage).expect("stage");
+    assert_eq!(output(&["diff", "--cached", "--name-only"]), "note.txt");
+    app.dispatch(Command::GitUnstage).expect("unstage");
+    assert_eq!(output(&["diff", "--name-only"]), "note.txt");
+
+    app.dispatch(Command::GitStage).expect("stage again");
+    app.dispatch(Command::GitCommit).expect("commit prompt");
+    if let InputMode::Prompt(prompt) = &mut app.state.mode {
+        prompt.set_input("second commit");
+    }
+    app.submit_prompt().expect("commit");
+    assert_eq!(output(&["log", "-1", "--pretty=%s"]), "second commit");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn git_commands_report_a_missing_repository() {
+    let (mut app, dir) = fixture("one\n");
+    let result = app.dispatch(Command::GitDiff);
+    app.finish(result);
+    assert!(
+        app.state.ui.message.contains("not a git repository"),
+        "{}",
+        app.state.ui.message
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn multi_cursor_edits_and_undoes_once() {
+    let (mut app, dir) = fixture("one\ntwo\n");
+    app.dispatch(Command::AddCursorBelow).expect("add cursor");
+    let pane = app.state.focused_pane().expect("pane");
+    assert_eq!(pane.extra.len(), 1, "{pane:?}");
+
+    app.dispatch(Command::InsertText("X".to_string()))
+        .expect("type");
+    assert_eq!(text(&app), "Xone\nXtwo\n");
+    let pane = app.state.focused_pane().expect("pane");
+    assert_eq!(pane.extra.len(), 1);
+
+    app.dispatch(Command::Undo).expect("undo");
+    assert_eq!(text(&app), "one\ntwo\n");
+    assert!(app.state.focused_pane().expect("pane").extra.is_empty());
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn column_selection_copies_cuts_and_undoes_once() {
+    let (mut app, dir) = fixture("one\ntwo\n");
+    let id = app.state.active_document_id().expect("doc");
+    let pane_id = app.state.focused_pane_id().expect("pane");
+    {
+        let document = app.state.documents.get(&id).expect("doc");
+        let pane = app.state.panes.get_mut(&pane_id).expect("pane");
+        pane.column_selection(document, 0, 0, 1, 1);
+    }
+    assert_eq!(app.state.focused_pane().expect("pane").extra.len(), 1);
+
+    app.dispatch(Command::Copy).expect("copy");
+    assert_eq!(app.state.clipboard, "o\nt");
+
+    app.dispatch(Command::Cut).expect("cut");
+    assert_eq!(text(&app), "ne\nwo\n");
+    app.dispatch(Command::Undo).expect("undo");
+    assert_eq!(text(&app), "one\ntwo\n");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn wrapped_cursor_movement_and_click_use_visual_rows() {
+    use ratatui::crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+
+    let line = "word ".repeat(40);
+    let source = format!("{line}\n{line}\n");
+    let (mut app, dir) = fixture(&source);
+    app.state.config.editor.word_wrap = true;
+    let pane_id = app.state.focused_pane_id().expect("pane");
+    let rect = app.state.ui.pane_rects[&pane_id];
+    let geometry = {
+        let pane = app.state.panes.get(&pane_id).expect("pane");
+        let document = app.state.active_document().expect("doc");
+        crate::ui::pane::text_geometry(&app.state, pane, document, rect).expect("geometry")
+    };
+
+    app.dispatch(Command::MoveCursor(crate::command::Move::Down))
+        .expect("down");
+    let cursor = app.state.focused_pane().expect("pane").cursor;
+    let document = app.state.active_document().expect("doc");
+    assert_eq!(document.line_of_char(cursor), 0, "moved to the next line");
+    assert!(cursor > 0, "moved within the wrapped line");
+
+    app.handle_mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: geometry.area.x + geometry.gutter + 5,
+        row: geometry.area.y + 1,
+        modifiers: ratatui::crossterm::event::KeyModifiers::NONE,
+    });
+    let cursor = app.state.focused_pane().expect("pane").cursor;
+    let document = app.state.active_document().expect("doc");
+    assert_eq!(document.line_of_char(cursor), 0, "clicked the wrapped row");
+    assert!(
+        cursor - document.char_of_line(0) > 20,
+        "click landed on the first visual row"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn line_endings_convert_and_save_round_trip() {
+    let (mut app, dir) = fixture("one\ntwo\n");
+    let path = dir.join("note.txt");
+    app.dispatch(Command::LineEndingsCrlf).expect("crlf");
+    {
+        let document = app.state.active_document().expect("doc");
+        assert_eq!(document.eol, crate::editor::document::Eol::Crlf);
+        assert!(document.rope.to_string().contains("\r\n"));
+    }
+    app.dispatch(Command::Save).expect("save");
+    assert_eq!(
+        std::fs::read(&path).expect("read"),
+        b"one\r\ntwo\r\n".to_vec()
+    );
+
+    app.dispatch(Command::LineEndingsLf).expect("lf");
+    app.dispatch(Command::Save).expect("save");
+    assert_eq!(std::fs::read(&path).expect("read"), b"one\ntwo\n".to_vec());
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn non_utf8_files_are_rejected_with_a_message() {
+    let (mut app, dir) = fixture("one\n");
+    let path = dir.join("bad.bin");
+    std::fs::write(&path, [0xff, 0xfe, 0x00]).expect("write");
+    let error = app.open_document(path).expect_err("invalid utf8");
+    app.finish(Err(error));
+    assert!(
+        app.state.ui.message.contains("not valid UTF-8"),
+        "{}",
+        app.state.ui.message
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn lua_plugins_register_palette_commands_keymaps_hooks_and_status() {
+    use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    use crate::config::LuaConfig;
+    use crate::plugins::Plugins;
+
+    let (mut app, dir) = fixture("one\n");
+    let plugins_dir = dir.join("plugins");
+    std::fs::create_dir_all(&plugins_dir).expect("plugin dir");
+    let command_marker = dir.join("command.txt");
+    let save_marker = dir.join("saved.txt");
+    std::fs::write(
+        plugins_dir.join("demo.lua"),
+        format!(
+            r#"
+commands.register("plugin_hello", function()
+  fs.write_file("{}", "ran")
+end)
+keymap.set("ctrl+alt+l", "plugin_hello")
+events.on("save", function()
+  fs.write_file("{}", editor.language())
+end)
+statusline.register(function()
+  return "LUA:" .. editor.language()
+end)
+"#,
+            command_marker.display(),
+            save_marker.display()
+        ),
+    )
+    .expect("plugin");
+    let config = LuaConfig {
+        enabled: true,
+        allow_file: true,
+        allow_process: false,
+        time_budget_ms: 100,
+    };
+    let mut plugins = Plugins::new(plugins_dir.clone(), &config).expect("plugins");
+    assert!(plugins.take_warnings().is_empty());
+    app.plugins = Some(plugins);
+    app.refresh_plugin_status();
+    assert_eq!(app.state.plugin_status, vec!["LUA:plaintext"]);
+
+    app.open_prompt(crate::input::PromptKind::CommandPalette);
+    let InputMode::Prompt(prompt) = &mut app.state.mode else {
+        panic!("palette missing")
+    };
+    assert!(prompt.candidates.contains(&"plugin_hello".to_string()));
+    prompt.set_input("plugin_hello");
+    prompt.refilter();
+    app.submit_prompt().expect("run plugin command");
+    assert_eq!(
+        std::fs::read_to_string(&command_marker).expect("marker"),
+        "ran"
+    );
+
+    std::fs::remove_file(&command_marker).expect("reset");
+    app.handle_key(KeyEvent::new(
+        KeyCode::Char('l'),
+        KeyModifiers::CONTROL | KeyModifiers::ALT,
+    ));
+    assert_eq!(
+        std::fs::read_to_string(&command_marker).expect("key marker"),
+        "ran"
+    );
+
+    app.dispatch(Command::Save).expect("save");
+    assert_eq!(
+        std::fs::read_to_string(&save_marker).expect("save marker"),
+        "plaintext"
+    );
+
+    std::fs::write(plugins_dir.join("demo.lua"), "-- removed\n").expect("rewrite");
+    app.reload_plugins();
+    assert!(app.plugin_command_names().is_empty());
+    assert!(app.state.plugin_status.is_empty());
     std::fs::remove_dir_all(&dir).ok();
 }

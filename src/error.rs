@@ -37,6 +37,8 @@ pub enum Error {
     Shell(String),
     #[error("{0}")]
     Update(String),
+    #[error("{0}")]
+    Git(String),
     #[error("{0} already exists")]
     AlreadyExists(PathBuf),
     #[error("invalid path {0}")]

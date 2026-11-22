@@ -20,6 +20,12 @@ impl App {
         let Some(command) = self.dispatch_navigation(command)? else {
             return Ok(());
         };
+        let Some(command) = self.dispatch_code(command)? else {
+            return Ok(());
+        };
+        let Some(command) = self.dispatch_git(command)? else {
+            return Ok(());
+        };
         let Some(command) = self.dispatch_text(command)? else {
             return Ok(());
         };
@@ -61,6 +67,7 @@ impl App {
             Command::FindPrompt => self.open_prompt(PromptKind::Find),
             Command::FindInFiles => self.open_prompt(PromptKind::FindInFiles),
             Command::ReplacePrompt => self.open_prompt(PromptKind::Replace),
+            Command::ReplaceInFiles => self.open_prompt(PromptKind::ReplaceInFiles),
             other => return Ok(Some(other)),
         }
         Ok(None)
@@ -88,6 +95,39 @@ impl App {
         Ok(None)
     }
 
+    fn dispatch_code(&mut self, command: Command) -> Result<Option<Command>> {
+        match command {
+            Command::AddCursorBelow => self.add_cursor(1)?,
+            Command::AddCursorAbove => self.add_cursor(-1)?,
+            Command::ClearCursors => self.clear_cursors(),
+            Command::ToggleWordWrap => self.toggle_word_wrap(),
+            Command::LineEndingsLf => {
+                self.convert_line_endings(crate::editor::document::Eol::Lf)?
+            }
+            Command::LineEndingsCrlf => {
+                self.convert_line_endings(crate::editor::document::Eol::Crlf)?
+            }
+            Command::GoToSymbol => self.open_prompt(PromptKind::Symbols),
+            Command::LspCompletion => self.lsp_completion()?,
+            Command::LspHover => self.lsp_hover()?,
+            Command::LspDefinition => self.lsp_definition()?,
+            other => return Ok(Some(other)),
+        }
+        Ok(None)
+    }
+
+    fn dispatch_git(&mut self, command: Command) -> Result<Option<Command>> {
+        match command {
+            Command::GitStatus => self.git_status()?,
+            Command::GitDiff => self.git_diff()?,
+            Command::GitStage => self.git_stage()?,
+            Command::GitUnstage => self.git_unstage()?,
+            Command::GitCommit => self.git_commit_prompt()?,
+            other => return Ok(Some(other)),
+        }
+        Ok(None)
+    }
+
     fn dispatch_text(&mut self, command: Command) -> Result<Option<Command>> {
         match command {
             Command::InsertText(text) => self.insert_text(&text)?,
@@ -101,6 +141,7 @@ impl App {
             Command::MoveLinesDown => self.move_lines(1)?,
             Command::DeleteLine => self.delete_line()?,
             Command::ToggleComment => self.toggle_comment()?,
+            Command::ToggleFold => self.toggle_fold()?,
             other => return Ok(Some(other)),
         }
         Ok(None)
@@ -159,6 +200,7 @@ impl App {
     fn dispatch_workspace(&mut self, command: Command) -> Result<Option<Command>> {
         match command {
             Command::NewWorkspace => self.new_workspace()?,
+            Command::SetWorkspaceRoot => self.open_prompt(PromptKind::WorkspaceRoot),
             Command::CloseWorkspace => self.close_workspace()?,
             Command::SwitchWorkspace(index) => self.switch_workspace(index)?,
             Command::NextWorkspace => self.cycle_workspace(1)?,

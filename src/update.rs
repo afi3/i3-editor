@@ -7,7 +7,7 @@
 //! binary behind.
 
 use std::io::Read;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
 
 use sha2::{Digest, Sha256};
@@ -41,8 +41,8 @@ pub fn run() -> Result<()> {
     let scratch = scratch_dir()?;
     let archive_name = format!("{BIN}-{target}.tar.gz");
     let base = release_base(&tag);
-    let archive = scratch.path.join(&archive_name);
-    let checksum = scratch.path.join(format!("{archive_name}.sha256"));
+    let archive = scratch.path().join(&archive_name);
+    let checksum = scratch.path().join(format!("{archive_name}.sha256"));
     download(&format!("{base}/{archive_name}"), &archive)?;
     download(&format!("{base}/{archive_name}.sha256"), &checksum)?;
 
@@ -55,8 +55,8 @@ pub fn run() -> Result<()> {
     }
     println!("checksum ok ({actual})");
 
-    extract(&archive, &scratch.path)?;
-    let new_binary = scratch.path.join(BIN);
+    extract(&archive, scratch.path())?;
+    let new_binary = scratch.path().join(BIN);
     if !new_binary.is_file() {
         return Err(Error::Update(format!(
             "{archive_name} does not contain {BIN}"
@@ -245,7 +245,9 @@ fn extract(archive: &Path, directory: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Replace `current` with `new` without truncating the old file first.
+/// Replace `current` with `new` without truncating the old file first. The
+/// temporary file gets an unpredictable name so a pre-created symlink cannot
+/// redirect the write.
 fn install_binary(new: &Path, current: &Path) -> Result<()> {
     let parent = current.parent().ok_or_else(|| {
         Error::Update(format!(
@@ -253,43 +255,36 @@ fn install_binary(new: &Path, current: &Path) -> Result<()> {
             current.display()
         ))
     })?;
-    let temporary = parent.join(format!(".{BIN}.update-{}", std::process::id()));
-    if let Err(error) = std::fs::copy(new, &temporary) {
-        let _ = std::fs::remove_file(&temporary);
-        return Err(Error::io("write", &temporary, error));
-    }
+    let mut source = std::fs::File::open(new).map_err(|error| Error::io("read", new, error))?;
+    let mut temporary = tempfile::Builder::new()
+        .prefix(".i3-editor-update-")
+        .tempfile_in(parent)
+        .map_err(|error| Error::io("write", parent, error))?;
+    std::io::copy(&mut source, &mut temporary)
+        .map_err(|error| Error::io("write", temporary.path(), error))?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        if let Err(error) =
-            std::fs::set_permissions(&temporary, std::fs::Permissions::from_mode(0o755))
-        {
-            let _ = std::fs::remove_file(&temporary);
-            return Err(Error::io("chmod", &temporary, error));
-        }
+        temporary
+            .as_file()
+            .set_permissions(std::fs::Permissions::from_mode(0o755))
+            .map_err(|error| Error::io("chmod", temporary.path(), error))?;
     }
-    if let Err(error) = std::fs::rename(&temporary, current) {
-        let _ = std::fs::remove_file(&temporary);
-        return Err(Error::io("replace", current, error));
-    }
+    temporary
+        .as_file()
+        .sync_all()
+        .map_err(|error| Error::io("write", temporary.path(), error))?;
+    temporary
+        .persist(current)
+        .map_err(|error| Error::io("replace", current, error.error))?;
     Ok(())
 }
 
-struct Scratch {
-    path: PathBuf,
-}
-
-impl Drop for Scratch {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.path);
-    }
-}
-
-fn scratch_dir() -> Result<Scratch> {
-    let path = std::env::temp_dir().join(format!("{BIN}-update-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&path);
-    std::fs::create_dir_all(&path).map_err(|error| Error::io("create", &path, error))?;
-    Ok(Scratch { path })
+fn scratch_dir() -> Result<tempfile::TempDir> {
+    tempfile::Builder::new()
+        .prefix("i3-editor-update-")
+        .tempdir()
+        .map_err(|error| Error::Update(format!("cannot create a scratch directory: {error}")))
 }
 
 #[cfg(test)]

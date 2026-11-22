@@ -52,14 +52,18 @@ impl App {
             .map(|(id, _)| *id)
             .collect();
         for id in ids {
-            let document = self
-                .state
-                .documents
-                .get_mut(&id)
-                .ok_or(Error::UnknownDocument(id))?;
-            document.save()?;
+            self.save_document(id)?;
         }
         Ok(())
+    }
+
+    pub(crate) fn save_document(&mut self, id: DocumentId) -> Result<()> {
+        let document = self
+            .state
+            .documents
+            .get_mut(&id)
+            .ok_or(Error::UnknownDocument(id))?;
+        document.save()
     }
 
     pub(crate) fn save(&mut self) -> Result<()> {
@@ -115,6 +119,8 @@ impl App {
         }
         self.notify(format!("saved {}", path.display()));
         self.state.explorer.refresh();
+        self.refresh_git_marks();
+        self.plugin_event("save");
         Ok(())
     }
 
@@ -268,6 +274,7 @@ impl App {
         if let Some((cursor, (top, left))) = document.undo() {
             pane.cursor = cursor.min(document.len_chars());
             pane.anchor = None;
+            pane.extra.clear();
             pane.scroll_top = top;
             pane.scroll_left = left;
         }
@@ -294,6 +301,7 @@ impl App {
         if let Some((cursor, (top, left))) = document.redo() {
             pane.cursor = cursor.min(document.len_chars());
             pane.anchor = None;
+            pane.extra.clear();
             pane.scroll_top = top;
             pane.scroll_left = left;
         }
@@ -325,7 +333,7 @@ impl App {
         let has_selection = self
             .state
             .focused_pane()
-            .map(|pane| pane.selection().is_some())
+            .map(|pane| !pane.selected_ranges().is_empty())
             .unwrap_or(false);
         if !has_selection {
             self.notify("nothing to copy");
@@ -346,24 +354,30 @@ impl App {
             let Some(pane) = panes.get_mut(&pane_id) else {
                 return Ok(());
             };
-            let Some(range) = pane.selection() else {
-                return Ok(());
-            };
+            let ranges = pane.selected_ranges();
             let Some(id) = pane.active else {
                 return Ok(());
             };
             let Some(document) = documents.get_mut(&id) else {
                 return Ok(());
             };
-            *clipboard = document.rope.slice(range.clone()).to_string();
+            let mut parts = Vec::with_capacity(ranges.len());
+            for range in &ranges {
+                parts.push(document.rope.slice(range.clone()).to_string());
+            }
+            let copied = parts.join("\n");
+            *clipboard = copied.clone();
             if cut {
                 let cursor_before = pane.cursor;
                 let scroll = (pane.scroll_top, pane.scroll_left);
-                document.remove(range.clone(), cursor_before, scroll);
-                pane.cursor = range.start;
-                pane.anchor = None;
+                let cursor_after = crate::state::cursors_after(&ranges, 0)
+                    .last()
+                    .copied()
+                    .unwrap_or(cursor_before);
+                document.replace_ranges(&ranges, "", cursor_before, cursor_after, scroll);
+                pane.apply_edit_result(&ranges, 0);
             }
-            clipboard.clone()
+            copied
         };
         let action = if cut { "cut" } else { "copied" };
         match crate::clipboard::copy_osc52(&copied) {
@@ -376,6 +390,17 @@ impl App {
     /// Insert one typed character, pairing brackets and quotes. Paste and
     /// command-driven insertions keep using `insert_text` unchanged.
     pub(crate) fn insert_typed_char(&mut self, ch: char) -> Result<()> {
+        if self
+            .state
+            .focused_pane()
+            .is_some_and(|pane| !pane.extra.is_empty())
+        {
+            return self.insert_text(&ch.to_string());
+        }
+        self.insert_paired_char(ch)
+    }
+
+    fn insert_paired_char(&mut self, ch: char) -> Result<()> {
         let language = self
             .state
             .active_document()
@@ -437,7 +462,35 @@ impl App {
         self.insert_text(&ch.to_string())
     }
 
+    pub(crate) fn convert_line_endings(
+        &mut self,
+        target: crate::editor::document::Eol,
+    ) -> Result<()> {
+        let message = {
+            let Some((pane, document)) = self.state.pane_and_document() else {
+                return Ok(());
+            };
+            let changed = document.convert_eol(target);
+            pane.cursor = pane.cursor.min(document.len_chars());
+            pane.anchor = None;
+            pane.extra.clear();
+            if changed {
+                format!("line endings: {}", target.as_str())
+            } else {
+                format!("already {}", target.as_str())
+            }
+        };
+        self.notify(message);
+        self.ensure_cursor_visible();
+        self.refresh_git_marks();
+        self.plugin_event("change");
+        Ok(())
+    }
+
     pub(crate) fn insert_text(&mut self, text: &str) -> Result<()> {
+        if text.is_empty() {
+            return Ok(());
+        }
         {
             let AppState {
                 documents,
@@ -459,19 +512,20 @@ impl App {
                 return Ok(());
             };
             let scroll_before = (pane.scroll_top, pane.scroll_left);
-            if let Some(range) = pane.selection() {
-                document.remove(range.clone(), pane.cursor, scroll_before);
-                pane.cursor = range.start;
-                pane.anchor = None;
-            }
-            document.insert(pane.cursor, text, pane.cursor, scroll_before);
-            pane.cursor += text.chars().count();
-            if text.contains('\n') {
+            let ranges = pane.edit_ranges();
+            let inserted = text.chars().count();
+            let cursor_after = crate::state::cursors_after(&ranges, inserted)
+                .last()
+                .copied()
+                .unwrap_or(pane.cursor);
+            document.replace_ranges(&ranges, text, pane.cursor, cursor_after, scroll_before);
+            pane.apply_edit_result(&ranges, inserted);
+            if text.contains('\n') || text.contains('\r') || ranges.len() > 1 {
                 document.history.break_run();
             }
-            pane.target_col = None;
         }
         self.ensure_cursor_visible();
+        self.plugin_event("change");
         Ok(())
     }
 
@@ -499,11 +553,11 @@ impl App {
 
     pub(crate) fn insert_newline(&mut self) -> Result<()> {
         let auto_indent = self.state.config.editor.auto_indent;
-        let indent = {
+        let (indent, eol) = {
             let Some((pane, document)) = self.state.pane_and_document() else {
                 return Ok(());
             };
-            if !auto_indent {
+            let indent = if !auto_indent {
                 String::new()
             } else {
                 let line = document.line_of_char(pane.cursor);
@@ -511,9 +565,10 @@ impl App {
                 text.chars()
                     .take_while(|ch| *ch == ' ' || *ch == '\t')
                     .collect::<String>()
-            }
+            };
+            (indent, document.line_ending())
         };
-        self.insert_text(&format!("\n{indent}"))
+        self.insert_text(&format!("{eol}{indent}"))
     }
 
     pub(crate) fn delete_backward(&mut self) -> Result<()> {
@@ -549,24 +604,41 @@ impl App {
             };
             let scroll = (pane.scroll_top, pane.scroll_left);
             let cursor_before = pane.cursor;
-            if let Some(range) = pane.selection() {
-                document.remove(range.clone(), cursor_before, scroll);
-                pane.cursor = range.start;
-            } else {
-                let range = if backward {
-                    let start = textutil::prev_grapheme(&document.rope, pane.cursor);
-                    start..pane.cursor
-                } else {
-                    pane.cursor..textutil::next_grapheme(&document.rope, pane.cursor)
-                };
+            let mut ranges = Vec::new();
+            for range in pane.edit_ranges() {
                 if range.start < range.end {
-                    document.remove(range.clone(), cursor_before, scroll);
-                    pane.cursor = range.start;
+                    ranges.push(range);
+                } else if backward {
+                    let start = textutil::prev_grapheme(&document.rope, range.start);
+                    if start < range.start {
+                        ranges.push(start..range.start);
+                    }
+                } else {
+                    let end = textutil::next_grapheme(&document.rope, range.start);
+                    if end > range.start {
+                        ranges.push(range.start..end);
+                    }
                 }
             }
-            pane.anchor = None;
-            pane.target_col = None;
+            ranges.sort_by_key(|range| (range.start, range.end));
+            let mut merged: Vec<std::ops::Range<usize>> = Vec::new();
+            for range in ranges {
+                match merged.last_mut() {
+                    Some(last) if range.start <= last.end => last.end = last.end.max(range.end),
+                    _ => merged.push(range),
+                }
+            }
+            if merged.is_empty() {
+                return;
+            }
+            let cursor_after = crate::state::cursors_after(&merged, 0)
+                .last()
+                .copied()
+                .unwrap_or(cursor_before);
+            document.replace_ranges(&merged, "", cursor_before, cursor_after, scroll);
+            pane.apply_edit_result(&merged, 0);
         }
         self.ensure_cursor_visible();
+        self.plugin_event("change");
     }
 }

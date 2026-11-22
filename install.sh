@@ -40,9 +40,11 @@ Usage: install.sh [--prefix DIR] [--version VER] [--update | --uninstall] [--hel
   --help          show this message
 
 Supported platforms: macOS (Intel and Apple Silicon) and Linux (x86_64 and
-aarch64). Without a matching release asset the script builds from source:
-  cargo install --git https://github.com/<repo> --locked
-which requires a Rust toolchain (https://rustup.rs).
+aarch64). Without a matching release asset the script builds the requested tag
+from source:
+  cargo install --git https://github.com/<repo> --locked --tag v<version>
+which requires a Rust toolchain (https://rustup.rs). Pass --version when the
+release lookup is unavailable; the script refuses to build an unpinned main.
 EOF
 }
 
@@ -140,6 +142,17 @@ esac
 
 mkdir -p "$PREFIX" || die "cannot create $PREFIX"
 
+# Stage beside the target, then rename: replacing a running binary with `cp`
+# fails with ETXTBSY, while `mv` inside one directory does not.
+install_binary() {
+    src=$1
+    target="$PREFIX/$BIN"
+    staged="$PREFIX/.$BIN.$$.new"
+    cp "$src" "$staged" || die "cannot write $staged"
+    chmod 755 "$staged" || { rm -f "$staged"; die "cannot chmod $staged"; }
+    mv -f "$staged" "$target" || { rm -f "$staged"; die "cannot replace $target"; }
+}
+
 installed=""
 
 if command -v curl >/dev/null 2>&1; then
@@ -156,24 +169,22 @@ if command -v curl >/dev/null 2>&1; then
     trap 'rm -rf "$tmp"' EXIT INT TERM
     say "fetching $base/$asset"
     if curl -fsSL "$base/$asset" -o "$tmp/$asset"; then
-        if curl -fsSL "$base/$asset.sha256" -o "$tmp/$asset.sha256" 2>/dev/null; then
-            if command -v sha256sum >/dev/null 2>&1; then
-                actual=$(sha256sum "$tmp/$asset" | awk '{print $1}')
-            elif command -v shasum >/dev/null 2>&1; then
-                actual=$(shasum -a 256 "$tmp/$asset" | awk '{print $1}')
-            else
-                actual=""
-            fi
-            expected=$(awk '{print $1}' "$tmp/$asset.sha256")
-            if [ -n "$actual" ] && [ "$actual" != "$expected" ]; then
-                die "checksum mismatch for $asset"
-            fi
+        curl -fsSL "$base/$asset.sha256" -o "$tmp/$asset.sha256" \
+            || die "cannot download $asset.sha256; refusing to install an unverified binary"
+        if command -v sha256sum >/dev/null 2>&1; then
+            actual=$(sha256sum "$tmp/$asset" | awk '{print $1}')
+        elif command -v shasum >/dev/null 2>&1; then
+            actual=$(shasum -a 256 "$tmp/$asset" | awk '{print $1}')
+        else
+            die "no SHA-256 tool (sha256sum or shasum); refusing to install an unverified binary"
         fi
+        expected=$(awk '{print $1}' "$tmp/$asset.sha256")
+        [ -n "$expected" ] || die "empty checksum file for $asset"
+        [ "$actual" = "$expected" ] || die "checksum mismatch for $asset"
         tar -xzf "$tmp/$asset" -C "$tmp" || die "cannot extract $asset"
         binary=$(find "$tmp" -type f -name "$BIN" | head -n 1)
         [ -n "$binary" ] || die "archive did not contain $BIN"
-        cp "$binary" "$PREFIX/$BIN" || die "cannot write $PREFIX/$BIN"
-        chmod 755 "$PREFIX/$BIN"
+        install_binary "$binary"
         installed="$PREFIX/$BIN"
     fi
 fi
@@ -181,12 +192,12 @@ fi
 if [ -z "$installed" ]; then
     say "no release asset available for $target"
     command -v cargo >/dev/null 2>&1 || die "install Rust from https://rustup.rs, or download a release manually"
+    [ -n "$VERSION" ] || die "cannot determine a release tag; rerun with --version <ver> (do not build an unreleased main)"
     build_root=$(mktemp -d 2>/dev/null || mktemp -d -t i3-editor-build)
-    say "building from source with cargo (this can take a few minutes)"
-    cargo install --git "https://github.com/$REPO" --locked --root "$build_root" \
-        || die "cargo install failed"
-    cp "$build_root/bin/$BIN" "$PREFIX/$BIN" || die "cannot write $PREFIX/$BIN"
-    chmod 755 "$PREFIX/$BIN"
+    say "building $VERSION from source with cargo (this can take a few minutes)"
+    cargo install --git "https://github.com/$REPO" --locked --tag "v$VERSION" \
+        --root "$build_root" || die "cargo install failed"
+    install_binary "$build_root/bin/$BIN"
     rm -rf "$build_root"
     installed="$PREFIX/$BIN"
 fi

@@ -4,7 +4,7 @@ use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, Paragraph};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 
 use crate::editor::text as textutil;
 use crate::input::{PromptKind, PromptState};
@@ -123,8 +123,8 @@ fn find_rows(state: &AppState, prompt: &PromptState) -> Option<(usize, Vec<(usiz
     let end = (start + MAX_ROWS).min(total);
     let rows = search.matches[start..end]
         .iter()
-        .map(|offset| {
-            let line = document.line_of_char(*offset);
+        .map(|range| {
+            let line = document.line_of_char(range.start);
             (line + 1, document.line_text(line))
         })
         .collect();
@@ -285,25 +285,181 @@ pub fn render_prompt(frame: &mut Frame, state: &AppState, prompt: &PromptState) 
     }
 }
 
-fn prompt_title(state: &AppState, prompt: &PromptState) -> String {
-    if prompt.kind == PromptKind::FindInFiles {
-        let (count, truncated) = state.project_search.as_ref().map_or((0, false), |search| {
-            (search.results.len(), search.truncated)
-        });
-        return format!(
-            " Find in Files {count}{} ",
-            if truncated { "+" } else { "" }
-        );
+pub fn render_popups(frame: &mut Frame, state: &AppState) {
+    if let Some(popup) = &state.completions {
+        let area = frame.area();
+        let width = area.width.saturating_sub(4).min(70);
+        let height = (popup.items.len().min(9) as u16)
+            .saturating_add(2)
+            .min(area.height);
+        if width > 0 && height > 0 {
+            let rect = Rect::new(
+                area.x + (area.width.saturating_sub(width)) / 2,
+                area.y + area.height.saturating_sub(height.saturating_add(3)),
+                width,
+                height,
+            );
+            frame.render_widget(Clear, rect);
+            let rows: Vec<Line> = popup
+                .items
+                .iter()
+                .enumerate()
+                .take(9)
+                .map(|(index, item)| {
+                    let style = if index == popup.selected {
+                        state.theme.selection_style()
+                    } else {
+                        state.theme.base()
+                    };
+                    Line::from(vec![
+                        Span::styled(format!(" {}", item.label), style),
+                        Span::styled(
+                            format!("  {}", item.detail),
+                            Style::default().add_modifier(Modifier::DIM),
+                        ),
+                    ])
+                })
+                .collect();
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(state.theme.prompt_border))
+                .title(" Completion ");
+            frame.render_widget(Paragraph::new(rows).block(block), rect);
+        }
     }
-    match (prompt.kind, state.search.as_ref()) {
-        (PromptKind::Find, Some(search))
-            if Some(search.document) == state.active_document_id()
-                && search.query == prompt.input()
-                && !search.matches.is_empty() =>
-        {
-            format!(" Find {}/{} ", search.index + 1, search.matches.len())
+    if let Some(text) = &state.hover {
+        let area = frame.area();
+        let width = area.width.saturating_sub(4).min(80);
+        let height = (text.lines().count().clamp(1, 10) as u16)
+            .saturating_add(2)
+            .min(area.height);
+        if width > 0 && height > 0 {
+            let rect = Rect::new(
+                area.x + (area.width.saturating_sub(width)) / 2,
+                area.y + area.height.saturating_sub(height.saturating_add(3)),
+                width,
+                height,
+            );
+            frame.render_widget(Clear, rect);
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(state.theme.prompt_border))
+                .title(" Hover ");
+            frame.render_widget(
+                Paragraph::new(text.as_str())
+                    .block(block)
+                    .wrap(Wrap { trim: false }),
+                rect,
+            );
+        }
+    }
+}
+
+pub fn render_diff(frame: &mut Frame, state: &AppState) {
+    let Some(view) = &state.git_diff else {
+        return;
+    };
+    let area = frame.area();
+    let width = area.width.saturating_sub(4);
+    let height = area.height.saturating_sub(4);
+    if width < 10 || height < 3 {
+        return;
+    }
+    let rect = Rect::new(area.x + 2, area.y + 2, width, height);
+    frame.render_widget(Clear, rect);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(state.theme.prompt_border))
+        .title(view.title.clone());
+    let inner = block.inner(rect);
+    let rows: Vec<Line> = view
+        .lines
+        .iter()
+        .skip(view.scroll)
+        .take(inner.height as usize)
+        .map(|line| {
+            let style = if line.starts_with("+++") || line.starts_with("---") {
+                Style::default().add_modifier(Modifier::DIM)
+            } else if line.starts_with('+') {
+                Style::default().fg(ratatui::style::Color::Green)
+            } else if line.starts_with('-') {
+                Style::default().fg(ratatui::style::Color::Red)
+            } else if line.starts_with("@@") {
+                Style::default().fg(ratatui::style::Color::Cyan)
+            } else {
+                state.theme.base()
+            };
+            Line::from(Span::styled(line.clone(), style))
+        })
+        .collect();
+    frame.render_widget(Paragraph::new(rows).block(block), rect);
+}
+
+fn prompt_title(state: &AppState, prompt: &PromptState) -> String {
+    let global = flags_suffix(state.search_options);
+    let query = prompt.fields.first().map(String::as_str).unwrap_or("");
+    match prompt.kind {
+        PromptKind::FindInFiles | PromptKind::ReplaceInFiles => {
+            let (matches, files, truncated, options) = state.project_search.as_ref().map_or(
+                (0, 0, false, state.search_options),
+                |search| {
+                    (
+                        search.results.len(),
+                        crate::project_search::group_by_file(&search.results).len(),
+                        search.truncated,
+                        search.options,
+                    )
+                },
+            );
+            let own = flags_suffix(options);
+            let truncated = if truncated { "+" } else { "" };
+            if prompt.kind == PromptKind::ReplaceInFiles {
+                format!(" Replace in Files {matches}{truncated} in {files} files{own} ")
+            } else {
+                format!(" Find in Files {matches}{truncated}{own} ")
+            }
+        }
+        PromptKind::Find => match state.search.as_ref() {
+            Some(search)
+                if Some(search.document) == state.active_document_id()
+                    && search.query == query
+                    && !search.matches.is_empty() =>
+            {
+                let truncated = if search.truncated { "+" } else { "" };
+                format!(
+                    " Find{global} {}/{}{truncated} ",
+                    search.index + 1,
+                    search.matches.len()
+                )
+            }
+            _ => format!(" Find{global} "),
+        },
+        PromptKind::Replace => {
+            let counts = state
+                .search
+                .as_ref()
+                .filter(|search| {
+                    search.query == query && Some(search.document) == state.active_document_id()
+                })
+                .map(|search| (search.matches.len(), search.truncated));
+            match counts {
+                Some((total, truncated)) => format!(
+                    " Replace{global} {total}{} ",
+                    if truncated { "+" } else { "" }
+                ),
+                None => format!(" Replace{global} "),
+            }
         }
         _ => format!(" {} ", prompt.kind.title()),
+    }
+}
+
+fn flags_suffix(options: crate::search_options::Options) -> String {
+    let flags = options.flags();
+    if flags.is_empty() {
+        String::new()
+    } else {
+        format!(" [{flags}]")
     }
 }
 
@@ -324,10 +480,11 @@ fn tail(text: &str, width: u16) -> String {
 
 fn field_label(kind: PromptKind, index: usize) -> &'static str {
     match (kind, index) {
-        (PromptKind::Replace, 0) => "Find: ",
-        (PromptKind::Replace, 1) => "With: ",
+        (PromptKind::Replace | PromptKind::ReplaceInFiles, 0) => "Find: ",
+        (PromptKind::Replace | PromptKind::ReplaceInFiles, 1) => "With: ",
         (PromptKind::Find | PromptKind::FindInFiles, _) => "Find: ",
         (PromptKind::GoToLine, _) => "Line: ",
+        (PromptKind::WorkspaceRoot, _) => "Root: ",
         (PromptKind::CommandPalette, _) => "> ",
         _ => "",
     }

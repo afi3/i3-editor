@@ -26,6 +26,10 @@ impl Watcher {
         watcher.watch(root, RecursiveMode::Recursive)?;
         if let Some(parent) = config.and_then(Path::parent) {
             let _ = watcher.watch(parent, RecursiveMode::NonRecursive);
+            let plugins = parent.join("plugins");
+            if plugins.is_dir() {
+                let _ = watcher.watch(&plugins, RecursiveMode::NonRecursive);
+            }
         }
         Ok(Self {
             _watcher: watcher,

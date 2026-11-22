@@ -42,6 +42,7 @@ pub enum Command {
     FindPrompt,
     FindInFiles,
     ReplacePrompt,
+    ReplaceInFiles,
     NextDocument,
     PrevDocument,
     NextMatch,
@@ -56,6 +57,22 @@ pub enum Command {
     MoveLinesDown,
     DeleteLine,
     ToggleComment,
+    ToggleFold,
+    GoToSymbol,
+    AddCursorBelow,
+    AddCursorAbove,
+    ClearCursors,
+    ToggleWordWrap,
+    LineEndingsLf,
+    LineEndingsCrlf,
+    LspCompletion,
+    LspHover,
+    LspDefinition,
+    GitStatus,
+    GitDiff,
+    GitStage,
+    GitUnstage,
+    GitCommit,
     InsertText(String),
     InsertTab,
     InsertNewline,
@@ -93,6 +110,7 @@ pub enum Command {
     NextTheme,
     PrevTheme,
     NewWorkspace,
+    SetWorkspaceRoot,
     CloseWorkspace,
     SwitchWorkspace(usize),
     NextWorkspace,
@@ -123,9 +141,65 @@ impl Command {
     }
 
     fn primary_spec(&self) -> Option<(&'static str, &'static str)> {
-        self.document_spec()
+        self.search_spec()
+            .or_else(|| self.git_spec())
+            .or_else(|| self.lsp_spec())
+            .or_else(|| self.edit_spec())
+            .or_else(|| self.document_spec())
             .or_else(|| self.navigation_spec())
             .or_else(|| self.explorer_spec())
+    }
+
+    fn edit_spec(&self) -> Option<(&'static str, &'static str)> {
+        Some(match self {
+            Command::ToggleComment => ("toggle_comment", "Toggle comments for the selection"),
+            Command::ToggleFold => ("toggle_fold", "Fold or unfold the block at the cursor"),
+            Command::AddCursorBelow => ("add_cursor_below", "Add a cursor on the next line"),
+            Command::AddCursorAbove => ("add_cursor_above", "Add a cursor on the previous line"),
+            Command::ClearCursors => ("clear_cursors", "Remove secondary cursors"),
+            Command::ToggleWordWrap => ("toggle_word_wrap", "Turn soft word wrap on or off"),
+            Command::LineEndingsLf => ("line_endings_lf", "Convert the document to LF"),
+            Command::LineEndingsCrlf => ("line_endings_crlf", "Convert the document to CRLF"),
+            Command::GoToSymbol => ("go_to_symbol", "Jump to a definition in the document"),
+            _ => return None,
+        })
+    }
+
+    fn git_spec(&self) -> Option<(&'static str, &'static str)> {
+        Some(match self {
+            Command::GitStatus => ("git_status", "List changed files; Enter opens the diff"),
+            Command::GitDiff => ("git_diff", "Show the diff for the active file"),
+            Command::GitStage => ("git_stage", "Stage the active file"),
+            Command::GitUnstage => ("git_unstage", "Unstage the active file"),
+            Command::GitCommit => ("git_commit", "Commit the staged changes"),
+            _ => return None,
+        })
+    }
+
+    fn lsp_spec(&self) -> Option<(&'static str, &'static str)> {
+        Some(match self {
+            Command::LspCompletion => ("lsp_completion", "Ask the language server for completions"),
+            Command::LspHover => ("lsp_hover", "Show type information under the cursor"),
+            Command::LspDefinition => (
+                "lsp_definition",
+                "Jump to the definition via the language server",
+            ),
+            _ => return None,
+        })
+    }
+
+    fn search_spec(&self) -> Option<(&'static str, &'static str)> {
+        Some(match self {
+            Command::GoToLinePrompt => ("go_to_line", "Jump to a line"),
+            Command::FindPrompt => ("find", "Find in the active document"),
+            Command::FindInFiles => ("find_in_files", "Search the project for text"),
+            Command::ReplacePrompt => ("replace", "Replace in the active document"),
+            Command::ReplaceInFiles => (
+                "replace_in_files",
+                "Replace in files (Ctrl+Enter applies to the selected file)",
+            ),
+            _ => return None,
+        })
     }
 
     fn secondary_spec(&self) -> Option<(&'static str, &'static str)> {
@@ -146,10 +220,6 @@ impl Command {
             Command::ToggleExplorer => ("toggle_explorer", "Show or hide the explorer"),
             Command::Palette => ("command_palette", "Run a command"),
             Command::Messages => ("messages", "Show startup warnings"),
-            Command::GoToLinePrompt => ("go_to_line", "Jump to a line"),
-            Command::FindPrompt => ("find", "Find in the active document"),
-            Command::FindInFiles => ("find_in_files", "Search the project for text"),
-            Command::ReplacePrompt => ("replace", "Replace in the active document"),
             _ => return None,
         })
     }
@@ -185,7 +255,6 @@ impl Command {
                 ("move_lines_down", "Move the current line or selection down")
             }
             Command::DeleteLine => ("delete_line", "Delete the current line"),
-            Command::ToggleComment => ("toggle_comment", "Toggle comments for the selection"),
             _ => return None,
         })
     }
@@ -251,6 +320,10 @@ impl Command {
     fn workspace_spec(&self) -> Option<(&'static str, &'static str)> {
         Some(match self {
             Command::NewWorkspace => ("new_workspace", "Create a workspace"),
+            Command::SetWorkspaceRoot => (
+                "workspace_root",
+                "Change the explorer root of the active workspace",
+            ),
             Command::CloseWorkspace => ("close_workspace", "Close the active workspace"),
             Command::SwitchWorkspace(_) => ("switch_workspace", "Switch workspace"),
             Command::NextWorkspace => ("next_workspace", "Switch to the next workspace"),
@@ -281,6 +354,7 @@ impl Command {
             Command::FindPrompt,
             Command::FindInFiles,
             Command::ReplacePrompt,
+            Command::ReplaceInFiles,
             Command::NextDocument,
             Command::PrevDocument,
             Command::NextMatch,
@@ -295,6 +369,22 @@ impl Command {
             Command::MoveLinesDown,
             Command::DeleteLine,
             Command::ToggleComment,
+            Command::ToggleFold,
+            Command::GoToSymbol,
+            Command::AddCursorBelow,
+            Command::AddCursorAbove,
+            Command::ClearCursors,
+            Command::ToggleWordWrap,
+            Command::LineEndingsLf,
+            Command::LineEndingsCrlf,
+            Command::LspCompletion,
+            Command::LspHover,
+            Command::LspDefinition,
+            Command::GitStatus,
+            Command::GitDiff,
+            Command::GitStage,
+            Command::GitUnstage,
+            Command::GitCommit,
             Command::SplitLeftRight,
             Command::SplitTopBottom,
             Command::ClosePane,
@@ -327,6 +417,7 @@ impl Command {
             Command::ExplorerRefresh,
             Command::ExplorerToggleHidden,
             Command::NewWorkspace,
+            Command::SetWorkspaceRoot,
             Command::CloseWorkspace,
             Command::NextWorkspace,
             Command::PrevWorkspace,
@@ -377,6 +468,7 @@ mod tests {
             Command::FindPrompt,
             Command::FindInFiles,
             Command::ReplacePrompt,
+            Command::ReplaceInFiles,
             Command::NextDocument,
             Command::PrevDocument,
             Command::NextMatch,
@@ -391,6 +483,22 @@ mod tests {
             Command::MoveLinesDown,
             Command::DeleteLine,
             Command::ToggleComment,
+            Command::ToggleFold,
+            Command::GoToSymbol,
+            Command::AddCursorBelow,
+            Command::AddCursorAbove,
+            Command::ClearCursors,
+            Command::ToggleWordWrap,
+            Command::LineEndingsLf,
+            Command::LineEndingsCrlf,
+            Command::LspCompletion,
+            Command::LspHover,
+            Command::LspDefinition,
+            Command::GitStatus,
+            Command::GitDiff,
+            Command::GitStage,
+            Command::GitUnstage,
+            Command::GitCommit,
             Command::InsertText("x".to_string()),
             Command::InsertTab,
             Command::InsertNewline,
@@ -431,6 +539,7 @@ mod tests {
             Command::NextTheme,
             Command::PrevTheme,
             Command::NewWorkspace,
+            Command::SetWorkspaceRoot,
             Command::CloseWorkspace,
             Command::SwitchWorkspace(0),
             Command::NextWorkspace,

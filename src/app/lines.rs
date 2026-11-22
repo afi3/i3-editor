@@ -26,6 +26,7 @@ impl App {
             };
             let cursor = pane.cursor;
             let anchor = pane.anchor;
+            let eol = document.line_ending();
             let (start_line, end_line) = selected_lines(&document.rope, cursor, anchor);
             let line_count = document.line_count();
             let (range, text, shift) = if direction < 0 {
@@ -45,7 +46,7 @@ impl App {
                     let text = if block.ends_with('\n') {
                         format!("{block}{previous}")
                     } else {
-                        format!("{block}\n{}", previous.trim_end_matches('\n'))
+                        format!("{block}{eol}{}", previous.trim_end_matches(['\r', '\n']))
                     };
                     (
                         previous_start..block_end,
@@ -69,12 +70,12 @@ impl App {
                 let shift = if next.ends_with('\n') {
                     next.chars().count() as isize
                 } else {
-                    next.chars().count() as isize + 1
+                    next.chars().count() as isize + eol.chars().count() as isize
                 };
                 let text = if next.ends_with('\n') {
                     format!("{next}{block}")
                 } else {
-                    format!("{next}\n{}", block.trim_end_matches('\n'))
+                    format!("{next}{eol}{}", block.trim_end_matches(['\r', '\n']))
                 };
                 (line_start..next_end, text, shift)
             };

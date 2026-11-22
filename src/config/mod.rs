@@ -17,6 +17,67 @@ pub struct AppConfig {
     pub appearance: AppearanceConfig,
     pub terminal: TerminalConfig,
     pub keys: KeysConfig,
+    pub lsp: LspConfig,
+    pub git: GitConfig,
+    pub lua: LuaConfig,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(default)]
+pub struct LuaConfig {
+    pub enabled: bool,
+    /// Load Lua's io library and expose `fs.write_file`.
+    pub allow_file: bool,
+    /// Load Lua's os library and expose `process.run`.
+    pub allow_process: bool,
+    /// Per-callback instruction-time budget in milliseconds.
+    pub time_budget_ms: u64,
+}
+
+impl Default for LuaConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            allow_file: false,
+            allow_process: false,
+            time_budget_ms: 100,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(default)]
+pub struct GitConfig {
+    /// Git executable used for every command.
+    pub binary: String,
+}
+
+impl Default for GitConfig {
+    fn default() -> Self {
+        Self {
+            binary: "git".to_string(),
+        }
+    }
+}
+
+/// Language servers, keyed by a short name (`rust`, `python`, ...). The key is
+/// also the default language match when `extensions` is empty.
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(default)]
+pub struct LspConfig {
+    #[serde(flatten)]
+    pub servers: BTreeMap<String, LspServerConfig>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(default)]
+pub struct LspServerConfig {
+    pub command: String,
+    #[serde(default)]
+    pub args: Vec<String>,
+    /// File extensions that select this server; empty uses the table key.
+    #[serde(default)]
+    pub extensions: Vec<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -47,6 +108,7 @@ pub struct EditorConfig {
     pub insert_spaces: bool,
     pub line_numbers: bool,
     pub auto_indent: bool,
+    pub word_wrap: bool,
 }
 
 impl Default for EditorConfig {
@@ -56,6 +118,7 @@ impl Default for EditorConfig {
             insert_spaces: true,
             line_numbers: true,
             auto_indent: true,
+            word_wrap: false,
         }
     }
 }
@@ -223,7 +286,16 @@ pub fn load_from(path: &Path) -> (AppConfig, Vec<String>) {
         path: path.to_path_buf(),
         text: text.clone(),
     };
-    const SECTIONS: [&str; 5] = ["editor", "explorer", "appearance", "terminal", "keys"];
+    const SECTIONS: [&str; 8] = [
+        "editor",
+        "explorer",
+        "appearance",
+        "terminal",
+        "keys",
+        "lsp",
+        "git",
+        "lua",
+    ];
     if let Some(table) = value.as_table() {
         for key in table.keys() {
             if !SECTIONS.contains(&key.as_str()) {
@@ -241,6 +313,8 @@ pub fn load_from(path: &Path) -> (AppConfig, Vec<String>) {
         ("appearance", APPEARANCE_KEYS),
         ("terminal", TERMINAL_KEYS),
         ("keys", KEYS_KEYS),
+        ("git", GIT_KEYS),
+        ("lua", LUA_KEYS),
     ] {
         warn_unknown_keys(&value, name, keys, &source, &mut warnings);
     }
@@ -269,14 +343,27 @@ pub fn load_from(path: &Path) -> (AppConfig, Vec<String>) {
         &mut warnings,
     );
     take_section(&value, "keys", &mut config.keys, &source, &mut warnings);
+    take_section(&value, "lsp", &mut config.lsp, &source, &mut warnings);
+    take_section(&value, "git", &mut config.git, &source, &mut warnings);
+    take_section(&value, "lua", &mut config.lua, &source, &mut warnings);
     config.keys.source = Some(source);
+    if config.git.binary.trim().is_empty() {
+        config.git.binary = "git".to_string();
+    }
+    config.lua.time_budget_ms = config.lua.time_budget_ms.clamp(10, 5_000);
     config.explorer.width = config.explorer.width.clamp(5, 50);
     config.terminal.height = config.terminal.height.clamp(3, 60);
     config.terminal.scrollback = config.terminal.scrollback.clamp(100, 100_000);
     (config, warnings)
 }
 
-const EDITOR_KEYS: &[&str] = &["tab_size", "insert_spaces", "line_numbers", "auto_indent"];
+const EDITOR_KEYS: &[&str] = &[
+    "tab_size",
+    "insert_spaces",
+    "line_numbers",
+    "auto_indent",
+    "word_wrap",
+];
 const EXPLORER_KEYS: &[&str] = &["visible", "width", "show_hidden"];
 const APPEARANCE_KEYS: &[&str] = &[
     "theme",
@@ -285,6 +372,8 @@ const APPEARANCE_KEYS: &[&str] = &[
     "show_workspace_tabs",
 ];
 const TERMINAL_KEYS: &[&str] = &["height", "shell", "scrollback"];
+const GIT_KEYS: &[&str] = &["binary"];
+const LUA_KEYS: &[&str] = &["enabled", "allow_file", "allow_process", "time_budget_ms"];
 const KEYS_KEYS: &[&str] = &["preset", "global", "editing", "explorer"];
 
 /// Report keys the loader does not understand without discarding the rest of
@@ -386,6 +475,41 @@ mod tests {
         let (config, warnings) = load_from(&path);
         assert_eq!(warnings.len(), 1);
         assert_eq!(config.editor.tab_size, 4);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn lsp_servers_are_read_from_nested_tables() {
+        let dir = std::env::temp_dir().join(format!("i3-config-lsp-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let path = dir.join("config.toml");
+        std::fs::write(
+            &path,
+            "[lsp.rust]\ncommand = \"rust-analyzer\"\nargs = [\"--stdio\"]\nextensions = [\"rs\"]\n",
+        )
+        .expect("write");
+        let (config, warnings) = load_from(&path);
+        assert!(warnings.is_empty(), "{warnings:?}");
+        let rust = config.lsp.servers.get("rust").expect("rust server");
+        assert_eq!(rust.command, "rust-analyzer");
+        assert_eq!(rust.args, vec!["--stdio".to_string()]);
+        assert_eq!(rust.extensions, vec!["rs".to_string()]);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn git_binary_defaults_and_overrides() {
+        let dir = std::env::temp_dir().join(format!("i3-config-git-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let path = dir.join("config.toml");
+        std::fs::write(&path, "[git]\nbinary = \"/usr/bin/git\"\n").expect("write");
+        let (config, warnings) = load_from(&path);
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(config.git.binary, "/usr/bin/git");
+
+        std::fs::write(&path, "[git]\nbinary = \"\"\n").expect("write");
+        let (config, _) = load_from(&path);
+        assert_eq!(config.git.binary, "git");
         std::fs::remove_dir_all(&dir).ok();
     }
 

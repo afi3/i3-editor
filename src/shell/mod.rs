@@ -14,6 +14,26 @@ use vt100::{MouseProtocolEncoding, MouseProtocolMode, Parser};
 
 use crate::error::{Error, Result};
 
+/// Bytes of PTY output parsed per frame; keeps a flooding program responsive.
+const PUMP_BUDGET: usize = 256 * 1024;
+
+fn drain(output: &Receiver<Vec<u8>>, parser: &mut Parser, mut budget: usize) {
+    while budget > 0 {
+        let Ok(chunk) = output.try_recv() else { break };
+        budget = budget.saturating_sub(chunk.len());
+        parser.process(&chunk);
+    }
+}
+
+fn wrap_paste(text: &str) -> Vec<u8> {
+    let text = text.replace("\u{1b}[201~", "");
+    let mut bytes = Vec::with_capacity(text.len() + 12);
+    bytes.extend_from_slice(b"\x1b[200~");
+    bytes.extend_from_slice(text.as_bytes());
+    bytes.extend_from_slice(b"\x1b[201~");
+    bytes
+}
+
 pub struct ShellPanel {
     master: Box<dyn MasterPty + Send>,
     writer: Box<dyn Write + Send>,
@@ -105,10 +125,21 @@ impl ShellPanel {
         })
     }
 
-    /// Drain pending PTY output into the screen model.
+    /// Drain pending PTY output into the screen model. A flooding program such
+    /// as `yes` must not starve input: each frame parses at most `PUMP_BUDGET`
+    /// bytes and the rest waits for the next one.
     pub fn pump(&mut self) {
-        while let Ok(chunk) = self.output.try_recv() {
-            self.parser.process(&chunk);
+        drain(&self.output, &mut self.parser, PUMP_BUDGET);
+    }
+
+    /// Write pasted text. When the program enabled bracketed paste, wrap the
+    /// payload so a multi-line paste arrives as one paste instead of a run of
+    /// executed lines.
+    pub fn paste(&mut self, text: &str) {
+        if self.parser.screen().bracketed_paste() {
+            self.write(&wrap_paste(text));
+        } else {
+            self.write(text.as_bytes());
         }
     }
 
@@ -628,5 +659,29 @@ mod tests {
         }
         assert!(visible.contains("panel-ok"), "screen: {visible:?}");
         drop(panel);
+    }
+
+    #[test]
+    fn drain_stops_at_the_budget() {
+        let (sender, output) = mpsc::channel();
+        for _ in 0..5 {
+            sender.send(vec![b'a'; 400]).expect("send");
+        }
+        drop(sender);
+        let mut parser = Parser::new(
+            NonZeroU16::new(24).expect("rows"),
+            NonZeroU16::new(80).expect("cols"),
+            10,
+        );
+        drain(&output, &mut parser, 1024);
+        assert_eq!(output.try_iter().count(), 2);
+    }
+
+    #[test]
+    fn paste_is_wrapped_and_drops_a_forged_terminator() {
+        let wrapped = wrap_paste("one\ntwo\x1b[201~three");
+        assert!(wrapped.starts_with(b"\x1b[200~"));
+        assert!(wrapped.ends_with(b"\x1b[201~"));
+        assert_eq!(&wrapped[6..wrapped.len() - 6], b"one\ntwothree");
     }
 }

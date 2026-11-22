@@ -126,6 +126,13 @@ pub fn supports(language: Language) -> bool {
     grammars().contains_key(&language)
 }
 
+/// The tree-sitter grammar for `language`, when one is compiled in.
+pub fn ts_language(language: Language) -> Option<tree_sitter::Language> {
+    grammars()
+        .get(&language)
+        .map(|grammar| grammar.language.clone())
+}
+
 /// The parser state for one document.
 #[derive(Default)]
 pub(crate) struct Highlighter {
