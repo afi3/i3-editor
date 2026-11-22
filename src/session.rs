@@ -516,6 +516,7 @@ mod tests {
             warnings: Vec::new(),
             clipboard: String::new(),
             search: None,
+            project_search: None,
             fullscreen: None,
             moving: false,
             terminals: Default::default(),

@@ -16,6 +16,10 @@ impl App {
         let _ = key;
         match combo.code {
             KeyCode::Esc => {
+                if matches!(&self.state.mode, InputMode::Prompt(prompt) if prompt.kind == PromptKind::FindInFiles)
+                {
+                    self.stop_project_search();
+                }
                 self.state.mode = InputMode::Normal;
                 return;
             }
@@ -82,12 +86,18 @@ impl App {
             }
         }
 
-        if edited
-            && let InputMode::Prompt(prompt) = &self.state.mode
-            && prompt.kind == PromptKind::Find
-        {
-            let query = prompt.input().to_string();
-            self.preview_search(query);
+        if edited && let InputMode::Prompt(prompt) = &self.state.mode {
+            match prompt.kind {
+                PromptKind::Find => {
+                    let query = prompt.input().to_string();
+                    self.preview_search(query);
+                }
+                PromptKind::FindInFiles => {
+                    let query = prompt.input().to_string();
+                    self.start_project_search(query);
+                }
+                _ => {}
+            }
         }
     }
 
@@ -118,6 +128,28 @@ impl App {
                 self.open_document(root.join(relative))
             }
             PromptKind::Find => self.commit_search(prompt.fields[0].clone()),
+            PromptKind::FindInFiles => {
+                let selected = prompt.filtered.get(prompt.selected).copied();
+                let found = selected.and_then(|index| {
+                    self.state
+                        .project_search
+                        .as_ref()
+                        .and_then(|search| search.results.get(index))
+                        .cloned()
+                });
+                self.stop_project_search();
+                match found {
+                    Some(found) => self.jump_to_project_match(found),
+                    None if prompt.fields[0].is_empty() => {
+                        self.notify("nothing to search");
+                        Ok(())
+                    }
+                    None => {
+                        self.notify(format!("no matches for {}", prompt.fields[0]));
+                        Ok(())
+                    }
+                }
+            }
             PromptKind::Replace => self.replace_all(&prompt.fields[0], &prompt.fields[1]),
             PromptKind::GoToLine => {
                 let line: usize = prompt.fields[0]
@@ -219,6 +251,11 @@ impl App {
                     prompt = prompt.with_field(search.query.clone());
                 }
             }
+            PromptKind::FindInFiles => {
+                if let Some(search) = &self.state.project_search {
+                    prompt = prompt.with_field(search.query.clone());
+                }
+            }
             PromptKind::Replace => {
                 if let Some(search) = &self.state.search {
                     prompt = prompt.with_field(search.query.clone());
@@ -276,10 +313,14 @@ impl App {
                 }
             }
         }
+        let project_query = (kind == PromptKind::FindInFiles).then(|| prompt.input().to_string());
         self.state.mode = InputMode::Prompt(prompt);
+        if let Some(query) = project_query {
+            self.start_project_search(query);
+        }
     }
 
-    fn quick_open_candidates(&mut self) -> Vec<String> {
+    pub(crate) fn quick_open_candidates(&mut self) -> Vec<String> {
         // Without a watcher the list cannot be invalidated, so keep rescanning.
         if self.watcher.is_none() {
             return self.scan_quick_open();

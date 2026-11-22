@@ -83,6 +83,10 @@ Delivered:
 - Fuzzy finder for quick open and the command palette, scored by Nucleo with
   smart case and path-boundary bonuses; arrow selections survive a narrowing
   query and otherwise the best match stays selected.
+- Find in Files: a background worker scans the quick-open file list with literal
+  smart-case matching, streams `path:line:column` results into a prompt, cancels
+  older scans on each keystroke, and jumps to the selected match. Files above
+  1 MiB, non-UTF-8 files, and matches past 1000 are skipped and reported.
 - Stateful lexer retained as a fallback when a grammar or query is unavailable:
   cross-line block comments, triple-quoted strings, template literals, and
   Markdown fences. Per-line lexer states are memoized per document.
@@ -108,7 +112,7 @@ Delivered:
 - Keymap presets and capability handling.
 - Unicode width/grapheme handling with tests.
 - Error handling through a single `Error` type; status-bar messages.
-- 203 unit and integration tests, `TestBackend` render tests.
+- 210 unit and integration tests, `TestBackend` render tests.
 - `install.sh` one-liner with `--update` and `--uninstall` (checksum-verified
   release download, version comparison, Cargo fallback) and a tag-driven release
   workflow for macOS/Linux on x86_64 and aarch64.
@@ -129,4 +133,4 @@ cargo clippy --all-targets --all-features
 cargo run -- --dump-keymap
 ```
 
-Last recorded run: `cargo test` → 203 passed, `cargo clippy` → 0 warnings.
+Last recorded run: `cargo test` → 210 passed, `cargo clippy` → 0 warnings.

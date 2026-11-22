@@ -214,6 +214,15 @@ the project is scanned once instead of once per prompt. Ignored paths still
 produce notify events because the backend cannot skip them, but they never
 rebuild the tree, which keeps build output from causing churn.
 
+**Find in Files is one worker per query.** `project_search::Task` receives the
+cached quick-open list, reads each file, and streams `Message::Matches` batches
+over a channel; an atomic flag cancels the previous worker when the query
+changes, and a dropped receiver stops it at its next send. The app drains the
+channel once per frame, appends labels to the prompt without fuzzy-refiltering
+them (they are already matches), and jumps by converting line plus char column
+into a document offset. The worker skips files above 1 MiB and invalid UTF-8, and
+stops at 1000 matches.
+
 **Rendering is read-only.** `ui::render` takes `&AppState`. The only mutation
 before a draw is `compute_layout`, which fills the rect cache.
 

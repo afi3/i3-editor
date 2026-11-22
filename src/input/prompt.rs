@@ -12,6 +12,7 @@ pub enum PromptKind {
     CommandPalette,
     QuickOpen,
     Find,
+    FindInFiles,
     Replace,
     SaveAs,
     Overwrite,
@@ -32,6 +33,7 @@ impl PromptKind {
             PromptKind::CommandPalette => "Command Palette",
             PromptKind::QuickOpen => "Quick Open",
             PromptKind::Find => "Find",
+            PromptKind::FindInFiles => "Find in Files",
             PromptKind::Replace => "Replace",
             PromptKind::SaveAs => "Save As",
             PromptKind::Overwrite => "Overwrite file",
@@ -65,6 +67,7 @@ impl PromptKind {
             self,
             PromptKind::CommandPalette
                 | PromptKind::QuickOpen
+                | PromptKind::FindInFiles
                 | PromptKind::Theme
                 | PromptKind::QuitDirty
                 | PromptKind::ExternalChange
@@ -146,6 +149,13 @@ impl PromptState {
     }
 
     pub fn refilter(&mut self) {
+        // Project-search candidates are matches for the query, not fuzzy
+        // candidates; filtering them again would hide results.
+        if self.kind == PromptKind::FindInFiles {
+            self.filtered = (0..self.candidates.len()).collect();
+            self.selected = self.selected.min(self.candidates.len().saturating_sub(1));
+            return;
+        }
         let selected = self.selected_candidate().map(str::to_string);
         let needle = self.input();
         if needle.is_empty() {
@@ -383,6 +393,16 @@ mod tests {
         }
         assert!(prompt.visible().is_empty());
         assert_eq!(prompt.selected_candidate(), None);
+    }
+
+    #[test]
+    fn project_search_results_are_not_filtered_again() {
+        let mut prompt = PromptState::new(PromptKind::FindInFiles);
+        prompt.insert_char('z');
+        prompt.set_candidates(vec!["a.txt:1:6  first needle".to_string()]);
+        assert_eq!(prompt.visible(), vec!["a.txt:1:6  first needle"]);
+        prompt.move_selection(1);
+        assert_eq!(prompt.selected_candidate(), Some("a.txt:1:6  first needle"));
     }
 
     #[test]

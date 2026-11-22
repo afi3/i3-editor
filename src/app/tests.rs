@@ -66,6 +66,7 @@ fn fixture(text: &str) -> (App, PathBuf) {
         warnings: Vec::new(),
         clipboard: String::new(),
         search: None,
+        project_search: None,
         fullscreen: None,
         moving: false,
         terminals: Default::default(),
@@ -120,6 +121,53 @@ fn save_writes_the_buffer_and_clears_dirty() {
     app.dispatch(Command::Save).expect("save");
     assert_eq!(std::fs::read_to_string(&path).expect("read"), "twoone\n");
     assert!(!app.state.active_document().expect("doc").dirty);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn find_in_files_opens_the_selected_match() {
+    use std::time::{Duration, Instant};
+
+    use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    let (mut app, dir) = fixture("one\n");
+    std::fs::write(dir.join("other.txt"), "alpha\nneedle here\nalpha\n").expect("file");
+    app.dispatch(Command::FindInFiles)
+        .expect("open find in files");
+    for ch in "needle".chars() {
+        app.handle_key(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
+    }
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        app.pump_project_search();
+        if app.project_task.is_none() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(app.project_task.is_none(), "search did not finish");
+    let search = app.state.project_search.as_ref().expect("results");
+    assert_eq!(search.query, "needle");
+    assert_eq!(search.results.len(), 1, "{:?}", search.results);
+    assert!(search.results[0].path.ends_with("other.txt"));
+
+    let InputMode::Prompt(prompt) = &app.state.mode else {
+        panic!("find-in-files prompt missing")
+    };
+    assert_eq!(prompt.candidates.len(), 1);
+    app.submit_prompt().expect("jump");
+
+    let path = app
+        .state
+        .active_document()
+        .and_then(|document| document.path.clone())
+        .expect("path");
+    assert!(path.ends_with("other.txt"));
+    let document = app.state.active_document().expect("doc");
+    let cursor = app.state.focused_pane().expect("pane").cursor;
+    assert_eq!(document.line_of_char(cursor), 1);
+    assert_eq!(document.line_text(1).trim_start(), "needle here");
     std::fs::remove_dir_all(&dir).ok();
 }
 

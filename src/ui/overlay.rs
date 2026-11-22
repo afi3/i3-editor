@@ -160,16 +160,7 @@ pub fn render_prompt(frame: &mut Frame, state: &AppState, prompt: &PromptState) 
     frame.render_widget(Clear, area);
     let theme = state.theme;
     frame.buffer_mut().set_style(area, theme.base());
-    let title = match (prompt.kind, state.search.as_ref()) {
-        (PromptKind::Find, Some(search))
-            if Some(search.document) == state.active_document_id()
-                && search.query == prompt.input()
-                && !search.matches.is_empty() =>
-        {
-            format!(" Find {}/{} ", search.index + 1, search.matches.len())
-        }
-        _ => format!(" {} ", prompt.kind.title()),
-    };
+    let title = prompt_title(state, prompt);
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme.prompt_border))
@@ -294,6 +285,28 @@ pub fn render_prompt(frame: &mut Frame, state: &AppState, prompt: &PromptState) 
     }
 }
 
+fn prompt_title(state: &AppState, prompt: &PromptState) -> String {
+    if prompt.kind == PromptKind::FindInFiles {
+        let (count, truncated) = state.project_search.as_ref().map_or((0, false), |search| {
+            (search.results.len(), search.truncated)
+        });
+        return format!(
+            " Find in Files {count}{} ",
+            if truncated { "+" } else { "" }
+        );
+    }
+    match (prompt.kind, state.search.as_ref()) {
+        (PromptKind::Find, Some(search))
+            if Some(search.document) == state.active_document_id()
+                && search.query == prompt.input()
+                && !search.matches.is_empty() =>
+        {
+            format!(" Find {}/{} ", search.index + 1, search.matches.len())
+        }
+        _ => format!(" {} ", prompt.kind.title()),
+    }
+}
+
 /// Clip a path from the left so its file name stays visible.
 fn tail(text: &str, width: u16) -> String {
     let width = width as usize;
@@ -313,7 +326,7 @@ fn field_label(kind: PromptKind, index: usize) -> &'static str {
     match (kind, index) {
         (PromptKind::Replace, 0) => "Find: ",
         (PromptKind::Replace, 1) => "With: ",
-        (PromptKind::Find, _) => "Find: ",
+        (PromptKind::Find | PromptKind::FindInFiles, _) => "Find: ",
         (PromptKind::GoToLine, _) => "Line: ",
         (PromptKind::CommandPalette, _) => "> ",
         _ => "",

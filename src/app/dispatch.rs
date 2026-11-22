@@ -20,6 +20,7 @@ impl App {
             Command::Palette => self.open_prompt(PromptKind::CommandPalette),
             Command::GoToLinePrompt => self.open_prompt(PromptKind::GoToLine),
             Command::FindPrompt => self.open_prompt(PromptKind::Find),
+            Command::FindInFiles => self.open_prompt(PromptKind::FindInFiles),
             Command::ReplacePrompt => self.open_prompt(PromptKind::Replace),
             Command::NextDocument => self.cycle_document(1)?,
             Command::PrevDocument => self.cycle_document(-1)?,

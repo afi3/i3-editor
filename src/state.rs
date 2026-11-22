@@ -116,6 +116,14 @@ impl Pane {
     }
 }
 
+/// Result set of the background project search.
+#[derive(Debug, Default)]
+pub struct ProjectSearch {
+    pub query: String,
+    pub results: Vec<crate::project_search::Match>,
+    pub truncated: bool,
+}
+
 pub struct Search {
     /// Document the offsets belong to; the same buffer may be open in two panes.
     pub document: DocumentId,
@@ -142,6 +150,7 @@ pub struct AppState {
     pub warnings: Vec<String>,
     pub clipboard: String,
     pub search: Option<Search>,
+    pub project_search: Option<ProjectSearch>,
     /// Pane temporarily occupying the whole pane area.
     pub fullscreen: Option<PaneId>,
     /// Grab mode: arrow keys move the focused pane.

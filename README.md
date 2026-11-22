@@ -189,6 +189,31 @@ the title), and the cursor jumps to the selected match.
 - The list shows up to eight rows around the selection; the buffer may hold more.
 - `Ctrl+R` replaces every occurrence of the first field with the second.
 
+### Find in files
+
+Find in Files searches every project file listed by quick open and streams the
+matches into the prompt as they arrive. There is no default key because terminals
+cannot distinguish `Ctrl+Shift+F`; run `find_in_files` from the command palette
+(`F1`), or bind it in `config.toml` if your terminal reports the combination:
+
+```toml
+[keys.editing]
+"ctrl+shift+f" = "find_in_files"
+```
+
+- Matching is literal and smart-case: an all-lowercase query ignores case, any
+  uppercase character makes it case-sensitive.
+- Results show `path:line:column` plus the matching line. `Up` / `Down` choose a
+  result; `Enter` opens that file and puts the cursor on the match; `Esc` cancels
+  the scan and closes the prompt.
+- Typing restarts the scan. The previous worker is cancelled, so only the newest
+  query can publish results.
+- The scan searches files on disk, not unsaved buffer contents, skips files above
+  1 MiB and files that are not UTF-8, and stops at 1000 matches (the title shows
+  the count with a `+`).
+- Files hidden by `.gitignore` are excluded unless the explorer's hidden toggle
+  is on, matching quick open.
+
 ### Open two files side by side
 
 1. Open the first file (`Ctrl+O` or `Ctrl+P`).

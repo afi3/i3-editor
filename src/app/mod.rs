@@ -4,6 +4,7 @@ pub mod cursor;
 pub mod dispatch;
 pub mod editing;
 pub mod mouse;
+pub mod project_search;
 pub mod prompt;
 pub mod search;
 pub mod shell_ops;
@@ -33,6 +34,7 @@ impl App {
             last_explorer_click: None,
             watcher: None,
             quick_open_files: None,
+            project_task: None,
         }
     }
 }
@@ -67,6 +69,8 @@ pub struct App {
     pub(crate) watcher: Option<crate::watch::Watcher>,
     /// Quick-open paths with the explorer revision they were scanned at.
     pub(crate) quick_open_files: Option<(u64, Vec<String>)>,
+    /// Running Find in Files scan, if any.
+    pub(crate) project_task: Option<crate::project_search::Task>,
 }
 
 impl App {
@@ -116,6 +120,7 @@ impl App {
             warnings,
             clipboard: String::new(),
             search: None,
+            project_search: None,
             fullscreen: None,
             moving: false,
             terminals: crate::shell::Terminals::default(),
@@ -146,6 +151,7 @@ impl App {
             last_explorer_click: None,
             watcher,
             quick_open_files: None,
+            project_task: None,
         };
         if let Some(path) = file {
             app.open_document(path)?;
@@ -157,6 +163,7 @@ impl App {
         while !self.state.should_quit {
             self.pump_shell();
             self.pump_watcher();
+            self.pump_project_search();
             self.draw()?;
             let timeout = if !self.state.terminals.is_empty() && self.state.focus == Focus::Shell {
                 Duration::from_millis(30)
