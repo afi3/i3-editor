@@ -101,156 +101,147 @@ pub enum Command {
 
 impl Command {
     pub fn name(&self) -> &'static str {
-        match self {
-            Command::Quit => "quit",
-            Command::Save => "save",
-            Command::SavePrompt => "save_as",
-            Command::OpenPrompt => "open",
-            Command::NewPrompt => "new_file",
-            Command::CloseDocument => "close_document",
-            Command::ToggleExplorer => "toggle_explorer",
-            Command::QuickOpen => "quick_open",
-            Command::Palette => "command_palette",
-            Command::GoToLinePrompt => "go_to_line",
-            Command::FindPrompt => "find",
-            Command::FindInFiles => "find_in_files",
-            Command::ReplacePrompt => "replace",
-            Command::NextDocument => "next_document",
-            Command::PrevDocument => "prev_document",
-            Command::NextMatch => "next_match",
-            Command::Undo => "undo",
-            Command::Redo => "redo",
-            Command::SelectAll => "select_all",
-            Command::Copy => "copy",
-            Command::Cut => "cut",
-            Command::Paste => "paste",
-            Command::DuplicateLine => "duplicate_line",
-            Command::InsertText(_) => "insert_text",
-            Command::InsertTab => "insert_tab",
-            Command::InsertNewline => "insert_newline",
-            Command::Backspace => "backspace",
-            Command::DeleteForward => "delete_forward",
-            Command::MoveCursor(_) => "move_cursor",
-            Command::ExtendSelection(_) => "extend_selection",
-            Command::FocusPane(_) => "focus_pane",
-            Command::MovePane(direction) => match direction {
-                Direction::Left => "move_pane_left",
-                Direction::Right => "move_pane_right",
-                Direction::Up => "move_pane_up",
-                Direction::Down => "move_pane_down",
-            },
-            Command::ToggleMoveMode => "toggle_move_mode",
-            Command::ExplorerUp => "explorer_up",
-            Command::ExplorerDown => "explorer_down",
-            Command::ExplorerSelect => "explorer_select",
-            Command::ExplorerExpand => "explorer_expand",
-            Command::ExplorerCollapse => "explorer_collapse",
-            Command::ExplorerNewFile => "explorer_new_file",
-            Command::ExplorerNewDir => "explorer_new_dir",
-            Command::ExplorerRename => "explorer_rename",
-            Command::ExplorerDelete => "explorer_delete",
-            Command::ExplorerRefresh => "explorer_refresh",
-            Command::ExplorerToggleHidden => "explorer_toggle_hidden",
-            Command::SplitLeftRight => "split_left_right",
-            Command::SplitTopBottom => "split_top_bottom",
-            Command::ClosePane => "close_pane",
-            Command::ToggleFullscreen => "toggle_fullscreen",
-            Command::ToggleTabbed => "toggle_tabbed",
-            Command::NextPaneTab => "next_pane_tab",
-            Command::PrevPaneTab => "prev_pane_tab",
-            Command::ToggleTerminal => "toggle_terminal",
-            Command::TerminalNew => "new_terminal",
-            Command::TerminalClose => "close_terminal",
-            Command::NextTerminal => "next_terminal",
-            Command::PrevTerminal => "prev_terminal",
-            Command::SelectTheme => "select_theme",
-            Command::NextTheme => "next_theme",
-            Command::PrevTheme => "prev_theme",
-            Command::NewWorkspace => "new_workspace",
-            Command::CloseWorkspace => "close_workspace",
-            Command::SwitchWorkspace(_) => "switch_workspace",
-            Command::NextWorkspace => "next_workspace",
-            Command::PrevWorkspace => "prev_workspace",
-            Command::SaveTo(_) => "save_to",
-            Command::CreateFile(_) => "create_file",
-            Command::CreateDir(_) => "create_dir",
-            Command::RenameTo(_) => "rename_to",
-            Command::DeleteTarget(_) => "delete_target",
-        }
+        self.spec().0
     }
 
     pub fn description(&self) -> &'static str {
-        match self {
-            Command::Quit => "Quit i3-editor",
-            Command::Save => "Save the active document",
-            Command::SavePrompt => "Save the active document as...",
-            Command::OpenPrompt => "Open a path",
-            Command::NewPrompt => "Create a new file",
-            Command::CloseDocument => "Close the active document tab",
-            Command::ToggleExplorer => "Show or hide the explorer",
-            Command::QuickOpen => "Fuzzy open a file",
-            Command::Palette => "Run a command",
-            Command::GoToLinePrompt => "Jump to a line",
-            Command::FindPrompt => "Find in the active document",
-            Command::FindInFiles => "Search the project for text",
-            Command::ReplacePrompt => "Replace in the active document",
-            Command::NextDocument => "Next document tab",
-            Command::PrevDocument => "Previous document tab",
-            Command::NextMatch => "Jump to the next match",
-            Command::Undo => "Undo",
-            Command::Redo => "Redo",
-            Command::SelectAll => "Select all",
-            Command::Copy => "Copy selection",
-            Command::Cut => "Cut selection",
-            Command::Paste => "Paste",
-            Command::DuplicateLine => "Duplicate the current line",
-            Command::InsertText(_) => "Insert text",
-            Command::InsertTab => "Insert indentation at the cursor",
-            Command::InsertNewline => "New line",
-            Command::Backspace => "Delete backwards",
-            Command::DeleteForward => "Delete forwards",
-            Command::MoveCursor(_) => "Move the cursor",
-            Command::ExtendSelection(_) => "Extend the selection",
-            Command::FocusPane(_) => "Move focus to another pane",
-            Command::MovePane(_) => "Move the focused pane in a direction",
-            Command::ToggleMoveMode => "Grab the focused pane (arrows move it)",
-            Command::ExplorerUp => "Select the previous entry",
-            Command::ExplorerDown => "Select the next entry",
-            Command::ExplorerSelect => "Open the selected entry",
-            Command::ExplorerExpand => "Expand the selected directory",
-            Command::ExplorerCollapse => "Collapse the selected directory",
-            Command::ExplorerNewFile => "New file in the selected directory",
-            Command::ExplorerNewDir => "New directory in the selected directory",
-            Command::ExplorerRename => "Rename the selected entry",
-            Command::ExplorerDelete => "Delete the selected entry",
-            Command::ExplorerRefresh => "Reload the explorer",
-            Command::ExplorerToggleHidden => "Toggle hidden files",
-            Command::SplitLeftRight => "Split pane left/right",
-            Command::SplitTopBottom => "Split pane top/bottom",
-            Command::ClosePane => "Close the focused pane",
-            Command::ToggleFullscreen => "Toggle fullscreen for the focused pane",
-            Command::ToggleTabbed => "Toggle tabbed layout for this container",
-            Command::NextPaneTab => "Next tab in the tabbed container",
-            Command::PrevPaneTab => "Previous tab in the tabbed container",
-            Command::ToggleTerminal => "Open or close the bottom terminal",
-            Command::TerminalNew => "Open another terminal tab",
-            Command::TerminalClose => "Close the active terminal tab",
-            Command::NextTerminal => "Next terminal tab",
-            Command::PrevTerminal => "Previous terminal tab",
-            Command::SelectTheme => "Pick a theme from the themes directory",
-            Command::NextTheme => "Apply the next available theme",
-            Command::PrevTheme => "Apply the previous available theme",
-            Command::NewWorkspace => "Create a workspace",
-            Command::CloseWorkspace => "Close the active workspace",
-            Command::SwitchWorkspace(_) => "Switch workspace",
-            Command::NextWorkspace => "Switch to the next workspace",
-            Command::PrevWorkspace => "Switch to the previous workspace",
-            Command::SaveTo(_) => "Save path",
-            Command::CreateFile(_) => "Create file",
-            Command::CreateDir(_) => "Create directory",
-            Command::RenameTo(_) => "Rename",
-            Command::DeleteTarget(_) => "Delete",
-        }
+        self.spec().1
+    }
+
+    /// One place for every command's name and palette description. The groups
+    /// keep each match small enough to review; `unmatched_spec` is a fallback
+    /// that the `every_command_has_a_specification` test makes unreachable.
+    fn spec(&self) -> (&'static str, &'static str) {
+        self.document_spec()
+            .or_else(|| self.navigation_spec())
+            .or_else(|| self.text_spec())
+            .or_else(|| self.explorer_spec())
+            .or_else(|| self.layout_spec())
+            .or_else(|| self.terminal_spec())
+            .or_else(|| self.workspace_spec())
+            .unwrap_or(("unknown", "Unknown command"))
+    }
+
+    fn document_spec(&self) -> Option<(&'static str, &'static str)> {
+        Some(match self {
+            Command::Quit => ("quit", "Quit i3-editor"),
+            Command::Save => ("save", "Save the active document"),
+            Command::SavePrompt => ("save_as", "Save the active document as..."),
+            Command::OpenPrompt => ("open", "Open a path"),
+            Command::NewPrompt => ("new_file", "Create a new file"),
+            Command::CloseDocument => ("close_document", "Close the active document tab"),
+            Command::ToggleExplorer => ("toggle_explorer", "Show or hide the explorer"),
+            Command::QuickOpen => ("quick_open", "Fuzzy open a file"),
+            Command::Palette => ("command_palette", "Run a command"),
+            Command::GoToLinePrompt => ("go_to_line", "Jump to a line"),
+            Command::FindPrompt => ("find", "Find in the active document"),
+            Command::FindInFiles => ("find_in_files", "Search the project for text"),
+            Command::ReplacePrompt => ("replace", "Replace in the active document"),
+            _ => return None,
+        })
+    }
+
+    fn navigation_spec(&self) -> Option<(&'static str, &'static str)> {
+        Some(match self {
+            Command::NextDocument => ("next_document", "Next document tab"),
+            Command::PrevDocument => ("prev_document", "Previous document tab"),
+            Command::NextMatch => ("next_match", "Jump to the next match"),
+            Command::Undo => ("undo", "Undo"),
+            Command::Redo => ("redo", "Redo"),
+            Command::SelectAll => ("select_all", "Select all"),
+            Command::Copy => ("copy", "Copy selection"),
+            Command::Cut => ("cut", "Cut selection"),
+            Command::Paste => ("paste", "Paste"),
+            Command::DuplicateLine => ("duplicate_line", "Duplicate the current line"),
+            _ => return None,
+        })
+    }
+
+    fn text_spec(&self) -> Option<(&'static str, &'static str)> {
+        Some(match self {
+            Command::InsertText(_) => ("insert_text", "Insert text"),
+            Command::InsertTab => ("insert_tab", "Insert indentation at the cursor"),
+            Command::InsertNewline => ("insert_newline", "New line"),
+            Command::Backspace => ("backspace", "Delete backwards"),
+            Command::DeleteForward => ("delete_forward", "Delete forwards"),
+            Command::MoveCursor(_) => ("move_cursor", "Move the cursor"),
+            Command::ExtendSelection(_) => ("extend_selection", "Extend the selection"),
+            _ => return None,
+        })
+    }
+
+    fn explorer_spec(&self) -> Option<(&'static str, &'static str)> {
+        Some(match self {
+            Command::ExplorerUp => ("explorer_up", "Select the previous entry"),
+            Command::ExplorerDown => ("explorer_down", "Select the next entry"),
+            Command::ExplorerSelect => ("explorer_select", "Open the selected entry"),
+            Command::ExplorerExpand => ("explorer_expand", "Expand the selected directory"),
+            Command::ExplorerCollapse => ("explorer_collapse", "Collapse the selected directory"),
+            Command::ExplorerNewFile => ("explorer_new_file", "New file in the selected directory"),
+            Command::ExplorerNewDir => (
+                "explorer_new_dir",
+                "New directory in the selected directory",
+            ),
+            Command::ExplorerRename => ("explorer_rename", "Rename the selected entry"),
+            Command::ExplorerDelete => ("explorer_delete", "Delete the selected entry"),
+            Command::ExplorerRefresh => ("explorer_refresh", "Reload the explorer"),
+            Command::ExplorerToggleHidden => ("explorer_toggle_hidden", "Toggle hidden files"),
+            _ => return None,
+        })
+    }
+
+    fn layout_spec(&self) -> Option<(&'static str, &'static str)> {
+        Some(match self {
+            Command::FocusPane(_) => ("focus_pane", "Move focus to another pane"),
+            Command::MovePane(direction) => (
+                direction_name(*direction),
+                "Move the focused pane in a direction",
+            ),
+            Command::ToggleMoveMode => {
+                ("toggle_move_mode", "Grab the focused pane (arrows move it)")
+            }
+            Command::SplitLeftRight => ("split_left_right", "Split pane left/right"),
+            Command::SplitTopBottom => ("split_top_bottom", "Split pane top/bottom"),
+            Command::ClosePane => ("close_pane", "Close the focused pane"),
+            Command::ToggleFullscreen => (
+                "toggle_fullscreen",
+                "Toggle fullscreen for the focused pane",
+            ),
+            Command::ToggleTabbed => ("toggle_tabbed", "Toggle tabbed layout for this container"),
+            Command::NextPaneTab => ("next_pane_tab", "Next tab in the tabbed container"),
+            Command::PrevPaneTab => ("prev_pane_tab", "Previous tab in the tabbed container"),
+            _ => return None,
+        })
+    }
+
+    fn terminal_spec(&self) -> Option<(&'static str, &'static str)> {
+        Some(match self {
+            Command::ToggleTerminal => ("toggle_terminal", "Open or close the bottom terminal"),
+            Command::TerminalNew => ("new_terminal", "Open another terminal tab"),
+            Command::TerminalClose => ("close_terminal", "Close the active terminal tab"),
+            Command::NextTerminal => ("next_terminal", "Next terminal tab"),
+            Command::PrevTerminal => ("prev_terminal", "Previous terminal tab"),
+            Command::SelectTheme => ("select_theme", "Pick a theme from the themes directory"),
+            Command::NextTheme => ("next_theme", "Apply the next available theme"),
+            Command::PrevTheme => ("prev_theme", "Apply the previous available theme"),
+            _ => return None,
+        })
+    }
+
+    fn workspace_spec(&self) -> Option<(&'static str, &'static str)> {
+        Some(match self {
+            Command::NewWorkspace => ("new_workspace", "Create a workspace"),
+            Command::CloseWorkspace => ("close_workspace", "Close the active workspace"),
+            Command::SwitchWorkspace(_) => ("switch_workspace", "Switch workspace"),
+            Command::NextWorkspace => ("next_workspace", "Switch to the next workspace"),
+            Command::PrevWorkspace => ("prev_workspace", "Switch to the previous workspace"),
+            Command::SaveTo(_) => ("save_to", "Save path"),
+            Command::CreateFile(_) => ("create_file", "Create file"),
+            Command::CreateDir(_) => ("create_dir", "Create directory"),
+            Command::RenameTo(_) => ("rename_to", "Rename"),
+            Command::DeleteTarget(_) => ("delete_target", "Delete"),
+            _ => return None,
+        })
     }
 
     /// Commands that can be bound to a key or offered in the palette.
@@ -310,5 +301,116 @@ impl Command {
         Command::palette()
             .into_iter()
             .find(|command| command.name() == name)
+    }
+}
+
+fn direction_name(direction: Direction) -> &'static str {
+    match direction {
+        Direction::Left => "move_pane_left",
+        Direction::Right => "move_pane_right",
+        Direction::Up => "move_pane_up",
+        Direction::Down => "move_pane_down",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn every_command() -> Vec<Command> {
+        vec![
+            Command::Quit,
+            Command::Save,
+            Command::SavePrompt,
+            Command::OpenPrompt,
+            Command::NewPrompt,
+            Command::CloseDocument,
+            Command::ToggleExplorer,
+            Command::QuickOpen,
+            Command::Palette,
+            Command::GoToLinePrompt,
+            Command::FindPrompt,
+            Command::FindInFiles,
+            Command::ReplacePrompt,
+            Command::NextDocument,
+            Command::PrevDocument,
+            Command::NextMatch,
+            Command::Undo,
+            Command::Redo,
+            Command::SelectAll,
+            Command::Copy,
+            Command::Cut,
+            Command::Paste,
+            Command::DuplicateLine,
+            Command::InsertText("x".to_string()),
+            Command::InsertTab,
+            Command::InsertNewline,
+            Command::Backspace,
+            Command::DeleteForward,
+            Command::MoveCursor(Move::Left),
+            Command::ExtendSelection(Move::Right),
+            Command::FocusPane(Direction::Left),
+            Command::MovePane(Direction::Left),
+            Command::MovePane(Direction::Right),
+            Command::MovePane(Direction::Up),
+            Command::MovePane(Direction::Down),
+            Command::ToggleMoveMode,
+            Command::ExplorerUp,
+            Command::ExplorerDown,
+            Command::ExplorerSelect,
+            Command::ExplorerExpand,
+            Command::ExplorerCollapse,
+            Command::ExplorerNewFile,
+            Command::ExplorerNewDir,
+            Command::ExplorerRename,
+            Command::ExplorerDelete,
+            Command::ExplorerRefresh,
+            Command::ExplorerToggleHidden,
+            Command::SplitLeftRight,
+            Command::SplitTopBottom,
+            Command::ClosePane,
+            Command::ToggleFullscreen,
+            Command::ToggleTabbed,
+            Command::NextPaneTab,
+            Command::PrevPaneTab,
+            Command::ToggleTerminal,
+            Command::TerminalNew,
+            Command::TerminalClose,
+            Command::NextTerminal,
+            Command::PrevTerminal,
+            Command::SelectTheme,
+            Command::NextTheme,
+            Command::PrevTheme,
+            Command::NewWorkspace,
+            Command::CloseWorkspace,
+            Command::SwitchWorkspace(0),
+            Command::NextWorkspace,
+            Command::PrevWorkspace,
+            Command::SaveTo(PathBuf::from("/tmp/x")),
+            Command::CreateFile(PathBuf::from("/tmp/x")),
+            Command::CreateDir(PathBuf::from("/tmp/x")),
+            Command::RenameTo(PathBuf::from("x")),
+            Command::DeleteTarget(PathBuf::from("/tmp/x")),
+        ]
+    }
+
+    #[test]
+    fn every_command_has_a_specification() {
+        for command in every_command() {
+            assert_ne!(command.name(), "unknown", "{command:?}");
+            assert_ne!(command.description(), "Unknown command", "{command:?}");
+        }
+    }
+
+    #[test]
+    fn palette_names_resolve_back_to_their_command() {
+        for command in Command::palette() {
+            assert_eq!(
+                Command::from_name(command.name()),
+                Some(command.clone()),
+                "{}",
+                command.name()
+            );
+        }
     }
 }

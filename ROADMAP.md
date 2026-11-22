@@ -119,7 +119,7 @@ Delivered:
 - Keymap presets and capability handling.
 - Unicode width/grapheme handling with tests.
 - Error handling through a single `Error` type; status-bar messages.
-- 216 unit and integration tests, `TestBackend` render tests.
+- 218 unit and integration tests, `TestBackend` render tests.
 - `install.sh` one-liner with `--update` and `--uninstall` (checksum-verified
   release download, version comparison, Cargo fallback) and a tag-driven release
   workflow for macOS/Linux on x86_64 and aarch64.
@@ -140,4 +140,4 @@ cargo clippy --all-targets --all-features
 cargo run -- --dump-keymap
 ```
 
-Last recorded run: `cargo test` → 216 passed, `cargo clippy` → 0 warnings.
+Last recorded run: `cargo test` → 218 passed, `cargo clippy` → 0 warnings.

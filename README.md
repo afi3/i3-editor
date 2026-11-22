@@ -473,7 +473,7 @@ silently dropped: a binding may not take a combination reserved for quit.
 ```bash
 cargo fmt --check
 cargo check
-cargo test              # 216 unit + integration tests, no terminal required
+cargo test              # 218 unit + integration tests, no terminal required
 cargo clippy --all-targets --all-features
 python3 scripts/make_demo.py   # regenerate docs/demo.gif (needs pyte + Pillow)
 ```

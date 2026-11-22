@@ -1,14 +1,41 @@
 //! Command dispatch. Every state mutation enters here.
 
 use crate::command::Command;
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::input::PromptKind;
 use crate::workspace::SplitAxis;
 
 use super::App;
 
 impl App {
+    /// Route a command to its category. Each category takes ownership and hands
+    /// the command back when it does not recognize it, so payloads never clone.
     pub fn dispatch(&mut self, command: Command) -> Result<()> {
+        let Some(command) = self.dispatch_document(command)? else {
+            return Ok(());
+        };
+        let Some(command) = self.dispatch_navigation(command)? else {
+            return Ok(());
+        };
+        let Some(command) = self.dispatch_text(command)? else {
+            return Ok(());
+        };
+        let Some(command) = self.dispatch_explorer(command)? else {
+            return Ok(());
+        };
+        let Some(command) = self.dispatch_layout(command)? else {
+            return Ok(());
+        };
+        let Some(command) = self.dispatch_terminal(command)? else {
+            return Ok(());
+        };
+        let Some(command) = self.dispatch_workspace(command)? else {
+            return Ok(());
+        };
+        Err(Error::UnhandledCommand(command.name()))
+    }
+
+    fn dispatch_document(&mut self, command: Command) -> Result<Option<Command>> {
         match command {
             Command::Quit => self.request_quit()?,
             Command::Save => self.save()?,
@@ -22,6 +49,13 @@ impl App {
             Command::FindPrompt => self.open_prompt(PromptKind::Find),
             Command::FindInFiles => self.open_prompt(PromptKind::FindInFiles),
             Command::ReplacePrompt => self.open_prompt(PromptKind::Replace),
+            other => return Ok(Some(other)),
+        }
+        Ok(None)
+    }
+
+    fn dispatch_navigation(&mut self, command: Command) -> Result<Option<Command>> {
+        match command {
             Command::NextDocument => self.cycle_document(1)?,
             Command::PrevDocument => self.cycle_document(-1)?,
             Command::NextMatch => self.next_match()?,
@@ -37,6 +71,13 @@ impl App {
                 }
             }
             Command::DuplicateLine => self.duplicate_line()?,
+            other => return Ok(Some(other)),
+        }
+        Ok(None)
+    }
+
+    fn dispatch_text(&mut self, command: Command) -> Result<Option<Command>> {
+        match command {
             Command::InsertText(text) => self.insert_text(&text)?,
             Command::InsertTab => self.insert_tab()?,
             Command::InsertNewline => self.insert_newline()?,
@@ -44,7 +85,13 @@ impl App {
             Command::DeleteForward => self.delete_forward()?,
             Command::MoveCursor(movement) => self.move_cursor(movement, false)?,
             Command::ExtendSelection(movement) => self.move_cursor(movement, true)?,
-            Command::FocusPane(direction) => self.focus_direction(direction)?,
+            other => return Ok(Some(other)),
+        }
+        Ok(None)
+    }
+
+    fn dispatch_explorer(&mut self, command: Command) -> Result<Option<Command>> {
+        match command {
             Command::ExplorerUp => self.state.explorer.move_selection(-1),
             Command::ExplorerDown => self.state.explorer.move_selection(1),
             Command::ExplorerSelect => self.explorer_open()?,
@@ -56,8 +103,30 @@ impl App {
             Command::ExplorerDelete => self.open_prompt(PromptKind::Delete),
             Command::ExplorerRefresh => self.state.explorer.refresh(),
             Command::ExplorerToggleHidden => self.state.explorer.toggle_hidden(),
+            other => return Ok(Some(other)),
+        }
+        Ok(None)
+    }
+
+    fn dispatch_layout(&mut self, command: Command) -> Result<Option<Command>> {
+        match command {
             Command::SplitLeftRight => self.split_pane(SplitAxis::LeftRight)?,
             Command::SplitTopBottom => self.split_pane(SplitAxis::TopBottom)?,
+            Command::ClosePane => self.close_pane()?,
+            Command::ToggleFullscreen => self.toggle_fullscreen(),
+            Command::ToggleTabbed => self.toggle_tabbed(),
+            Command::NextPaneTab => self.cycle_container_tab(1),
+            Command::PrevPaneTab => self.cycle_container_tab(-1),
+            Command::FocusPane(direction) => self.focus_direction(direction)?,
+            Command::MovePane(direction) => self.move_pane(direction)?,
+            Command::ToggleMoveMode => self.toggle_move_mode(),
+            other => return Ok(Some(other)),
+        }
+        Ok(None)
+    }
+
+    fn dispatch_terminal(&mut self, command: Command) -> Result<Option<Command>> {
+        match command {
             Command::ToggleTerminal => self.toggle_shell(),
             Command::TerminalNew => self.open_terminal(),
             Command::TerminalClose => self.close_terminal(),
@@ -66,25 +135,13 @@ impl App {
             Command::SelectTheme => self.open_prompt(PromptKind::Theme),
             Command::NextTheme => self.cycle_theme(1),
             Command::PrevTheme => self.cycle_theme(-1),
-            Command::ClosePane => self.close_pane()?,
-            Command::ToggleFullscreen => self.toggle_fullscreen(),
-            Command::ToggleTabbed => self.toggle_tabbed(),
-            Command::NextPaneTab => {
-                if matches!(self.state.focus, crate::state::Focus::Shell) {
-                    self.cycle_terminal(1);
-                } else {
-                    self.cycle_pane_tab(1);
-                }
-            }
-            Command::PrevPaneTab => {
-                if matches!(self.state.focus, crate::state::Focus::Shell) {
-                    self.cycle_terminal(-1);
-                } else {
-                    self.cycle_pane_tab(-1);
-                }
-            }
-            Command::MovePane(direction) => self.move_pane(direction)?,
-            Command::ToggleMoveMode => self.toggle_move_mode(),
+            other => return Ok(Some(other)),
+        }
+        Ok(None)
+    }
+
+    fn dispatch_workspace(&mut self, command: Command) -> Result<Option<Command>> {
+        match command {
             Command::NewWorkspace => self.new_workspace()?,
             Command::CloseWorkspace => self.close_workspace()?,
             Command::SwitchWorkspace(index) => self.switch_workspace(index)?,
@@ -107,7 +164,18 @@ impl App {
                 self.state.explorer.delete_at(&path)?;
                 self.notify(format!("deleted {}", path.display()));
             }
+            other => return Ok(Some(other)),
         }
-        Ok(())
+        Ok(None)
+    }
+
+    /// Tab cycling follows the focus: shell tabs in the panel, document tabs in
+    /// a tabbed container.
+    fn cycle_container_tab(&mut self, delta: isize) {
+        if matches!(self.state.focus, crate::state::Focus::Shell) {
+            self.cycle_terminal(delta);
+        } else {
+            self.cycle_pane_tab(delta);
+        }
     }
 }
