@@ -336,7 +336,7 @@ impl App {
             .map(|pane| pane.selection().is_some())
             .unwrap_or(false);
         if !has_selection {
-            self.notify("no selection");
+            self.notify("nothing to copy");
             return Ok(());
         }
         let copied = {

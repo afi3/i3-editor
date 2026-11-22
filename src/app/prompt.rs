@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use ratatui::crossterm::event::{KeyCode, KeyModifiers};
 
 use crate::command::Command;
 use crate::error::{Error, Result};
@@ -12,15 +12,14 @@ use crate::state::InputMode;
 use super::App;
 
 impl App {
-    pub(crate) fn handle_prompt_key(&mut self, key: KeyEvent, combo: KeyCombo) {
-        let _ = key;
+    pub(crate) fn handle_prompt_key(&mut self, combo: KeyCombo) {
+        if combo.code == KeyCode::Char('c') && combo.mods.contains(KeyModifiers::CONTROL) {
+            self.cancel_prompt();
+            return;
+        }
         match combo.code {
             KeyCode::Esc => {
-                if matches!(&self.state.mode, InputMode::Prompt(prompt) if prompt.kind == PromptKind::FindInFiles)
-                {
-                    self.stop_project_search();
-                }
-                self.state.mode = InputMode::Normal;
+                self.cancel_prompt();
                 return;
             }
             KeyCode::Enter => {
@@ -36,69 +35,95 @@ impl App {
             }
             _ => {}
         }
-
-        if let InputMode::Prompt(prompt) = &self.state.mode
-            && prompt.kind == PromptKind::Find
-        {
-            match combo.code {
-                KeyCode::Up => {
-                    self.move_search_selection(-1);
-                    return;
-                }
-                KeyCode::Down => {
-                    self.move_search_selection(1);
-                    return;
-                }
-                _ => {}
-            }
+        if self.handle_find_arrow(combo) {
+            return;
         }
+        if self.edit_prompt(combo) {
+            self.refresh_prompt_preview();
+        }
+    }
 
+    /// Find uses Up/Down for its match list instead of prompt candidates.
+    fn handle_find_arrow(&mut self, combo: KeyCombo) -> bool {
+        let InputMode::Prompt(prompt) = &self.state.mode else {
+            return false;
+        };
+        if prompt.kind != PromptKind::Find {
+            return false;
+        }
+        match combo.code {
+            KeyCode::Up => {
+                self.move_search_selection(-1);
+                true
+            }
+            KeyCode::Down => {
+                self.move_search_selection(1);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Apply an editing key to the prompt field. Returns whether the query
+    /// changed, so live searches can refresh.
+    fn edit_prompt(&mut self, combo: KeyCombo) -> bool {
+        let InputMode::Prompt(prompt) = &mut self.state.mode else {
+            return false;
+        };
+        let lists = prompt.kind.lists_candidates();
         let mut edited = false;
-        {
-            let InputMode::Prompt(prompt) = &mut self.state.mode else {
-                return;
-            };
-            let lists = prompt.kind.lists_candidates();
-            match combo.code {
-                KeyCode::Up if lists => prompt.move_selection(-1),
-                KeyCode::Down if lists => prompt.move_selection(1),
-                KeyCode::Left => prompt.cursor_left(),
-                KeyCode::Right => prompt.cursor_right(),
-                KeyCode::Home => prompt.cursor = 0,
-                KeyCode::End => prompt.cursor = prompt.input().chars().count(),
-                KeyCode::Backspace => {
-                    prompt.backspace();
-                    edited = true;
-                }
-                KeyCode::Delete => {
-                    prompt.delete();
-                    edited = true;
-                }
-                KeyCode::Char(ch)
-                    if !combo
-                        .mods
-                        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
-                {
-                    prompt.insert_char(ch);
-                    edited = true;
-                }
-                _ => {}
+        match combo.code {
+            KeyCode::Up if lists => prompt.move_selection(-1),
+            KeyCode::Down if lists => prompt.move_selection(1),
+            KeyCode::Left => prompt.cursor_left(),
+            KeyCode::Right => prompt.cursor_right(),
+            KeyCode::Home => prompt.cursor = 0,
+            KeyCode::End => prompt.cursor = prompt.input().chars().count(),
+            KeyCode::Backspace => {
+                prompt.backspace();
+                edited = true;
             }
+            KeyCode::Delete => {
+                prompt.delete();
+                edited = true;
+            }
+            KeyCode::Char(ch)
+                if !combo
+                    .mods
+                    .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+            {
+                prompt.insert_char(ch);
+                edited = true;
+            }
+            _ => {}
         }
+        edited
+    }
 
-        if edited && let InputMode::Prompt(prompt) = &self.state.mode {
-            match prompt.kind {
-                PromptKind::Find => {
-                    let query = prompt.input().to_string();
-                    self.preview_search(query);
-                }
-                PromptKind::FindInFiles => {
-                    let query = prompt.input().to_string();
-                    self.start_project_search(query);
-                }
-                _ => {}
+    fn refresh_prompt_preview(&mut self) {
+        let InputMode::Prompt(prompt) = &self.state.mode else {
+            return;
+        };
+        match prompt.kind {
+            PromptKind::Find => {
+                let query = prompt.input().to_string();
+                self.preview_search(query);
             }
+            PromptKind::FindInFiles => {
+                let query = prompt.input().to_string();
+                self.start_project_search(query);
+            }
+            _ => {}
         }
+    }
+
+    /// Close the prompt without submitting. A running project scan is stopped.
+    pub(crate) fn cancel_prompt(&mut self) {
+        if matches!(&self.state.mode, InputMode::Prompt(prompt) if prompt.kind == PromptKind::FindInFiles)
+        {
+            self.stop_project_search();
+        }
+        self.state.mode = InputMode::Normal;
     }
 
     pub(crate) fn submit_prompt(&mut self) -> Result<()> {

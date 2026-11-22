@@ -112,6 +112,12 @@ Terminals cannot represent every modifier combination, so the defaults avoid
 the undecidable ones: no `Ctrl+Shift+<letter>`, no `Ctrl+H` (it is Backspace),
 no `Alt+<letter>`, no `Ctrl+2`..`Ctrl+8`.
 
+Startup probes keyboard enhancement support. Without it the `safe` preset is
+forced and the status bar names the actions whose default binding needs
+enhancement (`switch_workspace`); `next_workspace` / `prev_workspace` in the
+palette keep every workspace reachable. `Ctrl+C`
+closes an active prompt; with no selection it reports `nothing to copy`.
+
 | Key | Action |
 |---|---|
 | `Ctrl+Q` | Quit |
@@ -453,7 +459,10 @@ Binding values are `ctrl+`/`alt+`/`shift+` plus a key name (`a`, `f2`, `enter`,
 `tab`, `backtab`, `esc`, `space`, `home`, `end`, `pageup`, `pagedown`, `delete`,
 `backspace`, arrows). `--dump-keymap` prints bound actions; the palette (`F1`)
 also lists unbound actions such as `toggle_terminal` and the theme commands.
-Conflicts and unknown names are reported, never silently dropped.
+Conflicts and unknown names are reported with the config path and line, never
+silently dropped: a binding may not take a combination reserved for quit.
+`I3_EDITOR_DEBUG=1` writes the resolved table with the enhancement flag to
+`<config>/i3-editor/keymap.log` at startup, next to the config file.
 
 `insert_spaces = true` makes `Tab` insert spaces up to the next `tab_size` stop
 (measured in display cells, so it aligns after existing tabs and wide characters);
@@ -464,7 +473,7 @@ Conflicts and unknown names are reported, never silently dropped.
 ```bash
 cargo fmt --check
 cargo check
-cargo test              # 179 unit + integration tests, no terminal required
+cargo test              # 216 unit + integration tests, no terminal required
 cargo clippy --all-targets --all-features
 python3 scripts/make_demo.py   # regenerate docs/demo.gif (needs pyte + Pillow)
 ```

@@ -139,6 +139,17 @@ impl App {
         Ok(())
     }
 
+    pub(crate) fn cycle_workspace(&mut self, delta: isize) -> Result<()> {
+        let count = self.state.workspaces.workspaces.len();
+        if count <= 1 {
+            self.notify("only one workspace");
+            return Ok(());
+        }
+        let index =
+            (self.state.workspaces.active as isize + delta).rem_euclid(count as isize) as usize;
+        self.switch_workspace(index)
+    }
+
     pub(crate) fn switch_workspace(&mut self, index: usize) -> Result<()> {
         if !self.state.workspaces.switch(index) {
             self.notify(format!("no workspace {}", index + 1));

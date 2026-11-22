@@ -1168,6 +1168,59 @@ fn config_visibility_is_applied_at_startup() {
     )
     .expect("app");
     assert!(!app.state.explorer.visible);
+    assert!(
+        app.state
+            .ui
+            .message
+            .contains("keyboard enhancement unavailable"),
+        "{}",
+        app.state.ui.message
+    );
+    assert!(
+        !app.state
+            .keymap
+            .global
+            .values()
+            .any(|command| matches!(command, Command::SwitchWorkspace(0))),
+        "ctrl+1 must be dropped without enhancement"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn palette_workspace_cycling_wraps() {
+    let (mut app, dir) = fixture("x\n");
+    app.dispatch(Command::NewWorkspace).expect("new workspace");
+    assert_eq!(app.state.workspaces.active, 1);
+    app.dispatch(Command::NextWorkspace).expect("next");
+    assert_eq!(app.state.workspaces.active, 0);
+    app.dispatch(Command::PrevWorkspace).expect("previous");
+    assert_eq!(app.state.workspaces.active, 1);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn ctrl_c_cancels_an_active_prompt() {
+    use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    let (mut app, dir) = fixture("x\n");
+    app.dispatch(Command::FindPrompt).expect("find");
+    assert!(app.state.mode.is_prompt());
+    app.handle_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
+    assert!(!app.state.mode.is_prompt(), "ctrl+c must close the prompt");
+    assert_eq!(text(&app), "x\n", "ctrl+c must not edit the document");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn debug_log_writes_the_resolved_keymap() {
+    let dir = std::env::temp_dir().join(format!("i3-keymap-log-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("dir");
+    let config = dir.join("config.toml");
+    super::log_keymap(Some(&config), &crate::input::KeyMap::preset(false), false);
+    let log = std::fs::read_to_string(dir.join("keymap.log")).expect("log");
+    assert!(log.contains("keyboard_enhancement: false"), "{log}");
+    assert!(log.contains("Ctrl+Q -> quit"), "{log}");
     std::fs::remove_dir_all(&dir).ok();
 }
 

@@ -107,6 +107,64 @@ pub struct KeysConfig {
     pub global: BTreeMap<String, String>,
     pub editing: BTreeMap<String, String>,
     pub explorer: BTreeMap<String, String>,
+    /// Where the section was read from, for line-numbered binding warnings.
+    #[serde(skip)]
+    pub source: Option<ConfigSource>,
+}
+
+#[derive(Clone, Debug)]
+pub struct ConfigSource {
+    pub path: PathBuf,
+    pub text: String,
+}
+
+impl ConfigSource {
+    /// `path:line:` prefix for a section header or a key inside it.
+    pub fn prefix(&self, section: &str, key: Option<&str>) -> String {
+        match self.line_of(section, key) {
+            Some(line) => format!("{}:{line}: ", self.path.display()),
+            None => format!("{}: ", self.path.display()),
+        }
+    }
+
+    fn line_of(&self, section: &str, key: Option<&str>) -> Option<usize> {
+        let mut inside = false;
+        for (index, line) in self.text.lines().enumerate() {
+            let trimmed = line.trim();
+            if let Some(name) = trimmed
+                .strip_prefix('[')
+                .and_then(|rest| rest.strip_suffix(']'))
+            {
+                inside = name.trim() == section;
+                if inside && key.is_none() {
+                    return Some(index + 1);
+                }
+                continue;
+            }
+            if inside && let Some(key) = key {
+                let found = trimmed
+                    .split('=')
+                    .next()
+                    .unwrap_or("")
+                    .trim()
+                    .trim_matches('"');
+                if found == key {
+                    return Some(index + 1);
+                }
+            }
+        }
+        None
+    }
+}
+
+impl KeysConfig {
+    /// Prefix for a binding warning, with the config path and line when known.
+    pub fn warning_prefix(&self, scope: &str, action: &str) -> String {
+        match &self.source {
+            Some(source) => source.prefix(&format!("keys.{scope}"), Some(action)),
+            None => format!("[keys.{scope}] "),
+        }
+    }
 }
 
 pub fn config_dir() -> Option<PathBuf> {
@@ -154,27 +212,57 @@ pub fn load_from(path: &Path) -> (AppConfig, Vec<String>) {
         }
     };
 
+    let source = ConfigSource {
+        path: path.to_path_buf(),
+        text: text.clone(),
+    };
     const SECTIONS: [&str; 5] = ["editor", "explorer", "appearance", "terminal", "keys"];
     if let Some(table) = value.as_table() {
         for key in table.keys() {
             if !SECTIONS.contains(&key.as_str()) {
-                warnings.push(format!("unknown section [{key}] ignored"));
+                warnings.push(format!(
+                    "{}unknown section [{key}] ignored",
+                    source.prefix(key, None)
+                ));
             }
         }
     }
 
-    warn_unknown_keys(&value, "editor", EDITOR_KEYS, &mut warnings);
-    warn_unknown_keys(&value, "explorer", EXPLORER_KEYS, &mut warnings);
-    warn_unknown_keys(&value, "appearance", APPEARANCE_KEYS, &mut warnings);
-    warn_unknown_keys(&value, "terminal", TERMINAL_KEYS, &mut warnings);
-    warn_unknown_keys(&value, "keys", KEYS_KEYS, &mut warnings);
+    for (name, keys) in [
+        ("editor", EDITOR_KEYS),
+        ("explorer", EXPLORER_KEYS),
+        ("appearance", APPEARANCE_KEYS),
+        ("terminal", TERMINAL_KEYS),
+        ("keys", KEYS_KEYS),
+    ] {
+        warn_unknown_keys(&value, name, keys, &source, &mut warnings);
+    }
 
     let mut config = AppConfig::default();
-    take_section(&value, "editor", &mut config.editor, &mut warnings);
-    take_section(&value, "explorer", &mut config.explorer, &mut warnings);
-    take_section(&value, "appearance", &mut config.appearance, &mut warnings);
-    take_section(&value, "terminal", &mut config.terminal, &mut warnings);
-    take_section(&value, "keys", &mut config.keys, &mut warnings);
+    take_section(&value, "editor", &mut config.editor, &source, &mut warnings);
+    take_section(
+        &value,
+        "explorer",
+        &mut config.explorer,
+        &source,
+        &mut warnings,
+    );
+    take_section(
+        &value,
+        "appearance",
+        &mut config.appearance,
+        &source,
+        &mut warnings,
+    );
+    take_section(
+        &value,
+        "terminal",
+        &mut config.terminal,
+        &source,
+        &mut warnings,
+    );
+    take_section(&value, "keys", &mut config.keys, &source, &mut warnings);
+    config.keys.source = Some(source);
     config.explorer.width = config.explorer.width.clamp(5, 50);
     config.terminal.height = config.terminal.height.clamp(3, 60);
     config.terminal.scrollback = config.terminal.scrollback.clamp(100, 100_000);
@@ -194,13 +282,22 @@ const KEYS_KEYS: &[&str] = &["preset", "global", "editing", "explorer"];
 
 /// Report keys the loader does not understand without discarding the rest of
 /// the section, matching the per-entry fallback contract.
-fn warn_unknown_keys(value: &toml::Value, name: &str, known: &[&str], warnings: &mut Vec<String>) {
+fn warn_unknown_keys(
+    value: &toml::Value,
+    name: &str,
+    known: &[&str],
+    source: &ConfigSource,
+    warnings: &mut Vec<String>,
+) {
     let Some(section) = value.get(name).and_then(toml::Value::as_table) else {
         return;
     };
     for key in section.keys() {
         if !known.contains(&key.as_str()) {
-            warnings.push(format!("[{name}] unknown key {key} ignored"));
+            warnings.push(format!(
+                "{}[{name}] unknown key {key} ignored",
+                source.prefix(name, Some(key))
+            ));
         }
     }
 }
@@ -209,6 +306,7 @@ fn take_section<T: for<'de> Deserialize<'de> + std::fmt::Debug>(
     value: &toml::Value,
     name: &str,
     target: &mut T,
+    source: &ConfigSource,
     warnings: &mut Vec<String>,
 ) {
     let Some(section) = value.get(name) else {
@@ -216,7 +314,10 @@ fn take_section<T: for<'de> Deserialize<'de> + std::fmt::Debug>(
     };
     match section.clone().try_into::<T>() {
         Ok(parsed) => *target = parsed,
-        Err(error) => warnings.push(format!("[{name}] ignored: {error}")),
+        Err(error) => warnings.push(format!(
+            "{}[{name}] ignored: {error}",
+            source.prefix(name, None)
+        )),
     }
 }
 
@@ -440,6 +541,10 @@ mod strict_tests {
         let (config, warnings) = load_from(&path);
         assert_eq!(warnings.len(), 1, "{warnings:?}");
         assert!(warnings[0].contains("tab_sise"), "{warnings:?}");
+        assert!(
+            warnings[0].contains(&format!("{}:3:", path.display())),
+            "warning must name file and line: {warnings:?}"
+        );
         assert_eq!(
             config.editor.tab_size, 2,
             "valid keys in the section survive"

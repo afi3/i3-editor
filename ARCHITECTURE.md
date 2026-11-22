@@ -183,8 +183,10 @@ and the terminal panel all switch together.
 
 **Key bindings are data.** `KeyMap` holds three scopes (`global`, `editing`,
 `explorer`). Resolution is prompt, focused scope, global. Startup probes
-keyboard enhancement support, falls back to the `safe` preset, and reports
-conflicts instead of silently dropping a binding.
+keyboard enhancement support and forces the `safe` preset without it, naming the
+dropped actions in the status bar. Conflicts and unknown names are reported with
+the config path and line, and a binding cannot take a combination reserved for
+quit.
 
 **Undo is an operation log with revisions.** Ropey has no history. Each `Edit`
 records the char index and the text it inserted or removed; each `Batch` carries

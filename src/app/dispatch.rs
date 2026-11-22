@@ -88,6 +88,8 @@ impl App {
             Command::NewWorkspace => self.new_workspace()?,
             Command::CloseWorkspace => self.close_workspace()?,
             Command::SwitchWorkspace(index) => self.switch_workspace(index)?,
+            Command::NextWorkspace => self.cycle_workspace(1)?,
+            Command::PrevWorkspace => self.cycle_workspace(-1)?,
             Command::SaveTo(path) => self.save_to(path)?,
             Command::CreateFile(path) => {
                 self.state.explorer.create(&path, false)?;

@@ -70,7 +70,7 @@ fn run() -> error::Result<()> {
     if dump_keymap {
         use std::io::Write;
 
-        let (keymap, key_warnings) = input::KeyMap::from_config(&config.keys);
+        let (keymap, key_warnings) = input::KeyMap::from_config(&config.keys, true);
         let themes_dir = config::themes_dir().unwrap_or_default();
         let (theme, theme_warnings) = theme::Theme::from_config(&config.appearance, &themes_dir);
         let mut out = std::io::stdout();

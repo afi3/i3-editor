@@ -80,6 +80,7 @@ impl App {
         warnings: Vec<String>,
         target: Option<PathBuf>,
     ) -> Result<Self> {
+        let enhanced = setup.keyboard_enhancement;
         let restore_session = target.is_none();
         let (root, file) = split_target(target)?;
         let mut explorer = ExplorerState::new(root.clone(), config.explorer.show_hidden)?;
@@ -99,7 +100,10 @@ impl App {
             active: 0,
         };
         let config_path = crate::config::default_path();
-        let (keymap, key_warnings) = KeyMap::from_config(&config.keys);
+        let (keymap, key_warnings) = KeyMap::from_config(&config.keys, enhanced);
+        if std::env::var_os("I3_EDITOR_DEBUG").is_some() {
+            log_keymap(config_path.as_deref(), &keymap, enhanced);
+        }
         let themes_dir = crate::config::themes_dir().unwrap_or_default();
         let (theme, theme_warnings) =
             crate::theme::Theme::from_config(&config.appearance, &themes_dir);
@@ -129,6 +133,20 @@ impl App {
         };
         state.warnings.extend(key_warnings);
         state.warnings.extend(theme_warnings);
+        if !enhanced {
+            let unavailable = KeyMap::unavailable_without_enhancement();
+            let names = if unavailable.is_empty() {
+                "none".to_string()
+            } else {
+                unavailable.join(", ")
+            };
+            state.warnings.insert(
+                0,
+                format!(
+                    "keyboard enhancement unavailable; safe bindings active; unavailable: {names}; palette: next_workspace, prev_workspace"
+                ),
+            );
+        }
         if restore_session {
             let session_warnings = crate::session::restore(&mut state);
             state.warnings.extend(session_warnings);
@@ -217,7 +235,7 @@ impl App {
             return;
         }
         if self.state.mode.is_prompt() {
-            self.handle_prompt_key(key, combo);
+            self.handle_prompt_key(combo);
             return;
         }
         if matches!(self.state.focus, Focus::Shell) {
@@ -352,6 +370,20 @@ impl App {
         self.state.focus = Focus::Pane(target);
         Ok(target)
     }
+}
+
+/// Write the resolved binding table next to the config when `I3_EDITOR_DEBUG`
+/// is set. A file is used because stderr would corrupt the terminal UI.
+fn log_keymap(path: Option<&Path>, keymap: &KeyMap, enhanced: bool) {
+    let Some(path) = path.map(|path| path.with_file_name("keymap.log")) else {
+        return;
+    };
+    let mut text = format!("keyboard_enhancement: {enhanced}\n");
+    for label in keymap.labels() {
+        text.push_str(&label);
+        text.push('\n');
+    }
+    let _ = std::fs::write(path, text);
 }
 
 fn split_target(target: Option<PathBuf>) -> Result<(PathBuf, Option<PathBuf>)> {
