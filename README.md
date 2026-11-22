@@ -262,6 +262,23 @@ terminals disagree about `Ctrl+Shift` combinations.
 - A second `toggle_fold` on the header opens it. Any edit unfolds the document,
   because tree-sitter line ranges move under edits.
 
+### File operations
+
+These commands are palette-only (`F1`); bind them under `[keys.explorer]` or
+`[keys.global]` if your terminal can emit the combination.
+
+- `duplicate_file` copies the target file beside itself as `name copy.ext`, then
+  `name copy 2.ext`, and so on. Only files inside the workspace root are
+  duplicated; a dirty buffer is refused with a status message, so save it first.
+- `copy_path` puts the absolute target path in the internal clipboard and asks
+  the terminal to place it in the system clipboard with OSC 52.
+- `reveal_in_terminal` opens a new terminal tab in the target directory, or in
+  the parent directory when the target is a file.
+
+When the explorer has focus its selected row is the target. Otherwise the active
+document is, falling back to the explorer selection. Directories can be copied or
+revealed; only regular files can be duplicated.
+
 ### Workspace roots
 
 Each workspace owns its explorer root and a recursive watcher for that root:
@@ -274,6 +291,7 @@ Each workspace owns its explorer root and a recursive watcher for that root:
   rebuilt for the new root.
 - Every workspace root is watched. File events from an inactive workspace still
   reload open buffers but do not rebuild the active explorer tree.
+- `rename_workspace` from the palette prompts for a new workspace-tab name.
 - `session.toml` stores each workspace root, so a restored session keeps the
   independent environments.
 
@@ -570,8 +588,10 @@ same command closes the panel and kills every shell in it.
   `close_terminal`) closes the active tab and closes the panel with the last one.
   `Ctrl+PageUp` / `Ctrl+PageDown` cycle tabs while the panel has focus; the title
   marks the active one as `[2* /bin/zsh]`.
+- `rename_terminal` (palette) renames the active tab for the current run.
 - The shell comes from `[terminal] shell`, otherwise `$SHELL`, otherwise
-  `/bin/sh`; it starts in the explorer root.
+  `/bin/sh`; new tabs start in the explorer root, except a tab opened by
+  `reveal_in_terminal`, which starts in the revealed directory.
 - While the panel has focus, every key is forwarded to the shell except `Ctrl+Q`,
   `F1`, the terminal toggle, and the terminal-tab commands.
 - Click the panel to focus it. When the program in the shell enables mouse

@@ -307,6 +307,15 @@ workspace root or the `[lsp.*]` tables calls `LspManager::restart`, which drops
 the old children and reopens the documents against the new root/config on the
 next pump.
 
+**File operations follow the focused surface.** `duplicate_file`, `copy_path`,
+and `reveal_in_terminal` take the explorer row when the explorer has focus;
+otherwise the active document's path wins, with the explorer row as fallback.
+Duplication writes a sibling `name copy` file inside the workspace root and
+refreshes the tree, copying a path never renames anything, and reveal starts a
+shell in the target directory without changing the workspace root. Workspace
+names persist in `session.toml`; terminal titles live on `ShellPanel` and reset
+with the shell.
+
 **Each workspace owns a root and a watcher.** `Workspace.root` is persisted in
 `session.toml`. `AppState` keeps one explorer for the active workspace; switching
 rebuilds it from the target root and clears the quick-open cache. `App.watchers`

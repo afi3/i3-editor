@@ -205,6 +205,17 @@ impl App {
         Ok(())
     }
 
+    pub(crate) fn rename_workspace(&mut self, name: &str) -> Result<()> {
+        let name = name.trim();
+        if name.is_empty() || name.chars().any(char::is_control) {
+            self.notify("invalid workspace name");
+            return Ok(());
+        }
+        self.state.workspaces.active_mut().name = name.to_string();
+        self.notify(format!("workspace renamed to {name}"));
+        Ok(())
+    }
+
     pub(crate) fn close_workspace(&mut self) -> Result<()> {
         let active = self.state.workspaces.active;
         let leaves = self.state.workspaces.active().layout.leaves();

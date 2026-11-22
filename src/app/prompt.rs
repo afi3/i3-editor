@@ -441,6 +441,8 @@ impl App {
                 self.apply_theme(&name);
                 Ok(())
             }
+            PromptKind::RenameWorkspace => self.rename_workspace(&prompt.fields[0]),
+            PromptKind::TerminalRename => self.rename_terminal(&prompt.fields[0]),
             PromptKind::QuitDirty => {
                 match prompt.selected_candidate() {
                     Some("Save all and quit") => {
@@ -617,9 +619,22 @@ impl App {
     }
 
     fn fill_session_prompt(&mut self, kind: PromptKind, prompt: &mut PromptState) -> bool {
-        if kind == PromptKind::Theme {
-            prompt.set_candidates(crate::theme::Theme::names(&self.state.themes_dir));
-            prompt.select_candidate(&self.state.config.appearance.theme);
+        match kind {
+            PromptKind::Theme => {
+                prompt.set_candidates(crate::theme::Theme::names(&self.state.themes_dir));
+                prompt.select_candidate(&self.state.config.appearance.theme);
+            }
+            PromptKind::RenameWorkspace => {
+                prompt.set_input(self.state.workspaces.active().name.clone());
+            }
+            PromptKind::TerminalRename => {
+                let Some(shell) = self.state.terminals.active() else {
+                    self.notify("no terminal open");
+                    return false;
+                };
+                prompt.set_input(shell.title().to_string());
+            }
+            _ => {}
         }
         true
     }

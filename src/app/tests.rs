@@ -1037,6 +1037,32 @@ fn clicking_an_explorer_row_selects_and_double_click_opens() {
 }
 
 #[test]
+fn rename_terminal_updates_the_active_tab_and_requires_a_panel() {
+    let (mut app, dir) = fixture("x\n");
+    app.dispatch(Command::ToggleTerminal).expect("open");
+    app.dispatch(Command::TerminalRename).expect("prompt");
+    let InputMode::Prompt(prompt) = &mut app.state.mode else {
+        panic!("rename prompt missing")
+    };
+    assert_eq!(prompt.kind, crate::input::PromptKind::TerminalRename);
+    prompt.fields[0] = "build".to_string();
+    app.submit_prompt().expect("rename");
+
+    assert_eq!(
+        app.state.terminals.active().expect("shell").title(),
+        "build"
+    );
+    assert!(app.state.ui.message.contains("terminal renamed"));
+
+    app.dispatch(Command::TerminalClose).expect("close");
+    app.dispatch(Command::TerminalRename)
+        .expect("rename without terminal");
+    assert!(matches!(app.state.mode, InputMode::Normal));
+    assert!(app.state.ui.message.contains("no terminal open"));
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn splits_cannot_exceed_the_minimum_area() {
     let (mut app, dir) = fixture("x\n");
     ui::compute_layout(&mut app.state, ratatui::layout::Rect::new(0, 0, 80, 24));
@@ -1239,6 +1265,109 @@ fn new_prompt_creates_a_file_on_disk() {
         .expect("path");
     assert!(path.ends_with("created.txt"), "{path:?}");
     assert_eq!(std::fs::read_to_string(&path).expect("read"), "");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn duplicate_file_copies_with_unique_names_and_refuses_dirty_buffers() {
+    let (mut app, dir) = fixture("note\n");
+    app.dispatch(Command::DuplicateFile).expect("duplicate");
+    assert_eq!(
+        std::fs::read_to_string(dir.join("note copy.txt")).expect("first copy"),
+        "note\n"
+    );
+    app.dispatch(Command::DuplicateFile)
+        .expect("duplicate again");
+    assert_eq!(
+        std::fs::read_to_string(dir.join("note copy 2.txt")).expect("second copy"),
+        "note\n"
+    );
+
+    app.dispatch(Command::InsertText("x".to_string()))
+        .expect("dirty buffer");
+    app.dispatch(Command::DuplicateFile)
+        .expect("refuse duplicate");
+    assert!(!dir.join("note copy 3.txt").exists());
+    assert!(app.state.ui.message.contains("save the file"));
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn copy_path_targets_the_active_document_or_explorer_selection() {
+    let (mut app, dir) = fixture("note\n");
+    let active = app
+        .state
+        .active_document()
+        .and_then(|document| document.path.clone())
+        .expect("path");
+    app.dispatch(Command::CopyPath).expect("copy active path");
+    assert_eq!(app.state.clipboard, active.to_string_lossy());
+
+    std::fs::write(dir.join("other.txt"), "other\n").expect("file");
+    app.state.explorer.refresh();
+    let index = app
+        .state
+        .explorer
+        .rows
+        .iter()
+        .position(|row| row.name == "other.txt")
+        .expect("row");
+    app.state.explorer.selected = index;
+    app.state.focus = Focus::Explorer;
+    app.dispatch(Command::CopyPath).expect("copy selected path");
+    assert_eq!(
+        app.state.clipboard,
+        dir.join("other.txt")
+            .canonicalize()
+            .expect("canonical")
+            .to_string_lossy()
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn reveal_in_terminal_starts_a_shell_in_the_parent_directory() {
+    let (mut app, dir) = fixture("note\n");
+    let path = app
+        .state
+        .active_document()
+        .and_then(|document| document.path.clone())
+        .expect("path");
+    let expected = path.parent().expect("parent").to_path_buf();
+
+    app.dispatch(Command::RevealInTerminal).expect("reveal");
+    assert_eq!(app.state.terminals.len(), 1);
+    assert_eq!(app.state.focus, Focus::Shell);
+    assert_eq!(
+        app.state.terminals.active().expect("shell").cwd(),
+        expected.as_path()
+    );
+    assert!(
+        app.state
+            .ui
+            .message
+            .contains(&expected.display().to_string()),
+        "{}",
+        app.state.ui.message
+    );
+    app.state.terminals = crate::shell::Terminals::default();
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn rename_workspace_updates_the_active_name() {
+    let (mut app, dir) = fixture("x\n");
+    app.dispatch(Command::RenameWorkspace).expect("prompt");
+    let InputMode::Prompt(prompt) = &mut app.state.mode else {
+        panic!("rename prompt missing")
+    };
+    assert_eq!(prompt.kind, crate::input::PromptKind::RenameWorkspace);
+    assert_eq!(prompt.fields[0], "test");
+    prompt.fields[0] = "main".to_string();
+    app.submit_prompt().expect("rename");
+
+    assert_eq!(app.state.workspaces.active().name, "main");
+    assert!(app.state.ui.message.contains("workspace renamed"));
     std::fs::remove_dir_all(&dir).ok();
 }
 

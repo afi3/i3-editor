@@ -94,6 +94,9 @@ pub enum Command {
     ExplorerDelete,
     ExplorerRefresh,
     ExplorerToggleHidden,
+    DuplicateFile,
+    CopyPath,
+    RevealInTerminal,
     SplitLeftRight,
     SplitTopBottom,
     ClosePane,
@@ -106,11 +109,13 @@ pub enum Command {
     TerminalClose,
     NextTerminal,
     PrevTerminal,
+    TerminalRename,
     SelectTheme,
     NextTheme,
     PrevTheme,
     NewWorkspace,
     SetWorkspaceRoot,
+    RenameWorkspace,
     CloseWorkspace,
     SwitchWorkspace(usize),
     NextWorkspace,
@@ -147,7 +152,20 @@ impl Command {
             .or_else(|| self.edit_spec())
             .or_else(|| self.document_spec())
             .or_else(|| self.navigation_spec())
+            .or_else(|| self.file_spec())
             .or_else(|| self.explorer_spec())
+    }
+
+    fn file_spec(&self) -> Option<(&'static str, &'static str)> {
+        Some(match self {
+            Command::DuplicateFile => ("duplicate_file", "Duplicate the selected file"),
+            Command::CopyPath => ("copy_path", "Copy the selected path"),
+            Command::RevealInTerminal => (
+                "reveal_in_terminal",
+                "Reveal the selected path in the terminal",
+            ),
+            _ => return None,
+        })
     }
 
     fn edit_spec(&self) -> Option<(&'static str, &'static str)> {
@@ -310,6 +328,7 @@ impl Command {
             Command::TerminalClose => ("close_terminal", "Close the active terminal tab"),
             Command::NextTerminal => ("next_terminal", "Next terminal tab"),
             Command::PrevTerminal => ("prev_terminal", "Previous terminal tab"),
+            Command::TerminalRename => ("rename_terminal", "Rename the active terminal tab"),
             Command::SelectTheme => ("select_theme", "Pick a theme from the themes directory"),
             Command::NextTheme => ("next_theme", "Apply the next available theme"),
             Command::PrevTheme => ("prev_theme", "Apply the previous available theme"),
@@ -325,6 +344,7 @@ impl Command {
                 "Change the explorer root of the active workspace",
             ),
             Command::CloseWorkspace => ("close_workspace", "Close the active workspace"),
+            Command::RenameWorkspace => ("rename_workspace", "Rename the active workspace"),
             Command::SwitchWorkspace(_) => ("switch_workspace", "Switch workspace"),
             Command::NextWorkspace => ("next_workspace", "Switch to the next workspace"),
             Command::PrevWorkspace => ("prev_workspace", "Switch to the previous workspace"),
@@ -397,6 +417,7 @@ impl Command {
             Command::TerminalClose,
             Command::NextTerminal,
             Command::PrevTerminal,
+            Command::TerminalRename,
             Command::SelectTheme,
             Command::NextTheme,
             Command::PrevTheme,
@@ -416,8 +437,12 @@ impl Command {
             Command::ExplorerDelete,
             Command::ExplorerRefresh,
             Command::ExplorerToggleHidden,
+            Command::DuplicateFile,
+            Command::CopyPath,
+            Command::RevealInTerminal,
             Command::NewWorkspace,
             Command::SetWorkspaceRoot,
+            Command::RenameWorkspace,
             Command::CloseWorkspace,
             Command::NextWorkspace,
             Command::PrevWorkspace,
@@ -523,6 +548,9 @@ mod tests {
             Command::ExplorerDelete,
             Command::ExplorerRefresh,
             Command::ExplorerToggleHidden,
+            Command::DuplicateFile,
+            Command::CopyPath,
+            Command::RevealInTerminal,
             Command::SplitLeftRight,
             Command::SplitTopBottom,
             Command::ClosePane,
@@ -535,11 +563,13 @@ mod tests {
             Command::TerminalClose,
             Command::NextTerminal,
             Command::PrevTerminal,
+            Command::TerminalRename,
             Command::SelectTheme,
             Command::NextTheme,
             Command::PrevTheme,
             Command::NewWorkspace,
             Command::SetWorkspaceRoot,
+            Command::RenameWorkspace,
             Command::CloseWorkspace,
             Command::SwitchWorkspace(0),
             Command::NextWorkspace,

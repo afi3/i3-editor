@@ -1,8 +1,12 @@
 //! Bottom terminal panel and theme switching.
 
+use std::path::PathBuf;
+
 use ratatui::crossterm::event::KeyEvent;
 
 use crate::config::AppearanceConfig;
+use crate::error::Result;
+use crate::input::PromptKind;
 use crate::state::Focus;
 use crate::theme::Theme;
 
@@ -23,9 +27,13 @@ impl App {
 
     /// Spawn another shell in the panel and focus it.
     pub(crate) fn open_terminal(&mut self) {
+        self.open_terminal_at(self.state.explorer.root.clone());
+    }
+
+    /// Spawn a shell in `cwd`, push it as a new tab, and focus the panel.
+    pub(crate) fn open_terminal_at(&mut self, cwd: PathBuf) {
         let rows = self.state.config.terminal.height.saturating_sub(2).max(3);
         let cols = self.state.ui.area.width.saturating_sub(2).max(20);
-        let cwd = self.state.explorer.root.clone();
         match crate::shell::ShellPanel::spawn(
             &cwd,
             rows,
@@ -34,10 +42,11 @@ impl App {
             self.state.config.terminal.scrollback,
         ) {
             Ok(panel) => {
+                let directory = panel.cwd().to_path_buf();
                 self.state.terminals.push(panel);
                 self.state.focus = Focus::Shell;
                 let message = self.terminal_position();
-                self.notify(message);
+                self.notify(format!("{message} in {}", directory.display()));
             }
             Err(error) => self.notify(error.to_string()),
         }
@@ -68,6 +77,28 @@ impl App {
         self.state.focus = Focus::Shell;
         let message = self.terminal_position();
         self.notify(message);
+    }
+
+    pub(crate) fn rename_terminal_prompt(&mut self) {
+        if self.state.terminals.is_empty() {
+            self.notify("no terminal open");
+            return;
+        }
+        self.open_prompt(PromptKind::TerminalRename);
+    }
+
+    pub(crate) fn rename_terminal(&mut self, name: &str) -> Result<()> {
+        let name = name.trim();
+        if name.is_empty() || name.chars().any(char::is_control) {
+            self.notify("invalid terminal name");
+            return Ok(());
+        }
+        if self.state.terminals.rename_active(name) {
+            self.notify(format!("terminal renamed to {name}"));
+        } else {
+            self.notify("no terminal open");
+        }
+        Ok(())
     }
 
     fn terminal_position(&self) -> String {

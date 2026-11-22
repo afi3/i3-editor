@@ -29,6 +29,8 @@ pub enum PromptKind {
     GoToLine,
     Symbols,
     WorkspaceRoot,
+    RenameWorkspace,
+    TerminalRename,
     Recovery,
     GitStatus,
     CommitMessage,
@@ -132,6 +134,8 @@ impl PromptKind {
             PromptKind::Discard => "Unsaved changes: Enter discards, Esc cancels",
             PromptKind::QuitDirty => "Unsaved changes",
             PromptKind::Theme => "Theme",
+            PromptKind::RenameWorkspace => "Rename Workspace",
+            PromptKind::TerminalRename => "Rename Terminal",
             PromptKind::Recovery => "Recover unsaved changes",
             _ => "",
         }
@@ -538,6 +542,8 @@ mod tests {
             PromptKind::QuitDirty,
             PromptKind::GoToLine,
             PromptKind::Theme,
+            PromptKind::RenameWorkspace,
+            PromptKind::TerminalRename,
         ] {
             assert!(!kind.title().is_empty(), "{kind:?}");
         }

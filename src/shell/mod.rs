@@ -43,7 +43,8 @@ pub struct ShellPanel {
     rows: u16,
     cols: u16,
     scrollback: usize,
-    shell: String,
+    title: String,
+    cwd: std::path::PathBuf,
     exit_reported: bool,
 }
 
@@ -120,7 +121,8 @@ impl ShellPanel {
             rows,
             cols,
             scrollback: 0,
-            shell: shell.to_string(),
+            title: shell.to_string(),
+            cwd: cwd.to_path_buf(),
             exit_reported: false,
         })
     }
@@ -213,7 +215,15 @@ impl ShellPanel {
     }
 
     pub fn title(&self) -> &str {
-        &self.shell
+        &self.title
+    }
+
+    pub fn set_title(&mut self, title: impl Into<String>) {
+        self.title = title.into();
+    }
+
+    pub fn cwd(&self) -> &std::path::Path {
+        &self.cwd
     }
 
     /// True once, if the child exited since the last call.
@@ -292,6 +302,14 @@ impl Terminals {
             self.shells.remove(self.active);
             self.active = self.active.min(self.shells.len().saturating_sub(1));
         }
+    }
+
+    pub fn rename_active(&mut self, title: &str) -> bool {
+        let Some(shell) = self.shells.get_mut(self.active) else {
+            return false;
+        };
+        shell.set_title(title);
+        true
     }
 }
 

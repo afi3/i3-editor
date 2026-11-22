@@ -173,6 +173,21 @@ Shipped on 2026-11-22 without a version bump.
 Verification: `cargo test` (314), `cargo fmt --check`,
 `cargo clippy --all-targets --all-features`.
 
+## Post-v0.1.3 — daily-driver operations: done
+
+Shipped on 2026-11-22 without a version bump.
+
+- `duplicate_file` copies the focused explorer file or active document to a free
+  `name copy` name; dirty buffers are refused.
+- `copy_path` writes the absolute target path to the internal and OSC 52
+  clipboards. `reveal_in_terminal` opens a shell tab at the target directory.
+- `rename_workspace` renames the active workspace tab.
+- `rename_terminal` renames the active terminal tab for the current run.
+- Every command is in the palette and covered by app-level tests.
+
+Verification: `cargo test` (320), `cargo fmt --check`,
+`cargo clippy --all-targets --all-features`.
+
 Policy that applied during the cycle:
 
 - `Cargo.toml` stayed at `0.1.2` until every workstream below passed acceptance.
@@ -462,9 +477,7 @@ platform archives with their checksums.
 Recorded so the next planning session does not rescan. These are **not** part of
 v0.1.3 unless explicitly promoted into a workstream above.
 
-- File operations: duplicate, copy path, reveal in terminal.
-- Terminal polish: rename tabs, per-workspace starting directory.
-- Workspace polish: rename workspaces.
+- Terminal polish: per-workspace starting directory.
 - Help/keybinding overlay and palette hints showing the active binding.
 - Session autosave and scratch buffers (if crash recovery in 0.1.5 is not enough).
 - Search history and per-surface option persistence.
@@ -479,4 +492,4 @@ cargo clippy --all-targets --all-features
 cargo run -- --dump-keymap
 ```
 
-Last recorded run: `cargo test` → 314 passed, `cargo clippy` → 0 warnings.
+Last recorded run: `cargo test` → 320 passed, `cargo clippy` → 0 warnings.

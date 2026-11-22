@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use super::App;
+use super::{App, same_path};
 
 /// Events drained per watcher per frame; a churning directory cannot starve
 /// input handling.
@@ -121,16 +121,4 @@ fn drain_watcher(watcher: &crate::watch::Watcher) -> Vec<PathBuf> {
         }
     }
     paths
-}
-
-/// Watcher paths and document paths can differ by symlinked prefixes on macOS
-/// (`/var` vs `/private/var`), so fall back to comparing resolved paths.
-fn same_path(open: &Path, event: &Path) -> bool {
-    if open == event {
-        return true;
-    }
-    match (open.canonicalize(), event.canonicalize()) {
-        (Ok(open), Ok(event)) => open == event,
-        _ => false,
-    }
 }

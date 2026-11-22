@@ -235,6 +235,47 @@ impl ExplorerState {
         Ok(target)
     }
 
+    /// Copy `source` beside itself, adding ` copy`, then ` copy 2`, ... until
+    /// the name is free. Only regular files are duplicated.
+    pub fn duplicate(&mut self, source: &Path) -> Result<PathBuf> {
+        let root = self
+            .root
+            .canonicalize()
+            .unwrap_or_else(|_| self.root.clone());
+        let source = resolve_in_root(&root, source)?;
+        if !source.is_file() {
+            return Err(Error::InvalidPath(source));
+        }
+        let parent = source
+            .parent()
+            .and_then(|parent| parent.strip_prefix(&root).ok())
+            .ok_or_else(|| Error::InvalidPath(source.clone()))?;
+        let stem = source
+            .file_stem()
+            .map(|stem| stem.to_string_lossy().into_owned())
+            .filter(|stem| !stem.is_empty())
+            .unwrap_or_else(|| "file".to_string());
+        let extension = source
+            .extension()
+            .map(|extension| format!(".{}", extension.to_string_lossy()))
+            .unwrap_or_default();
+        let mut target = root.join(parent).join(format!("{stem} copy{extension}"));
+        let mut index = 2;
+        while target.exists() {
+            target = root
+                .join(parent)
+                .join(format!("{stem} copy {index}{extension}"));
+            index += 1;
+        }
+        if !target.starts_with(&root) {
+            return Err(Error::InvalidPath(target));
+        }
+        std::fs::copy(&source, &target).map_err(|error| Error::io("duplicate", &source, error))?;
+        self.rebuild();
+        self.reselect(&target);
+        Ok(target)
+    }
+
     pub fn delete_at(&mut self, path: &Path) -> Result<PathBuf> {
         let path = path.to_path_buf();
         let result = if path.is_dir() {
@@ -263,6 +304,16 @@ impl ExplorerState {
         self.ignore = build_ignore(&self.root);
         self.rebuild();
     }
+}
+
+fn resolve_in_root(root: &Path, path: &Path) -> Result<PathBuf> {
+    let resolved = path
+        .canonicalize()
+        .map_err(|error| Error::io("resolve", path, error))?;
+    if !resolved.starts_with(root) {
+        return Err(Error::InvalidPath(resolved));
+    }
+    Ok(resolved)
 }
 
 fn validate_name(name: &str) -> Result<&str> {
@@ -296,5 +347,24 @@ mod tests {
         assert_eq!(visible, ["target", ".env", ".gitignore", "main.rs"]);
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn duplicate_rejects_paths_outside_the_root() {
+        let dir = std::env::temp_dir().join(format!("i3-explorer-dup-{}", std::process::id()));
+        let outside =
+            std::env::temp_dir().join(format!("i3-explorer-dup-out-{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::remove_dir_all(&outside).ok();
+        std::fs::create_dir_all(&dir).expect("root");
+        std::fs::create_dir_all(&outside).expect("outside");
+        let source = outside.join("secret.txt");
+        std::fs::write(&source, "secret\n").expect("source");
+        let mut explorer = ExplorerState::new(dir.clone(), false).expect("explorer");
+
+        assert!(explorer.duplicate(&source).is_err());
+        assert!(!dir.join("secret copy.txt").exists());
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::remove_dir_all(&outside).ok();
     }
 }

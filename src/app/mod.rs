@@ -5,6 +5,7 @@ pub mod config_ops;
 pub mod cursor;
 pub mod dispatch;
 pub mod editing;
+pub mod file_ops;
 pub mod folds;
 pub mod git_ops;
 pub mod lines;
@@ -596,4 +597,16 @@ pub(crate) fn absolutize(path: &Path) -> Result<PathBuf> {
     }
     let current = std::env::current_dir().map_err(|error| Error::io("cwd", ".", error))?;
     Ok(current.join(path))
+}
+
+/// Compare paths after resolving symlinks, so `/var/...` and `/private/var/...`
+/// refer to the same file on macOS.
+pub(crate) fn same_path(open: &Path, target: &Path) -> bool {
+    if open == target {
+        return true;
+    }
+    matches!(
+        (std::fs::canonicalize(open), std::fs::canonicalize(target)),
+        (Ok(open), Ok(target)) if open == target
+    )
 }

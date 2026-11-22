@@ -5,7 +5,7 @@ use crate::error::Result;
 use crate::lsp::{Event, Location};
 use crate::state::{CompletionPopup, DocumentId};
 
-use super::App;
+use super::{App, same_path};
 
 impl App {
     /// Drop LSP state and start servers again for the current root/config.
@@ -257,14 +257,4 @@ fn convert_diagnostic_columns(
         let text = document.line_text(diagnostic.line);
         diagnostic.column = crate::lsp::utf16_to_char(&text, diagnostic.column);
     }
-}
-
-fn same_path(open: &std::path::Path, target: &std::path::Path) -> bool {
-    if open == target {
-        return true;
-    }
-    matches!(
-        (std::fs::canonicalize(open), std::fs::canonicalize(target)),
-        (Ok(open), Ok(target)) if open == target
-    )
 }

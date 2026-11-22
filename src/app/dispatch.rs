@@ -29,6 +29,9 @@ impl App {
         let Some(command) = self.dispatch_text(command)? else {
             return Ok(());
         };
+        let Some(command) = self.dispatch_file_ops(command)? else {
+            return Ok(());
+        };
         let Some(command) = self.dispatch_explorer(command)? else {
             return Ok(());
         };
@@ -147,6 +150,16 @@ impl App {
         Ok(None)
     }
 
+    fn dispatch_file_ops(&mut self, command: Command) -> Result<Option<Command>> {
+        match command {
+            Command::DuplicateFile => self.duplicate_file()?,
+            Command::CopyPath => self.copy_path()?,
+            Command::RevealInTerminal => self.reveal_in_terminal()?,
+            other => return Ok(Some(other)),
+        }
+        Ok(None)
+    }
+
     fn dispatch_explorer(&mut self, command: Command) -> Result<Option<Command>> {
         match command {
             Command::ExplorerUp => self.state.explorer.move_selection(-1),
@@ -189,6 +202,7 @@ impl App {
             Command::TerminalClose => self.close_terminal(),
             Command::NextTerminal => self.cycle_terminal(1),
             Command::PrevTerminal => self.cycle_terminal(-1),
+            Command::TerminalRename => self.rename_terminal_prompt(),
             Command::SelectTheme => self.open_prompt(PromptKind::Theme),
             Command::NextTheme => self.cycle_theme(1),
             Command::PrevTheme => self.cycle_theme(-1),
@@ -201,6 +215,7 @@ impl App {
         match command {
             Command::NewWorkspace => self.new_workspace()?,
             Command::SetWorkspaceRoot => self.open_prompt(PromptKind::WorkspaceRoot),
+            Command::RenameWorkspace => self.open_prompt(PromptKind::RenameWorkspace),
             Command::CloseWorkspace => self.close_workspace()?,
             Command::SwitchWorkspace(index) => self.switch_workspace(index)?,
             Command::NextWorkspace => self.cycle_workspace(1)?,
