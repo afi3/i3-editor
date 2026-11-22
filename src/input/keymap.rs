@@ -176,6 +176,19 @@ impl KeyMap {
         }
     }
 
+    /// Binding that currently wins for `command` on the focused surface.
+    pub fn active_binding(&self, focus: Focus, command: &Command) -> Option<String> {
+        let scope = match focus {
+            Focus::Pane(_) => Some(&self.editing),
+            Focus::Explorer => Some(&self.explorer),
+            Focus::Shell => None,
+        };
+        if let Some(label) = scope.and_then(|bindings| binding_label(bindings, command)) {
+            return Some(label);
+        }
+        binding_label(&self.global, command)
+    }
+
     /// Bindings that a focused scope hides from the global scope.
     pub fn shadowed(&self) -> Vec<String> {
         let mut out = Vec::new();
@@ -203,6 +216,14 @@ impl KeyMap {
         out.sort();
         out
     }
+}
+
+fn binding_label(bindings: &HashMap<KeyCombo, Command>, command: &Command) -> Option<String> {
+    bindings
+        .iter()
+        .filter(|(_, bound)| *bound == command)
+        .map(|(combo, _)| combo.label())
+        .min()
 }
 
 #[cfg(test)]
@@ -258,6 +279,24 @@ mod tests {
             KeyEventKind::Release,
         );
         assert!(KeyCombo::from_event(release).is_none());
+    }
+
+    #[test]
+    fn active_binding_prefers_the_focused_scope() {
+        let map = KeyMap::preset(false);
+        assert_eq!(
+            map.active_binding(Focus::Pane(crate::state::PaneId(1)), &Command::Save),
+            Some("Ctrl+S".to_string())
+        );
+        assert_eq!(
+            map.active_binding(Focus::Explorer, &Command::ExplorerRename),
+            Some("R".to_string())
+        );
+        assert_eq!(
+            map.active_binding(Focus::Explorer, &Command::Save),
+            Some("Ctrl+S".to_string())
+        );
+        assert_eq!(map.active_binding(Focus::Shell, &Command::Copy), None);
     }
 
     #[test]

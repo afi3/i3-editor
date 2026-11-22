@@ -329,6 +329,8 @@ stays small.
 **Help is derived from the resolved keymap.** `help` walks the global, editing,
 and explorer binding maps and the palette command list at open time, so it shows
 `config.toml` overrides and the safe preset without a second source of truth.
+The command palette uses the same maps through `KeyMap::active_binding`, drawing
+the focused-scope binding (or the global fallback) at the right edge of each row.
 
 **Scratch buffers are ordinary documents without a path.** `new_scratch` creates
 `Document::empty(id, None)`, so editing, undo, Save As, and lua hooks all use the

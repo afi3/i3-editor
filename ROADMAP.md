@@ -224,6 +224,20 @@ Shipped on 2026-11-22 without a version bump.
 Verification: `cargo test` (329), `cargo fmt --check`,
 `cargo clippy --all-targets --all-features`.
 
+## Post-v0.1.3 — palette hints: done
+
+Shipped on 2026-11-22 without a version bump.
+
+- Palette rows are still matched and submitted by command name, but now draw the
+  command description and the binding that currently wins on the focused
+  surface. `KeyMap::active_binding` resolves the focused scope before global.
+- Unbound commands keep a description and no hint, so palette-only actions stay
+  visible.
+- Tests cover scope precedence and the rendered `[Ctrl+S]` hint.
+
+Verification: `cargo test` (331), `cargo fmt --check`,
+`cargo clippy --all-targets --all-features`.
+
 Policy that applied during the cycle:
 
 - `Cargo.toml` stayed at `0.1.2` until every workstream below passed acceptance.
@@ -513,7 +527,7 @@ platform archives with their checksums.
 Recorded so the next planning session does not rescan. These are **not** part of
 v0.1.3 unless explicitly promoted into a workstream above.
 
-- Palette hints showing the active binding.
+No unscoped backlog items remain.
 
 ## Verification commands
 
@@ -525,4 +539,4 @@ cargo clippy --all-targets --all-features
 cargo run -- --dump-keymap
 ```
 
-Last recorded run: `cargo test` → 329 passed, `cargo clippy` → 0 warnings.
+Last recorded run: `cargo test` → 331 passed, `cargo clippy` → 0 warnings.

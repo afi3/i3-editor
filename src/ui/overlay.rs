@@ -209,47 +209,7 @@ pub fn render_prompt(frame: &mut Frame, state: &AppState, prompt: &PromptState) 
         }
     }
 
-    if candidates > 0 {
-        let list_top = inner.y.saturating_add(fields);
-        let visible = prompt.visible();
-        let start = if prompt.selected >= candidates as usize {
-            prompt.selected + 1 - candidates as usize
-        } else {
-            0
-        };
-        let buffer = frame.buffer_mut();
-        for (offset, candidate) in visible
-            .iter()
-            .skip(start)
-            .take(candidates as usize)
-            .enumerate()
-        {
-            let row = list_top.saturating_add(offset as u16);
-            if row >= inner.y + inner.height {
-                break;
-            }
-            let style = if start + offset == prompt.selected {
-                theme.selection_style()
-            } else {
-                theme.base()
-            };
-            buffer.set_stringn(inner.x, row, candidate, inner.width as usize, style);
-            if let (PromptKind::CommandPalette, Some(command)) =
-                (prompt.kind, crate::command::Command::from_name(candidate))
-            {
-                let offset = candidate.chars().count() as u16 + 2;
-                if offset < inner.width {
-                    buffer.set_stringn(
-                        inner.x + offset,
-                        row,
-                        command.description(),
-                        (inner.width - offset) as usize,
-                        Style::default().add_modifier(Modifier::DIM),
-                    );
-                }
-            }
-        }
-    }
+    render_candidates(frame, state, prompt, inner, fields, candidates, tab_width);
 
     if let Some(path) = target {
         let shown = tail(&path, inner.width);
@@ -282,6 +242,83 @@ pub fn render_prompt(frame: &mut Frame, state: &AppState, prompt: &PromptState) 
 
     if let Some((x, y)) = cursor_position {
         frame.set_cursor_position((x, y));
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_candidates(
+    frame: &mut Frame,
+    state: &AppState,
+    prompt: &PromptState,
+    inner: Rect,
+    fields: u16,
+    candidates: u16,
+    tab_width: usize,
+) {
+    if candidates == 0 {
+        return;
+    }
+    let theme = state.theme;
+    let list_top = inner.y.saturating_add(fields);
+    let visible = prompt.visible();
+    let start = if prompt.selected >= candidates as usize {
+        prompt.selected + 1 - candidates as usize
+    } else {
+        0
+    };
+    let buffer = frame.buffer_mut();
+    for (offset, candidate) in visible
+        .iter()
+        .skip(start)
+        .take(candidates as usize)
+        .enumerate()
+    {
+        let row = list_top.saturating_add(offset as u16);
+        if row >= inner.y + inner.height {
+            break;
+        }
+        let style = if start + offset == prompt.selected {
+            theme.selection_style()
+        } else {
+            theme.base()
+        };
+        buffer.set_stringn(inner.x, row, candidate, inner.width as usize, style);
+        if let (PromptKind::CommandPalette, Some(command)) =
+            (prompt.kind, crate::command::Command::from_name(candidate))
+        {
+            let text_x = textutil::cells(candidate, tab_width, 0).saturating_add(2);
+            let hint = state
+                .keymap
+                .active_binding(state.focus, &command)
+                .map(|label| format!("[{label}]"));
+            let hint_width = hint
+                .as_ref()
+                .map_or(0, |hint| textutil::cells(hint, tab_width, 0));
+            if text_x < inner.width {
+                let description_width = inner
+                    .width
+                    .saturating_sub(text_x)
+                    .saturating_sub(hint_width.saturating_add(1));
+                buffer.set_stringn(
+                    inner.x + text_x,
+                    row,
+                    command.description(),
+                    description_width as usize,
+                    Style::default().add_modifier(Modifier::DIM),
+                );
+            }
+            if let Some(hint) = hint
+                && hint_width < inner.width
+            {
+                buffer.set_stringn(
+                    inner.x + inner.width - hint_width,
+                    row,
+                    &hint,
+                    hint_width as usize,
+                    Style::default().fg(theme.gutter),
+                );
+            }
+        }
     }
 }
 

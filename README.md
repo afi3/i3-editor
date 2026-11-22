@@ -193,7 +193,9 @@ filesystem watcher; quick open no longer walks the project on every invocation.
 Enter opens the selected candidate. While typing, the best-ranked candidate is
 selected, so Enter acts on what the list shows. After `Up` / `Down`, the chosen
 candidate is kept across further keystrokes; it falls back to the best match once
-it no longer matches the query.
+it no longer matches the query. Palette rows show the command description and the
+binding that currently wins on the focused surface; unbound commands have no
+hint and remain palette-only.
 
 ### Find and replace
 

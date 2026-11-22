@@ -645,6 +645,22 @@ mod tests {
     }
 
     #[test]
+    fn palette_renders_active_binding_hints() {
+        use crate::input::{KeyMap, PromptKind, PromptState};
+
+        let (mut state, dir) = state("x\n");
+        state.keymap = KeyMap::preset(false);
+        state.mode = InputMode::Prompt(PromptState::new(PromptKind::CommandPalette));
+        if let InputMode::Prompt(prompt) = &mut state.mode {
+            prompt.set_candidates(vec!["save".to_string(), "explorer_rename".to_string()]);
+        }
+        let screen = draw(&mut state, 100, 24);
+        assert!(screen.contains("[Ctrl+S]"), "{screen}");
+        assert!(screen.contains("explorer_rename"), "{screen}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
     fn help_overlay_renders_keybindings() {
         use crate::state::HelpView;
 
