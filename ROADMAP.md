@@ -159,7 +159,7 @@ Release record:
 
 ## Post-v0.1.3 — correctness pass: done
 
-Shipped on 2026-11-22 without a version bump.
+Landed on 2026-11-22; released in v0.1.4.
 
 - Secondary carets are rendered with reverse video using the same visual-row
   mapping as the primary cursor; secondary selections keep the normal selection
@@ -175,7 +175,7 @@ Verification: `cargo test` (314), `cargo fmt --check`,
 
 ## Post-v0.1.3 — daily-driver operations: done
 
-Shipped on 2026-11-22 without a version bump.
+Landed on 2026-11-22; released in v0.1.4.
 
 - `duplicate_file` copies the focused explorer file or active document to a free
   `name copy` name; dirty buffers are refused.
@@ -190,7 +190,7 @@ Verification: `cargo test` (320), `cargo fmt --check`,
 
 ## Post-v0.1.3 — performance pass: done
 
-Shipped on 2026-11-22 without a version bump.
+Landed on 2026-11-22; released in v0.1.4.
 
 - Wrapped `Up`/`Down`/`PageUp`/`PageDown` no longer build every visual row in the
   document. `wrapped_vertical` wraps the cursor's line and walks only the
@@ -208,7 +208,7 @@ Verification: `cargo test` (322), `cargo fmt --check`,
 
 ## Post-v0.1.3 — polish pass: done
 
-Shipped on 2026-11-22 without a version bump.
+Landed on 2026-11-22; released in v0.1.4.
 
 - The `help` command opens a scrollable overlay built from the active global,
   editing, and explorer keymaps plus the palette-only commands.
@@ -226,7 +226,7 @@ Verification: `cargo test` (329), `cargo fmt --check`,
 
 ## Post-v0.1.3 — palette hints: done
 
-Shipped on 2026-11-22 without a version bump.
+Landed on 2026-11-22; released in v0.1.4.
 
 - Palette rows are still matched and submitted by command name, but now draw the
   command description and the binding that currently wins on the focused
@@ -237,6 +237,24 @@ Shipped on 2026-11-22 without a version bump.
 
 Verification: `cargo test` (331), `cargo fmt --check`,
 `cargo clippy --all-targets --all-features`.
+
+## Release v0.1.4 — shipped
+
+Shipped as `v0.1.4` on 2026-11-23. This release contains the five post-v0.1.3
+passes above:
+
+- Correctness: visible secondary carets and LSP restart/timeouts.
+- Daily-driver operations: duplicate, copy path, reveal, workspace and terminal
+  rename.
+- Performance: viewport-bounded wrapped movement and external-document watching.
+- Polish: help overlay, persistent search history, session autosave, scratch
+  buffers, and per-workspace terminal directories.
+- Palette rows show the active keybinding for the focused surface.
+
+Release record: `cargo fmt --check`, `cargo test` (331), and
+`cargo clippy --all-targets --all-features` are clean; `forgeguard gate
+--changed` reports no errors or warnings. Version `0.1.4`, tag `v0.1.4`, and the
+four platform assets are the release milestone.
 
 Policy that applied during the cycle:
 
