@@ -277,6 +277,7 @@ impl App {
         app.init_watchers(config_path.as_deref());
         app.open_targets(files)?;
         app.load_recoveries();
+        app.apply_document_indents();
         app.refresh_plugin_status();
         app.state.ui.message = startup_message(&app.state.warnings);
         Ok(app)
@@ -297,6 +298,7 @@ impl App {
         self.quick_open_files = None;
         self.state.project_search = None;
         self.restart_lsp();
+        self.apply_document_indents();
         Ok(())
     }
 
@@ -553,6 +555,31 @@ impl App {
         }
     }
 
+    fn base_indent(&self) -> crate::editorconfig::IndentSettings {
+        crate::editorconfig::IndentSettings {
+            tab_width: self.state.config.editor.tab_size.max(1),
+            insert_spaces: self.state.config.editor.insert_spaces,
+        }
+    }
+
+    fn document_indent(&self, path: Option<&Path>) -> crate::editorconfig::IndentSettings {
+        let base = self.base_indent();
+        path.map_or(base, |path| {
+            crate::editorconfig::resolve(&self.state.explorer.root, path, base)
+        })
+    }
+
+    pub(crate) fn apply_document_indents(&mut self) {
+        let root = self.state.explorer.root.clone();
+        let base = self.base_indent();
+        for document in self.state.documents.values_mut() {
+            document.indent = document
+                .path
+                .as_deref()
+                .map_or(base, |path| crate::editorconfig::resolve(&root, path, base));
+        }
+    }
+
     pub(crate) fn open_targets(&mut self, targets: Vec<OpenTarget>) -> Result<()> {
         for target in targets {
             self.open_document(target.path)?;
@@ -570,7 +597,9 @@ impl App {
             return Ok(());
         }
         let id = self.state.ids.document();
-        let document = Document::open(id, path.clone())?;
+        let indent = self.document_indent(Some(&path));
+        let mut document = Document::open(id, path.clone())?;
+        document.indent = indent;
         self.state.documents.insert(id, document);
         self.activate_document(id)?;
         self.notify(format!("opened {}", path.display()));

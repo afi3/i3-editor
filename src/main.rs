@@ -7,6 +7,7 @@ mod command;
 mod config;
 mod conflict;
 mod editor;
+mod editorconfig;
 mod error;
 mod explorer;
 mod git;

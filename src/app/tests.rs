@@ -5,7 +5,6 @@ use std::path::PathBuf;
 use crate::command::Command;
 use crate::config::AppConfig;
 use crate::editor::document::{Document, Eol};
-use crate::editor::history::History;
 use crate::explorer::ExplorerState;
 use crate::input::KeyMap;
 use crate::state::{AppState, Focus, Ids, InputMode, Pane};
@@ -33,18 +32,8 @@ fn fixture(text: &str) -> (App, PathBuf) {
     panes.insert(pane_id, pane);
 
     let mut documents = std::collections::HashMap::new();
-    let mut document = Document {
-        id: document_id,
-        path: Some(path.clone()),
-        rope: ropey::Rope::from_str(text),
-        dirty: false,
-        eol: Eol::Lf,
-        history: History::default(),
-        folded: Vec::new(),
-        syntax: Default::default(),
-        disk_modified: None,
-        disk_len: 0,
-    };
+    let mut document = Document::empty(document_id, Some(path.clone()));
+    document.rope = ropey::Rope::from_str(text);
     document.record_disk_state();
     documents.insert(document_id, document);
 
@@ -1428,6 +1417,51 @@ fn rename_workspace_updates_the_active_name() {
 }
 
 #[test]
+fn editorconfig_and_language_defaults_drive_tab_insertion() {
+    let (mut app, dir) = fixture("x\n");
+    std::fs::write(
+        dir.join(".editorconfig"),
+        "root = true\n[*.rs]\nindent_style = space\nindent_size = 2\n",
+    )
+    .expect("editorconfig");
+    let rust = dir.join("main.rs");
+    let go = dir.join("main.go");
+    std::fs::write(&rust, "x\n").expect("rust");
+    std::fs::write(&go, "x\n").expect("go");
+
+    app.open_document(rust).expect("open rust");
+    app.state
+        .panes
+        .get_mut(&app.state.focused_pane_id().expect("pane"))
+        .expect("pane")
+        .cursor = 0;
+    app.dispatch(Command::InsertTab).expect("rust tab");
+    assert!(text(&app).starts_with("  x"), "{:?}", text(&app));
+
+    app.open_document(go).expect("open go");
+    app.state
+        .panes
+        .get_mut(&app.state.focused_pane_id().expect("pane"))
+        .expect("pane")
+        .cursor = 0;
+    app.dispatch(Command::InsertTab).expect("go tab");
+    assert!(text(&app).starts_with("\tx"), "{:?}", text(&app));
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn files_above_the_size_limit_are_refused() {
+    let (mut app, dir) = fixture("x\n");
+    let path = dir.join("huge.bin");
+    let file = std::fs::File::create(&path).expect("huge");
+    file.set_len(crate::editor::document::MAX_FILE_BYTES + 1)
+        .expect("size");
+    let error = app.open_document(path).expect_err("too large");
+    assert!(error.to_string().contains("too large"), "{error}");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn cli_targets_open_multiple_files_as_tabs_and_jump_to_a_line() {
     let (mut app, dir) = fixture("one\n");
     let second = dir.join("second.txt");
@@ -1770,6 +1804,7 @@ fn tab_inserts_spaces_up_to_the_next_stop() {
 fn tab_is_literal_when_insert_spaces_is_off() {
     let (mut app, dir) = fixture("x\n");
     app.state.config.editor.insert_spaces = false;
+    app.apply_document_indents();
     app.dispatch(Command::InsertTab).expect("tab");
     assert_eq!(text(&app), "\tx\n");
     std::fs::remove_dir_all(&dir).ok();

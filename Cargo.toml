@@ -9,6 +9,7 @@ license = "MIT"
 readme = "README.md"
 
 [dependencies]
+globset = "0.4"
 ignore = "0.4"
 nucleo = "0.5.0"
 notify = "8.2"

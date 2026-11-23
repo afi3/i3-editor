@@ -394,8 +394,7 @@ fn render_status(frame: &mut Frame, state: &AppState) {
 mod tests {
     use super::*;
     use crate::config::AppConfig;
-    use crate::editor::document::{Document, Eol};
-    use crate::editor::history::History;
+    use crate::editor::document::Document;
     use crate::explorer::ExplorerState;
     use crate::input::{KeyMap, PromptKind, PromptState};
     use crate::state::{DocumentId, Focus, Ids, InputMode, Pane, Search, WorkspaceId};
@@ -419,21 +418,9 @@ mod tests {
         panes.insert(pane_id, pane);
 
         let mut documents = HashMap::new();
-        documents.insert(
-            document_id,
-            Document {
-                id: document_id,
-                path: Some(dir.join("main.rs")),
-                rope: ropey::Rope::from_str(text),
-                dirty: false,
-                eol: Eol::Lf,
-                history: History::default(),
-                folded: Vec::new(),
-                syntax: Default::default(),
-                disk_modified: None,
-                disk_len: 0,
-            },
-        );
+        let mut document = Document::empty(document_id, Some(dir.join("main.rs")));
+        document.rope = ropey::Rope::from_str(text);
+        documents.insert(document_id, document);
 
         let mut workspaces = WorkspaceManager::default();
         workspaces.push(Workspace::new(WorkspaceId(1), "test", pane_id, dir.clone()));

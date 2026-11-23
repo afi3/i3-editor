@@ -115,7 +115,7 @@ pub fn render(
     let show_numbers = gutter > 0;
     let line_count = document.line_count();
     let digits = line_count.to_string().len() as u16;
-    let tab_width = state.config.editor.tab_size.max(1);
+    let tab_width = document.indent.tab_width.max(1);
     let selections = pane.selected_ranges();
     let selected = theme.selection_style();
     let search = state

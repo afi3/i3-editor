@@ -348,8 +348,14 @@ four platform assets are the release milestone.
 - Workspace watchers are non-recursive and track the root, expanded explorer
   directories, and parent directories of open documents. Unexpanded directories
   are not watched.
+- Documents resolve `.editorconfig` `indent_style`/`indent_size`/`tab_width`
+  from the workspace root, then language defaults (Go/Makefile tabs), then the
+  global `[editor]` settings. Tab insertion, rendering, cursor, and mouse use
+  the per-document width.
+- Files above 16 MiB are refused on open and reload instead of being read into
+  multiple in-memory representations.
 
-Verification: `cargo test` (357), `cargo fmt --check`,
+Verification: `cargo test` (361), `cargo fmt --check`,
 `cargo clippy --all-targets --all-features`, `cargo +1.91.0 check --locked`,
 `cargo audit`, and `cargo build --release --locked`.
 
@@ -654,4 +660,4 @@ cargo clippy --all-targets --all-features
 cargo run -- --dump-keymap
 ```
 
-Last recorded run: `cargo test` → 357 passed, `cargo clippy` → 0 warnings.
+Last recorded run: `cargo test` → 361 passed, `cargo clippy` → 0 warnings.

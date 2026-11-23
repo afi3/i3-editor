@@ -143,7 +143,6 @@ impl App {
         };
         let page = self.page_size(pane_id);
         let wrap_width = self.wrap_width(pane_id);
-        let tab_width = self.state.config.editor.tab_size.max(1);
         {
             let AppState {
                 documents, panes, ..
@@ -157,6 +156,7 @@ impl App {
             let Some(document) = documents.get(&id) else {
                 return Ok(());
             };
+            let tab_width = document.indent.tab_width.max(1);
             let rope = &document.rope;
             let cursor = pane.cursor;
 
@@ -322,7 +322,6 @@ impl App {
         let Some(rect) = self.state.ui.pane_rects.get(&pane_id).copied() else {
             return;
         };
-        let tab_width = self.state.config.editor.tab_size.max(1);
         let show_tabs = self.state.config.appearance.show_document_tabs;
         let show_numbers = self.state.config.editor.line_numbers;
         let wrap = self.state.config.editor.word_wrap;
@@ -339,6 +338,7 @@ impl App {
         let Some(document) = documents.get(&id) else {
             return;
         };
+        let tab_width = document.indent.tab_width.max(1);
 
         let rows = rect.height.saturating_sub(2 + u16::from(show_tabs)).max(1) as usize;
         let line = document.line_of_char(pane.cursor);

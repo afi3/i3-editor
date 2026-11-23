@@ -17,6 +17,25 @@ use crate::syntax::{self, Language, LexState, Span};
 
 use super::history::{Edit, History};
 
+/// Files above this size are refused instead of being copied into multiple
+/// in-memory representations.
+pub const MAX_FILE_BYTES: u64 = 16 << 20;
+
+fn read_text(path: &Path) -> Result<String> {
+    let metadata = std::fs::metadata(path).map_err(|error| Error::io("read", path, error))?;
+    if metadata.len() > MAX_FILE_BYTES {
+        return Err(Error::FileTooLarge {
+            path: path.to_path_buf(),
+            size: metadata.len(),
+            limit: MAX_FILE_BYTES,
+        });
+    }
+    let bytes = std::fs::read(path).map_err(|error| Error::io("read", path, error))?;
+    String::from_utf8(bytes).map_err(|_| Error::InvalidUtf8 {
+        path: path.to_path_buf(),
+    })
+}
+
 /// Derived highlighting state: the lexer state at the start of each line whose
 /// start has been computed, plus the tree-sitter parse tree for grammars that
 /// have one. The lexer memo is cleared from the edited line onward; the tree is
@@ -67,6 +86,8 @@ pub struct Document {
     pub rope: Rope,
     pub dirty: bool,
     pub eol: Eol,
+    /// Per-document indentation from `.editorconfig` and language defaults.
+    pub indent: crate::editorconfig::IndentSettings,
     pub history: History,
     /// Closed folds as inclusive document line ranges. Cleared by any edit.
     pub folded: Vec<Range<usize>>,
@@ -86,6 +107,7 @@ impl Document {
             rope: Rope::new(),
             dirty: false,
             eol: Eol::Lf,
+            indent: crate::editorconfig::IndentSettings::default(),
             history: History::default(),
             folded: Vec::new(),
             syntax: RefCell::new(SyntaxCache::default()),
@@ -95,9 +117,7 @@ impl Document {
     }
 
     pub fn open(id: DocumentId, path: PathBuf) -> Result<Self> {
-        let bytes = std::fs::read(&path).map_err(|error| Error::io("read", &path, error))?;
-        let text =
-            String::from_utf8(bytes).map_err(|_| Error::InvalidUtf8 { path: path.clone() })?;
+        let text = read_text(&path)?;
         let eol = Eol::detect(&text);
         let mut document = Self {
             id,
@@ -105,6 +125,7 @@ impl Document {
             rope: Rope::from_str(&text),
             dirty: false,
             eol,
+            indent: crate::editorconfig::IndentSettings::default(),
             history: History::default(),
             folded: Vec::new(),
             syntax: RefCell::new(SyntaxCache::default()),
@@ -520,9 +541,7 @@ impl Document {
     /// Replace the buffer with the file on disk, dropping undo history.
     pub fn reload(&mut self) -> Result<()> {
         let path = self.path.clone().ok_or(Error::NoPath)?;
-        let bytes = std::fs::read(&path).map_err(|error| Error::io("read", &path, error))?;
-        let text =
-            String::from_utf8(bytes).map_err(|_| Error::InvalidUtf8 { path: path.clone() })?;
+        let text = read_text(&path)?;
         self.eol = Eol::detect(&text);
         self.rope = Rope::from_str(&text);
         self.history = History::default();

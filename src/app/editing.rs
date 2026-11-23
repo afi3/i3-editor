@@ -63,7 +63,9 @@ impl App {
 
     pub(crate) fn new_scratch(&mut self) -> Result<()> {
         let id = self.state.ids.document();
-        self.state.documents.insert(id, Document::empty(id, None));
+        let mut document = Document::empty(id, None);
+        document.indent = self.base_indent();
+        self.state.documents.insert(id, document);
         self.activate_document(id)?;
         self.notify("new scratch buffer");
         self.plugin_event("open");
@@ -130,6 +132,7 @@ impl App {
         } else {
             document.save_as(path.clone())?;
         }
+        self.apply_document_indents();
         self.notify(format!("saved {}", path.display()));
         self.state.explorer.refresh();
         self.refresh_git_marks();
@@ -542,25 +545,30 @@ impl App {
         Ok(())
     }
 
-    /// `Tab` inserts spaces up to the next tab stop, or a literal tab when
-    /// `editor.insert_spaces` is off.
+    /// `Tab` inserts spaces up to the next tab stop, or a literal tab when the
+    /// document's `insert_spaces` setting is off.
     pub(crate) fn insert_tab(&mut self) -> Result<()> {
-        if !self.state.config.editor.insert_spaces {
-            return self.insert_text("\t");
-        }
-        let tab_size = self.state.config.editor.tab_size.max(1);
-        let spaces = {
+        let (insert_spaces, spaces) = {
             let Some((pane, document)) = self.state.pane_and_document() else {
                 return Ok(());
             };
-            let line = document.line_of_char(pane.cursor);
-            let line_start = document.char_of_line(line);
-            let text = document.line_text(line);
-            let column =
-                textutil::cells_prefix(&text, pane.cursor.saturating_sub(line_start), tab_size);
-            let tab = u16::try_from(tab_size).unwrap_or(u16::MAX);
-            (tab - (column % tab)) as usize
+            let indent = document.indent;
+            if !indent.insert_spaces {
+                (false, 0)
+            } else {
+                let tab_size = indent.tab_width.max(1);
+                let line = document.line_of_char(pane.cursor);
+                let line_start = document.char_of_line(line);
+                let text = document.line_text(line);
+                let column =
+                    textutil::cells_prefix(&text, pane.cursor.saturating_sub(line_start), tab_size);
+                let tab = u16::try_from(tab_size).unwrap_or(u16::MAX);
+                (true, (tab - (column % tab)) as usize)
+            }
         };
+        if !insert_spaces {
+            return self.insert_text("\t");
+        }
         self.insert_text(&" ".repeat(spaces))
     }
 

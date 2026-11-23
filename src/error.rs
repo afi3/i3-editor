@@ -31,6 +31,12 @@ pub enum Error {
     UnknownWorkspace(usize),
     #[error("{path} is not valid UTF-8")]
     InvalidUtf8 { path: PathBuf },
+    #[error("{path} is too large ({size} bytes; limit {limit})")]
+    FileTooLarge {
+        path: PathBuf,
+        size: u64,
+        limit: u64,
+    },
     #[error("terminal error: {0}")]
     Terminal(#[from] std::io::Error),
     #[error("{0}")]

@@ -242,7 +242,7 @@ impl App {
             return None;
         }
         let line_offset = usize::from(row.saturating_sub(geometry.area.y));
-        let tab_width = self.state.config.editor.tab_size.max(1);
+        let tab_width = document.indent.tab_width.max(1);
         if self.state.config.editor.word_wrap {
             let rows = textutil::visual_rows(
                 document,
@@ -359,7 +359,7 @@ impl App {
             };
             let rows = usize::from(geometry.area.height).max(1);
             let max_top = document.line_count().saturating_sub(rows);
-            let tab_width = self.state.config.editor.tab_size.max(1);
+            let tab_width = document.indent.tab_width.max(1);
             let last = (pane.scroll_top + rows).min(document.line_count());
             let max_width = (pane.scroll_top..last)
                 .filter(|line| !document.is_hidden(*line))

@@ -29,6 +29,7 @@ impl App {
         if lsp_changed {
             self.restart_lsp();
         }
+        self.apply_document_indents();
         self.state.ui.message = if warnings.is_empty() {
             "config reloaded".to_string()
         } else {

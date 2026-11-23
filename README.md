@@ -770,6 +770,18 @@ in the palette lists all of them.
 (measured in display cells, so it aligns after existing tabs and wide characters);
 `insert_spaces = false` inserts a literal tab byte.
 
+### Per-file indentation
+
+Each document resolves indentation in this order: the workspace-root
+`.editorconfig`, then language defaults, then `[editor]` from `config.toml`.
+Supported `.editorconfig` keys are `indent_style` (`space`/`tab`), `indent_size`,
+and `tab_width`; later matching sections win. Go and Makefile files default to
+tabs with width 8. Tab insertion, tab rendering, cursor movement, and mouse
+hit-testing all use the document's resolved width.
+
+Files above **16 MiB** are refused when opened or reloaded, with the path and
+limit in the status bar.
+
 ## Verify
 
 ```bash
@@ -811,6 +823,8 @@ every check.
 
 - Syntax highlighting is structural for every supported language. An unknown
   fence language stays plain text.
+- Files above 16 MiB are refused rather than loaded; there is no read-only
+  large-file mode.
 - Workspace watchers are non-recursive: root, expanded explorer directories, and
   parent directories of open documents. Changes inside unexpanded directories are
   not observed until the directory is opened or the explorer is refreshed. Quick

@@ -34,6 +34,14 @@ on `Document`.
 `Direction::Horizontal` means left-to-right, while "horizontal split" is
 commonly read as top-to-bottom. Renaming the axes removes the translation.
 
+**Indentation is per document.** `Document.indent` resolves the workspace-root
+`.editorconfig` over language defaults (Go/Makefile tabs) over the global
+`[editor]` settings. Tab insertion, tab rendering, cursor movement, and mouse
+hit-testing all read that width instead of the global value; `/`-relative
+`.editorconfig` sections are matched with `globset`. `Document::open` and
+`reload` share a bounded reader that refuses files above 16 MiB before they are
+copied into a rope.
+
 **Splits store weights, one per child.** A `u16` per child in `1..=100`,
 normalized for rendering. A single ratio cannot describe three children.
 
