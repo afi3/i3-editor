@@ -911,6 +911,45 @@ fn wheel_scrolls_the_pane_without_moving_the_cursor() {
 }
 
 #[test]
+fn scrollbar_click_and_drag_jump_through_the_document() {
+    use ratatui::crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+
+    let text = (0..200).map(|n| format!("line {n}\n")).collect::<String>();
+    let (mut app, dir) = fixture(&text);
+    let pane_id = app.state.focused_pane_id().expect("pane");
+    let geometry = text_geometry(&app);
+    assert!(geometry.scrollbar);
+    let x = geometry.area.x + geometry.area.width - 1;
+    let bottom = geometry.area.y + geometry.area.height - 1;
+
+    click(&mut app, x, bottom, KeyModifiers::NONE);
+    let max_top = app
+        .state
+        .active_document()
+        .expect("document")
+        .line_count()
+        .saturating_sub(usize::from(geometry.area.height));
+    assert_eq!(app.state.panes[&pane_id].scroll_top, max_top);
+
+    app.handle_mouse(MouseEvent {
+        kind: MouseEventKind::Drag(MouseButton::Left),
+        column: x,
+        row: geometry.area.y,
+        modifiers: KeyModifiers::NONE,
+    });
+    assert_eq!(app.state.panes[&pane_id].scroll_top, 0);
+
+    app.handle_mouse(MouseEvent {
+        kind: MouseEventKind::Up(MouseButton::Left),
+        column: x,
+        row: geometry.area.y,
+        modifiers: KeyModifiers::NONE,
+    });
+    assert!(app.scrollbar_drag.is_none());
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn horizontal_wheel_scrolls_cells() {
     use ratatui::crossterm::event::MouseEventKind;
 

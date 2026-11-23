@@ -511,6 +511,18 @@ mod tests {
     }
 
     #[test]
+    fn renders_vertical_scrollbar_for_long_documents() {
+        let text = (0..200).map(|n| format!("line {n}\n")).collect::<String>();
+        let (mut state, dir) = state(&text);
+        let pane_id = PaneId(1);
+        state.focus = Focus::Pane(pane_id);
+        let screen = draw(&mut state, 80, 24);
+        assert!(screen.contains('█'), "{screen}");
+        assert!(screen.contains('│'), "{screen}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
     fn renders_every_pane_in_a_nested_split() {
         let (mut state, dir) = state("alpha\nbeta\n");
         let second = PaneId(2);

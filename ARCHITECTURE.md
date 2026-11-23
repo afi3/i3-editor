@@ -110,7 +110,10 @@ active tab visible until the user scrolls manually.
 `scroll_top` to `line_count - rows` and `scroll_left` to the widest visible line.
 The next keyboard motion calls `ensure_cursor_visible`, which pulls the viewport
 back to the cursor; that split is intentional so scrolling does not fight cursor
-placement.
+placement. When `line_count > rows`, `ui::pane::scrollbar_geometry` reserves the
+last body column and maps `scroll_top` to a proportional thumb; rendering and
+scrollbar hit-testing use the same track and thumb bounds, so a track click or
+thumb drag lands on the documented fraction of the file.
 
 **Double-click is a timestamp, not a window-system gesture.** `App` keeps the last
 explorer row and its `Instant`; a second click on the same row within 400 ms opens

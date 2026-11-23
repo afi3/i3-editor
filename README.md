@@ -171,7 +171,10 @@ Mouse: click a pane to focus it, drag a pane border to resize the split.
 - Editor: click places the cursor at that cell (tabs and wide characters are
   measured in display cells); `Shift`+click extends the selection; the wheel
   scrolls three lines without moving the cursor; `ScrollLeft`/`ScrollRight`
-  (horizontal wheel or `Shift`+wheel) scrolls four columns.
+  (horizontal wheel or `Shift`+wheel) scrolls four columns. Files taller than the
+  pane get a right-edge vertical scrollbar: click the track to jump, or drag the
+  thumb to move through thousands of lines quickly. `PageUp`/`PageDown` move by
+  a page and `Ctrl+Home`/`Ctrl+End` jump to the document edges.
 - Explorer: click selects a row, double-click opens the file (or toggles a
   directory), wheel moves the selection three rows at a time.
 - Document tabs: click a tab to focus its pane and activate that file; click the

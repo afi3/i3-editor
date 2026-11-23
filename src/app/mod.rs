@@ -43,6 +43,7 @@ impl App {
             state,
             terminal,
             drag: None,
+            scrollbar_drag: None,
             last_explorer_click: None,
             watchers: Vec::new(),
             external_watcher: None,
@@ -101,6 +102,8 @@ pub struct App {
     pub state: AppState,
     pub terminal: Terminal<CrosstermBackend<Stdout>>,
     pub(crate) drag: Option<mouse::Drag>,
+    /// Active vertical scrollbar drag, if any.
+    pub(crate) scrollbar_drag: Option<mouse::ScrollbarDrag>,
     /// Last explorer row click, for double-click detection.
     pub(crate) last_explorer_click: Option<(usize, std::time::Instant)>,
     /// Recursive watcher per workspace root; empty when unavailable.
@@ -227,6 +230,7 @@ impl App {
             state,
             terminal: setup.terminal,
             drag: None,
+            scrollbar_drag: None,
             last_explorer_click: None,
             watchers: Vec::new(),
             external_watcher: None,

@@ -679,8 +679,12 @@ No unscoped backlog items remain.
 - Rendering, hit-testing, and scroll clamping share
   `ui::pane::document_tabs` and `tab_strip_geometry`, so a click lands on the
   close button or tab the user sees.
+- Files taller than the pane reserve the last body column for a proportional
+  vertical scrollbar. Clicking its track jumps, dragging its thumb traverses the
+  document, and `ui::pane::scrollbar_geometry` keeps the thumb and mouse mapping
+  aligned with `scroll_top`.
 
-Verification: `cargo test` (367 unit + 6 CLI process + 1 PTY smoke = 374),
+Verification: `cargo test` (369 unit + 6 CLI process + 1 PTY smoke = 376),
 `cargo fmt --check`, `cargo clippy --all-targets --all-features`, and
 `forgeguard gate --changed --output compact`.
 
@@ -694,4 +698,4 @@ cargo clippy --all-targets --all-features
 cargo run -- --dump-keymap
 ```
 
-Last recorded run: `cargo test` → 374 passed (367 unit + 6 CLI process + 1 PTY smoke), `cargo clippy` → 0 warnings.
+Last recorded run: `cargo test` → 376 passed (369 unit + 6 CLI process + 1 PTY smoke), `cargo clippy` → 0 warnings.

@@ -102,6 +102,8 @@ pub struct TextGeometry {
     pub area: Rect,
     pub gutter: u16,
     pub text_width: u16,
+    /// One column at the right edge is reserved for the vertical scrollbar.
+    pub scrollbar: bool,
 }
 
 /// Text region of a pane. Rendering and mouse hit-testing both use this so a
@@ -130,7 +132,11 @@ pub fn text_geometry(
     let digits = document.line_count().to_string().len() as u16;
     let show_numbers = state.config.editor.line_numbers && body.width > digits + 5;
     let gutter = if show_numbers { digits + 2 } else { 0 };
-    let text_width = body.width.saturating_sub(gutter);
+    let scrollbar = document.line_count() > usize::from(body.height);
+    let text_width = body
+        .width
+        .saturating_sub(gutter)
+        .saturating_sub(u16::from(scrollbar));
     if text_width == 0 {
         return None;
     }
@@ -138,6 +144,59 @@ pub fn text_geometry(
         area: body,
         gutter,
         text_width,
+        scrollbar,
+    })
+}
+
+/// Vertical scrollbar geometry for a document with more lines than the body.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ScrollbarGeometry {
+    pub track: Rect,
+    pub thumb_start: u16,
+    pub thumb_len: u16,
+    pub max_top: usize,
+    pub rows: usize,
+}
+
+pub fn scrollbar_geometry(
+    state: &AppState,
+    pane: &Pane,
+    document: &Document,
+    area: Rect,
+) -> Option<ScrollbarGeometry> {
+    let geometry = text_geometry(state, pane, document, area)?;
+    if !geometry.scrollbar {
+        return None;
+    }
+    let rows = usize::from(geometry.area.height);
+    let total = document.line_count();
+    let max_top = total.saturating_sub(rows);
+    if max_top == 0 || geometry.area.width == 0 {
+        return None;
+    }
+    let thumb_len = (rows * rows / total).max(1).min(rows) as u16;
+    let travel = rows.saturating_sub(usize::from(thumb_len));
+    let top = pane.scroll_top.min(max_top);
+    let thumb_start = if travel == 0 {
+        0
+    } else {
+        (top * travel / max_top) as u16
+    };
+    Some(ScrollbarGeometry {
+        track: Rect::new(
+            geometry
+                .area
+                .x
+                .saturating_add(geometry.area.width)
+                .saturating_sub(1),
+            geometry.area.y,
+            1,
+            geometry.area.height,
+        ),
+        thumb_start,
+        thumb_len,
+        max_top,
+        rows,
     })
 }
 
@@ -280,6 +339,8 @@ pub fn render(
         highlight_brackets(frame, pane, document, text_area, gutter, tab_width);
     }
 
+    draw_scrollbar(frame, state, pane, document, area, focused);
+
     if focused {
         if let Some((visible_row, column)) =
             cursor_visual_row(&rows, pane.cursor, document, wrap, tab_width)
@@ -290,13 +351,57 @@ pub fn render(
                 visible_row,
                 pane.scroll_left,
                 wrap,
+                geometry.scrollbar,
             )
         {
             frame.set_cursor_position((x, y));
         }
         draw_extra_carets(
-            frame, pane, document, &rows, text_area, gutter, wrap, tab_width,
+            frame,
+            pane,
+            document,
+            &rows,
+            text_area,
+            gutter,
+            wrap,
+            tab_width,
+            geometry.scrollbar,
         );
+    }
+}
+
+fn draw_scrollbar(
+    frame: &mut Frame,
+    state: &AppState,
+    pane: &Pane,
+    document: &Document,
+    area: Rect,
+    focused: bool,
+) {
+    let Some(scrollbar) = scrollbar_geometry(state, pane, document, area) else {
+        return;
+    };
+    let theme = state.theme;
+    let track = Style::default().bg(theme.background).fg(theme.gutter);
+    let thumb = Style::default()
+        .bg(theme.background)
+        .fg(if focused {
+            theme.border_active
+        } else {
+            theme.border_inactive
+        })
+        .add_modifier(Modifier::BOLD);
+    let buffer = frame.buffer_mut();
+    let x = scrollbar.track.x;
+    for offset in 0..scrollbar.track.height {
+        buffer[(x, scrollbar.track.y.saturating_add(offset))]
+            .set_symbol("│")
+            .set_style(track);
+    }
+    for offset in scrollbar.thumb_start..scrollbar.thumb_start + scrollbar.thumb_len {
+        buffer[(x, scrollbar.track.y.saturating_add(offset))]
+            .set_symbol("█")
+            .set_style(thumb);
     }
 }
 
@@ -307,6 +412,7 @@ fn caret_cell(
     row: usize,
     scroll_left: u16,
     wrap: bool,
+    scrollbar: bool,
 ) -> Option<(u16, u16)> {
     if row >= text_area.height as usize {
         return None;
@@ -317,7 +423,10 @@ fn caret_cell(
         column.checked_sub(scroll_left)?
     };
     let x = text_area.x.saturating_add(gutter).saturating_add(column);
-    let edge = text_area.x.saturating_add(text_area.width);
+    let edge = text_area
+        .x
+        .saturating_add(text_area.width)
+        .saturating_sub(u16::from(scrollbar));
     (x < edge).then_some((x, text_area.y.saturating_add(row as u16)))
 }
 
@@ -331,6 +440,7 @@ fn draw_extra_carets(
     gutter: u16,
     wrap: bool,
     tab_width: usize,
+    scrollbar: bool,
 ) {
     if pane.extra.is_empty() {
         return;
@@ -341,7 +451,15 @@ fn draw_extra_carets(
         .iter()
         .filter_map(|extra| {
             let (row, column) = cursor_visual_row(rows, extra.cursor, document, wrap, tab_width)?;
-            caret_cell(text_area, gutter, column, row, pane.scroll_left, wrap)
+            caret_cell(
+                text_area,
+                gutter,
+                column,
+                row,
+                pane.scroll_left,
+                wrap,
+                scrollbar,
+            )
         })
         .collect();
     let buffer = frame.buffer_mut();

@@ -9,11 +9,20 @@ use ratatui::widgets::{Block, Borders};
 
 use crate::editor::text as textutil;
 use crate::state::{AppState, DocumentId, Focus, InputMode, PaneId};
-use crate::ui::pane::{DocumentTab, document_tabs, tab_strip_geometry};
+use crate::ui::pane::{
+    DocumentTab, ScrollbarGeometry, document_tabs, scrollbar_geometry, tab_strip_geometry,
+};
 use crate::workspace::SplitAxis;
 use crate::workspace::layout::{LayoutNode, Separator, SplitMode, split_area, tabbed_regions};
 
 use super::App;
+
+#[derive(Debug)]
+pub struct ScrollbarDrag {
+    pub pane: PaneId,
+    /// Rows from the top of the thumb where the drag started.
+    pub grab: u16,
+}
 
 #[derive(Debug)]
 pub struct Drag {
@@ -44,7 +53,9 @@ impl App {
         match mouse.kind {
             MouseEventKind::Down(MouseButton::Left) => self.on_left_click(mouse),
             MouseEventKind::Drag(MouseButton::Left) => {
-                if let Some(drag) = self.drag.take() {
+                if self.scrollbar_drag.is_some() {
+                    self.drag_scrollbar(mouse.row);
+                } else if let Some(drag) = self.drag.take() {
                     self.resize_to(drag, mouse.column, mouse.row);
                 } else if let Some((pane_id, line, column)) = self.block_anchor {
                     self.extend_block(pane_id, line, column, mouse.column, mouse.row);
@@ -54,6 +65,7 @@ impl App {
             }
             MouseEventKind::Up(MouseButton::Left) => {
                 self.drag = None;
+                self.scrollbar_drag = None;
                 self.selecting = None;
                 self.block_anchor = None;
             }
@@ -109,26 +121,14 @@ impl App {
             }
             return;
         }
-        if let Some((pane_id, hit)) = self.document_tab_hit(mouse.column, mouse.row) {
-            self.state.focus = Focus::Pane(pane_id);
-            self.state.workspaces.active_mut().focus = pane_id;
-            match hit {
-                DocumentTabHit::Activate(id) => {
-                    let result = self.activate_document(id);
-                    self.finish(result);
-                }
-                DocumentTabHit::Close(id) => {
-                    let result = self.close_document_id(id);
-                    self.finish(result);
-                }
-                DocumentTabHit::Scroll(direction) => {
-                    self.scroll_document_tabs(pane_id, direction);
-                }
-            }
+        if self.click_document_tab(mouse.column, mouse.row) {
             return;
         }
         if let Some((path, index)) = self.tab_at(mouse.column, mouse.row) {
             self.activate_tab(&path, index);
+            return;
+        }
+        if self.click_scrollbar(mouse.column, mouse.row) {
             return;
         }
         if let Some(drag) = self.drag_at(mouse.column, mouse.row) {
@@ -364,6 +364,106 @@ impl App {
             return;
         };
         pane.column_selection(document, anchor_line, anchor_column, line, offset);
+    }
+
+    fn click_document_tab(&mut self, column: u16, row: u16) -> bool {
+        let Some((pane_id, hit)) = self.document_tab_hit(column, row) else {
+            return false;
+        };
+        self.state.focus = Focus::Pane(pane_id);
+        self.state.workspaces.active_mut().focus = pane_id;
+        match hit {
+            DocumentTabHit::Activate(id) => {
+                let result = self.activate_document(id);
+                self.finish(result);
+            }
+            DocumentTabHit::Close(id) => {
+                let result = self.close_document_id(id);
+                self.finish(result);
+            }
+            DocumentTabHit::Scroll(direction) => {
+                self.scroll_document_tabs(pane_id, direction);
+            }
+        }
+        true
+    }
+
+    fn click_scrollbar(&mut self, column: u16, row: u16) -> bool {
+        let Some((pane_id, scrollbar)) = self.scrollbar_at(column, row) else {
+            return false;
+        };
+        self.begin_scrollbar_drag(pane_id, &scrollbar, row);
+        true
+    }
+
+    fn scrollbar_at(&self, column: u16, row: u16) -> Option<(PaneId, ScrollbarGeometry)> {
+        for (pane_id, pane) in &self.state.panes {
+            let Some(rect) = self.state.ui.pane_rects.get(pane_id) else {
+                continue;
+            };
+            let Some(document) = pane.active.and_then(|id| self.state.documents.get(&id)) else {
+                continue;
+            };
+            let Some(scrollbar) = scrollbar_geometry(&self.state, pane, document, *rect) else {
+                continue;
+            };
+            if contains(scrollbar.track, column, row) {
+                return Some((*pane_id, scrollbar));
+            }
+        }
+        None
+    }
+
+    fn begin_scrollbar_drag(&mut self, pane_id: PaneId, scrollbar: &ScrollbarGeometry, row: u16) {
+        let thumb_top = scrollbar.track.y.saturating_add(scrollbar.thumb_start);
+        let grab = if row >= thumb_top && row < thumb_top.saturating_add(scrollbar.thumb_len) {
+            row.saturating_sub(thumb_top)
+        } else {
+            scrollbar.thumb_len / 2
+        };
+        self.scrollbar_drag = Some(ScrollbarDrag {
+            pane: pane_id,
+            grab,
+        });
+        self.state.focus = Focus::Pane(pane_id);
+        self.state.workspaces.active_mut().focus = pane_id;
+        self.set_scrollbar_top(pane_id, row, grab);
+    }
+
+    fn drag_scrollbar(&mut self, row: u16) {
+        let Some(drag) = self.scrollbar_drag.as_ref() else {
+            return;
+        };
+        self.set_scrollbar_top(drag.pane, row, drag.grab);
+    }
+
+    fn set_scrollbar_top(&mut self, pane_id: PaneId, row: u16, grab: u16) {
+        let Some(rect) = self.state.ui.pane_rects.get(&pane_id).copied() else {
+            return;
+        };
+        let Some(pane) = self.state.panes.get(&pane_id) else {
+            return;
+        };
+        let Some(document) = pane.active.and_then(|id| self.state.documents.get(&id)) else {
+            return;
+        };
+        let Some(scrollbar) = scrollbar_geometry(&self.state, pane, document, rect) else {
+            return;
+        };
+        let travel = scrollbar.track.height.saturating_sub(scrollbar.thumb_len);
+        let offset = row
+            .saturating_sub(scrollbar.track.y)
+            .saturating_sub(grab)
+            .min(travel);
+        let top = if travel == 0 {
+            0
+        } else {
+            usize::from(offset) * scrollbar.max_top / usize::from(travel)
+        };
+        if let Some(pane) = self.state.panes.get_mut(&pane_id) {
+            pane.scroll_top = top;
+        }
+        self.dirty = true;
     }
 
     /// Scroll a pane without moving its cursor.
