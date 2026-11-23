@@ -2,6 +2,11 @@
 name = "i3-editor"
 version = "0.1.5"
 edition = "2024"
+rust-version = "1.91"
+description = "A keyboard-first terminal text editor with file explorer, panes, workspaces, Git, LSP, and Lua plugins."
+repository = "https://github.com/afi3/i3-editor"
+license = "MIT"
+readme = "README.md"
 
 [dependencies]
 ignore = "0.4"
@@ -36,3 +41,8 @@ unicode-segmentation = "1.13"
 unicode-width = "0.2"
 vt100 = "0.18"
 mlua = { version = "0.12", features = ["lua54", "vendored"] }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true

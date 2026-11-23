@@ -6,6 +6,8 @@ tabs, panes, and workspaces, all inside the terminal.
 Built with Ratatui + Crossterm, with a Ropey text buffer and a grapheme-aware
 cursor. Configuration lives in TOML.
 
+[![ci](https://github.com/afi3/i3-editor/actions/workflows/ci.yml/badge.svg)](https://github.com/afi3/i3-editor/actions/workflows/ci.yml)
+
 ![i3-editor demo](docs/demo.gif)
 
 ## Install
@@ -88,7 +90,7 @@ cargo run -- --version         # print the version
 cargo run -- --help            # usage summary
 ```
 
-Stable Rust 1.85+ (edition 2024). The editor needs no system dependencies beyond
+Stable Rust 1.91+ (edition 2024). The editor needs no system dependencies beyond
 a POSIX terminal; `--update` additionally uses `curl` and `tar`.
 
 ## Interface
@@ -758,7 +760,7 @@ in the palette lists all of them.
 ```bash
 cargo fmt --check
 cargo check
-cargo test              # unit + integration tests, no terminal required
+cargo test              # unit tests, no terminal required
 cargo clippy --all-targets --all-features
 python3 scripts/make_demo.py   # regenerate docs/demo.gif (needs pyte + Pillow)
 ```

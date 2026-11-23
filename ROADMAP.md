@@ -5,8 +5,9 @@ verified before the next one started.
 
 ## Version policy
 
-- `v0.1.x` is the current hardening and feature-completion line: correctness,
-  daily-driver operations, performance, polish, and Git depth.
+- `v0.1.x` is the current hardening and feature-completion line: release
+  engineering, correctness, daily-driver operations, performance, polish, and
+  Git depth.
 - `v0.2.x` is reserved for AI and MCP features. Do not tag `v0.2.0` until those
   features land; current-feature work stays inside `v0.1.x`.
 
@@ -319,6 +320,23 @@ Release record: `cargo fmt --check`, `cargo test` (344), and
 `cargo clippy --all-targets --all-features` are clean; `forgeguard gate
 --changed` reports no errors or warnings. Version `0.1.5`, tag `v0.1.5`, and the
 four platform assets are the release milestone.
+
+## Unreleased v0.1.6 — release engineering
+
+- `ci.yml` runs formatting, `clippy -D warnings`, and tests on Linux, macOS, and
+  the declared MSRV; a separate job runs `cargo audit`.
+- `release.yml` calls the CI workflow and its build jobs wait for it, so a tag
+  cannot publish binaries when formatting, lint, tests, or the audit fail.
+- Cargo metadata now declares the MIT license, description, repository, readme,
+  and the real MSRV (`1.91`, driven by the dependency set; the old README claim
+  of 1.85 was wrong).
+- `[profile.release]` uses thin LTO, one codegen unit, and stripped symbols.
+  Release binary on this machine: **13.3 MB → 11.4 MB** (about 14% smaller).
+- README now has a CI badge and no longer calls the suite “integration tests”.
+
+Verification: `cargo test` (344), `cargo fmt --check`,
+`cargo clippy --all-targets --all-features`, `cargo +1.91.0 check --locked`,
+and `cargo build --release --locked`.
 
 Policy that applied during the cycle:
 
