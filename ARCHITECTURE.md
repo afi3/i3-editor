@@ -432,7 +432,11 @@ KeyEvent ──► KeyCombo ──► prompt / scope resolution ──► Comman
 
 ## Testing
 
-- Editor: mutation, coalescing, undo/redo round trip, EOL preservation.
+- Editor: mutation, coalescing, undo/redo round trip, EOL preservation, and
+  `proptest` random insert/remove/replace sequences that undo back to the
+  original and redo back to the final text.
+- CLI: `assert_cmd` process tests for version/help, unknown options, mode/path
+  conflicts, and `--dump-keymap` without a TTY.
 - Text: grapheme motion (combining marks, ZWJ), word motion, cell widths, clipping.
 - Layout: proportional splits, min sizes, nesting, collapse, separators.
 - Workspaces: switching, closing, last-workspace guard.

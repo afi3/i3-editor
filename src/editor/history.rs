@@ -311,3 +311,124 @@ mod tests {
         assert_eq!(history.undo_depth(), MAX_BATCHES);
     }
 }
+
+#[cfg(test)]
+mod proptests {
+    use super::*;
+    use proptest::prelude::*;
+
+    #[derive(Clone, Debug)]
+    enum Op {
+        Insert {
+            position: usize,
+            text: String,
+        },
+        Remove {
+            position: usize,
+            length: usize,
+        },
+        Replace {
+            position: usize,
+            length: usize,
+            text: String,
+        },
+    }
+
+    fn text() -> impl Strategy<Value = String> {
+        prop::collection::vec(prop::sample::select(vec!['a', 'b', 'c', ' ', '\n']), 1..5)
+            .prop_map(|chars| chars.into_iter().collect())
+    }
+
+    fn operation() -> impl Strategy<Value = Op> {
+        prop_oneof![
+            (0usize..1000, text()).prop_map(|(position, text)| Op::Insert { position, text }),
+            (0usize..1000, 1usize..4)
+                .prop_map(|(position, length)| Op::Remove { position, length }),
+            (0usize..1000, 1usize..4, text()).prop_map(|(position, length, text)| Op::Replace {
+                position,
+                length,
+                text,
+            }),
+        ]
+    }
+
+    fn apply(rope: &mut Rope, history: &mut History, op: Op) {
+        match op {
+            Op::Insert { position, text } => {
+                let index = position % (rope.len_chars() + 1);
+                history.break_run();
+                history.record_insert(index, &text, index, (0, 0));
+                rope.insert(index, &text);
+            }
+            Op::Remove { position, length } => {
+                let chars = rope.len_chars();
+                if chars == 0 {
+                    return;
+                }
+                let index = position % chars;
+                let length = (length % (chars - index)).max(1);
+                let removed = rope.slice(index..index + length).to_string();
+                history.record_remove(index, &removed, index, (0, 0));
+                rope.remove(index..index + length);
+            }
+            Op::Replace {
+                position,
+                length,
+                text,
+            } => {
+                let chars = rope.len_chars();
+                if chars == 0 {
+                    return;
+                }
+                let index = position % chars;
+                let length = (length % (chars - index)).max(1);
+                let removed = rope.slice(index..index + length).to_string();
+                history.record_replace(
+                    index,
+                    &removed,
+                    &text,
+                    index,
+                    index + text.chars().count(),
+                    (0, 0),
+                );
+                rope.remove(index..index + length);
+                rope.insert(index, &text);
+            }
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn undo_all_restores_original_and_saved_state(
+            ops in prop::collection::vec(operation(), 0..40)
+        ) {
+            let mut rope = Rope::from_str("seed");
+            let original = rope.to_string();
+            let mut history = History::default();
+            history.mark_saved();
+            for op in ops {
+                apply(&mut rope, &mut history, op);
+            }
+            while history.undo(&mut rope).is_some() {}
+            prop_assert_eq!(rope.to_string(), original);
+            prop_assert!(!history.is_modified());
+        }
+
+        #[test]
+        fn redo_all_restores_final_and_saved_state(
+            ops in prop::collection::vec(operation(), 0..40)
+        ) {
+            let mut rope = Rope::from_str("seed");
+            let mut history = History::default();
+            for op in ops {
+                apply(&mut rope, &mut history, op);
+            }
+            let final_text = rope.to_string();
+            history.mark_saved();
+            while history.undo(&mut rope).is_some() {}
+            while history.redo(&mut rope).is_some() {}
+            prop_assert_eq!(rope.to_string(), final_text);
+            prop_assert!(!history.is_modified());
+        }
+    }
+}

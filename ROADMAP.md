@@ -354,8 +354,12 @@ four platform assets are the release milestone.
   the per-document width.
 - Files above 16 MiB are refused on open and reload instead of being read into
   multiple in-memory representations.
+- `proptest` exercises random insert/remove/replace sequences and checks that
+  undoing everything restores the original and redo restores the final text.
+- `assert_cmd` exercises the real binary contract: version, help, unknown-option
+  errors, mode/path conflicts, and `--dump-keymap` without a TTY.
 
-Verification: `cargo test` (361), `cargo fmt --check`,
+Verification: `cargo test` (363 unit + 6 CLI process = 369), `cargo fmt --check`,
 `cargo clippy --all-targets --all-features`, `cargo +1.91.0 check --locked`,
 `cargo audit`, and `cargo build --release --locked`.
 
@@ -660,4 +664,4 @@ cargo clippy --all-targets --all-features
 cargo run -- --dump-keymap
 ```
 
-Last recorded run: `cargo test` → 361 passed, `cargo clippy` → 0 warnings.
+Last recorded run: `cargo test` → 369 passed (363 unit + 6 CLI process), `cargo clippy` → 0 warnings.
