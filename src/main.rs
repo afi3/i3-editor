@@ -4,6 +4,7 @@ mod app;
 mod clipboard;
 mod command;
 mod config;
+mod conflict;
 mod editor;
 mod error;
 mod explorer;

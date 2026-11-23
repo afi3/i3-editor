@@ -238,7 +238,7 @@ impl App {
     fn submit_query_prompt(&mut self, prompt: PromptState) -> Result<()> {
         if matches!(
             prompt.kind,
-            PromptKind::GitStatus | PromptKind::CommitMessage
+            PromptKind::GitStatus | PromptKind::Conflicts | PromptKind::CommitMessage
         ) {
             return self.submit_git_prompt(prompt);
         }
@@ -413,6 +413,16 @@ impl App {
                 };
                 self.open_git_entry(entry)
             }
+            PromptKind::Conflicts => {
+                let selected = prompt.filtered.get(prompt.selected).copied();
+                let Some(entry) = selected
+                    .and_then(|index| self.git_status_entries.get(index))
+                    .cloned()
+                else {
+                    return Ok(());
+                };
+                self.open_conflict_entry(entry)
+            }
             _ => Ok(()),
         }
     }
@@ -517,6 +527,9 @@ impl App {
         if kind == PromptKind::GitStatus {
             return self.fill_git_status(prompt);
         }
+        if kind == PromptKind::Conflicts {
+            return self.fill_conflicts(prompt);
+        }
         match kind {
             PromptKind::CommandPalette => {
                 prompt.set_candidates(self.palette_candidates());
@@ -592,6 +605,38 @@ impl App {
                         .collect(),
                 );
                 self.git_status_entries = entries;
+                true
+            }
+            Err(error) => {
+                self.notify(error);
+                false
+            }
+        }
+    }
+
+    fn fill_conflicts(&mut self, prompt: &mut PromptState) -> bool {
+        let binary = self.state.config.git.binary.clone();
+        let Some(repo) = crate::git::discover(&binary, &self.state.explorer.root) else {
+            self.notify("not a git repository");
+            return false;
+        };
+        match crate::git::status(&binary, &repo) {
+            Ok(entries) => {
+                let conflicts: Vec<_> = entries
+                    .into_iter()
+                    .filter(crate::git::StatusEntry::is_conflict)
+                    .collect();
+                if conflicts.is_empty() {
+                    self.notify("no merge conflicts");
+                    return false;
+                }
+                prompt.set_candidates(
+                    conflicts
+                        .iter()
+                        .map(|entry| format!("{}  {}", entry.code, entry.relative))
+                        .collect(),
+                );
+                self.git_status_entries = conflicts;
                 true
             }
             Err(error) => {

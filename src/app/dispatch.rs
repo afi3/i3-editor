@@ -23,6 +23,9 @@ impl App {
         let Some(command) = self.dispatch_code(command)? else {
             return Ok(());
         };
+        let Some(command) = self.dispatch_conflicts(command)? else {
+            return Ok(());
+        };
         let Some(command) = self.dispatch_git(command)? else {
             return Ok(());
         };
@@ -128,11 +131,24 @@ impl App {
             Command::GitLog => self.git_log()?,
             Command::GitPull => self.git_pull()?,
             Command::GitPush => self.git_push()?,
+            Command::GitConflicts => self.git_conflicts()?,
             Command::GitStage => self.git_stage()?,
             Command::GitUnstage => self.git_unstage()?,
             Command::GitStageHunk => self.git_hunk_picker(true)?,
             Command::GitUnstageHunk => self.git_hunk_picker(false)?,
             Command::GitCommit => self.git_commit_prompt()?,
+            other => return Ok(Some(other)),
+        }
+        Ok(None)
+    }
+
+    fn dispatch_conflicts(&mut self, command: Command) -> Result<Option<Command>> {
+        match command {
+            Command::ResolveConflictOurs => self.resolve_conflict(crate::conflict::Choice::Ours)?,
+            Command::ResolveConflictTheirs => {
+                self.resolve_conflict(crate::conflict::Choice::Theirs)?
+            }
+            Command::ResolveConflictBoth => self.resolve_conflict(crate::conflict::Choice::Both)?,
             other => return Ok(Some(other)),
         }
         Ok(None)

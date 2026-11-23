@@ -395,6 +395,12 @@ no library dependency. The active workspace root must be inside a work tree.
 - `git_push` pushes the current branch to its configured upstream. Terminal
   credential prompts stay disabled; SSH agents and credential helpers work. A
   missing upstream or rejected push is reported in the status bar.
+- `git_conflicts` lists conflicted files from the porcelain status. `Enter` opens
+  the file (reloading a clean stale buffer), jumps to the first `<<<<<<<` marker,
+  and reports the line in the status bar.
+- `resolve_conflict_ours`, `resolve_conflict_theirs`, and `resolve_conflict_both`
+  replace the conflict block at or after the cursor as one undo step. After the
+  last block is gone the status bar asks you to stage the file.
 - Every failure (not a repository, nothing staged, git missing) is reported in
   the status bar.
 
@@ -797,9 +803,9 @@ every check.
   the plugin directory changes or the editor restarts.
 - Soft wrap computes rows from the cursor's line and its neighbours instead of
   rescanning the document, so `Up`/`Down` stay bounded by the viewport.
-- Git pull is fast-forward-only and there is no merge or conflict UI. Untracked
-  files are marked as all-added; binary files have no line markers, and markers
-  can lag by up to one second.
+- Git pull is fast-forward-only; the editor resolves conflict markers but does
+  not create merges. Untracked files are marked as all-added; binary files have
+  no line markers, and markers can lag by up to one second.
 - The LSP client uses full-text sync instead of incremental ranges; timed-out
   interactive requests are dropped rather than retried.
 - `--update` uses the unauthenticated GitHub API (60 requests per hour per IP)

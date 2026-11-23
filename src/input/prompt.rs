@@ -34,6 +34,7 @@ pub enum PromptKind {
     TerminalRename,
     Recovery,
     GitStatus,
+    Conflicts,
     CommitMessage,
     Theme,
 }
@@ -70,6 +71,7 @@ impl PromptKind {
                 | PromptKind::GoToLine
                 | PromptKind::Symbols
                 | PromptKind::GitStatus
+                | PromptKind::Conflicts
                 | PromptKind::CommitMessage
         )
     }
@@ -110,6 +112,7 @@ impl PromptKind {
             PromptKind::GoToLine => "Go to Line",
             PromptKind::Symbols => "Go to Symbol",
             PromptKind::GitStatus => "Git Status",
+            PromptKind::Conflicts => "Merge Conflicts",
             PromptKind::CommitMessage => "Commit Message",
             _ => "",
         }
@@ -170,6 +173,7 @@ impl PromptKind {
                 | PromptKind::Theme
                 | PromptKind::Symbols
                 | PromptKind::GitStatus
+                | PromptKind::Conflicts
                 | PromptKind::Recovery
                 | PromptKind::QuitDirty
                 | PromptKind::ExternalChange

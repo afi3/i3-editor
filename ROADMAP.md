@@ -278,14 +278,18 @@ four platform assets are the release milestone.
 - `git_pull` fast-forwards from upstream with `--ff-only` and refuses dirty
   index/worktree or unsaved editor buffers. `git_push` pushes the current branch
   to its upstream with terminal prompts disabled.
+- `git_conflicts` lists conflicted files; opening one jumps to the first marker.
+  `resolve_conflict_ours`, `resolve_conflict_theirs`, and `resolve_conflict_both`
+  replace the block at/after the cursor as one undo step.
 - Tests cover a two-hunk stage/unstage round trip, the rendered picker, branch
-  and log helpers, the app overlay, a local bare-remote pull/push round trip, and
-  dirty-pull refusal.
+  and log helpers, the app overlay, a local bare-remote pull/push round trip,
+  dirty-pull refusal, conflict parsing, all three resolutions, and opening a
+  conflict after a real merge.
 
-Verification: `cargo test` (339), `cargo fmt --check`,
+Verification: `cargo test` (342), `cargo fmt --check`,
 `cargo clippy --all-targets --all-features`.
 
-Remaining Git depth: conflict UI.
+Git depth is complete for the v0.1.5 line.
 
 Policy that applied during the cycle:
 
@@ -588,4 +592,4 @@ cargo clippy --all-targets --all-features
 cargo run -- --dump-keymap
 ```
 
-Last recorded run: `cargo test` → 339 passed, `cargo clippy` → 0 warnings.
+Last recorded run: `cargo test` → 342 passed, `cargo clippy` → 0 warnings.

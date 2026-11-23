@@ -164,6 +164,11 @@ impl App {
         Ok(())
     }
 
+    pub(crate) fn git_conflicts(&mut self) -> Result<()> {
+        self.open_prompt(PromptKind::Conflicts);
+        Ok(())
+    }
+
     pub(crate) fn git_stage(&mut self) -> Result<()> {
         let (repo, relative) = self.active_git_file()?;
         let binary = self.state.config.git.binary.clone();

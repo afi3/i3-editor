@@ -2,6 +2,7 @@
 
 pub mod comment;
 pub mod config_ops;
+pub mod conflict_ops;
 pub mod cursor;
 pub mod dispatch;
 pub mod editing;

@@ -23,6 +23,15 @@ pub struct StatusEntry {
     pub unstaged: bool,
 }
 
+impl StatusEntry {
+    pub fn is_conflict(&self) -> bool {
+        matches!(
+            self.code.as_str(),
+            "DD" | "AU" | "UD" | "UA" | "DU" | "AA" | "UU"
+        )
+    }
+}
+
 /// One hunk of a single-file unified diff, with enough context to apply it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Hunk {

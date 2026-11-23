@@ -294,7 +294,10 @@ picker is a selectable overlay over that list. `git::branch`, `git::branches`,
 and `git::log` feed the read-only branch/log overlay; they handle detached HEAD
 and the unborn-repository case. `git::pull` refuses uncommitted changes and uses
 `--ff-only`; `git::push` uses the configured upstream. Both run with terminal
-prompts disabled. `App::refresh_git_marks`
+prompts disabled. `conflict::blocks` finds complete `<<<<<<<`/`=======`/`>>>>>>>`
+groups; `App::resolve_conflict` replaces one block with ours, theirs, or both as
+a single document edit, and `git_conflicts` opens a filtered status prompt.
+`App::refresh_git_marks`
 recomputes only documents shown in panes, once per second and after
 open/save/git actions. Every helper returns git's stderr/stdout on failure, which
 the command path puts in the status bar.

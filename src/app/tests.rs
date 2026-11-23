@@ -2651,6 +2651,107 @@ fn git_pull_refuses_unsaved_buffers_before_touching_git() {
 }
 
 #[test]
+fn resolve_conflict_ours_theirs_and_both_are_single_edits() {
+    let source = "before\n<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> other\nafter\n";
+    let (mut app, dir) = fixture(source);
+    let pane_id = app.state.focused_pane_id().expect("pane");
+
+    app.state.panes.get_mut(&pane_id).expect("pane").cursor = 0;
+    app.dispatch(Command::ResolveConflictOurs)
+        .expect("resolve ours");
+    assert_eq!(text(&app), "before\nours\nafter\n");
+    app.dispatch(Command::Undo).expect("undo ours");
+    assert_eq!(text(&app), source);
+
+    app.state.panes.get_mut(&pane_id).expect("pane").cursor = 0;
+    app.dispatch(Command::ResolveConflictTheirs)
+        .expect("resolve theirs");
+    assert_eq!(text(&app), "before\ntheirs\nafter\n");
+    app.dispatch(Command::Undo).expect("undo theirs");
+    assert_eq!(text(&app), source);
+
+    app.state.panes.get_mut(&pane_id).expect("pane").cursor = 0;
+    app.dispatch(Command::ResolveConflictBoth)
+        .expect("resolve both");
+    assert_eq!(text(&app), "before\nours\ntheirs\nafter\n");
+    assert!(
+        app.state.ui.message.contains("all conflicts resolved"),
+        "{}",
+        app.state.ui.message
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn conflict_prompt_opens_the_first_marker_after_a_merge() {
+    use std::process::Command as Process;
+
+    if Process::new("git").arg("--version").output().is_err() {
+        return;
+    }
+    let (mut app, dir) = fixture("base\n");
+    let git = |args: &[&str]| {
+        Process::new("git")
+            .args(args)
+            .current_dir(&dir)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .expect("git")
+    };
+    assert!(git(&["init", "-q"]).success());
+    assert!(git(&["config", "user.email", "test@example.com"]).success());
+    assert!(git(&["config", "user.name", "Test"]).success());
+    assert!(git(&["add", "."]).success());
+    assert!(git(&["commit", "-q", "-m", "base"]).success());
+    let main = crate::git::branch("git", &dir).expect("main branch");
+
+    assert!(git(&["checkout", "-q", "-b", "side"]).success());
+    std::fs::write(dir.join("note.txt"), "side\n").expect("side");
+    assert!(git(&["add", "."]).success());
+    assert!(git(&["commit", "-q", "-m", "side"]).success());
+    assert!(git(&["checkout", "-q", &main]).success());
+    std::fs::write(dir.join("note.txt"), "main\n").expect("main");
+    assert!(git(&["add", "."]).success());
+    assert!(git(&["commit", "-q", "-m", "main"]).success());
+    assert!(!git(&["merge", "side"]).success(), "merge must conflict");
+
+    app.dispatch(Command::GitConflicts)
+        .expect("conflict prompt");
+    let InputMode::Prompt(prompt) = &app.state.mode else {
+        panic!("conflict prompt missing")
+    };
+    assert_eq!(prompt.kind, crate::input::PromptKind::Conflicts);
+    assert!(
+        prompt
+            .candidates
+            .iter()
+            .any(|line| line.contains("note.txt")),
+        "{:?}",
+        prompt.candidates
+    );
+    app.submit_prompt().expect("open conflict");
+
+    let document = app.state.active_document().expect("conflict file");
+    let expected = dir.join("note.txt").canonicalize().expect("canonical");
+    assert_eq!(document.path.as_deref(), Some(expected.as_path()));
+    let text = text(&app);
+    assert!(text.contains("<<<<<<<"), "{text}");
+    let marker = text
+        .lines()
+        .position(|line| line.starts_with("<<<<<<<"))
+        .expect("marker line");
+    let cursor = app.state.focused_pane().expect("pane").cursor;
+    assert_eq!(document.line_of_char(cursor), marker);
+    assert!(
+        app.state.ui.message.contains("conflict at"),
+        "{}",
+        app.state.ui.message
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn git_markers_diff_staging_and_commit_work() {
     use std::process::Command as Process;
 
