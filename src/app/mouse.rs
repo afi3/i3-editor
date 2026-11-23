@@ -9,6 +9,7 @@ use ratatui::widgets::{Block, Borders};
 
 use crate::editor::text as textutil;
 use crate::state::{AppState, DocumentId, Focus, InputMode, PaneId};
+use crate::ui::pane::{DocumentTab, document_tabs, tab_strip_geometry};
 use crate::workspace::SplitAxis;
 use crate::workspace::layout::{LayoutNode, Separator, SplitMode, split_area, tabbed_regions};
 
@@ -22,6 +23,14 @@ pub struct Drag {
     pub cells: Vec<u16>,
     pub mins: Vec<u16>,
     pub start: u16,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DocumentTabHit {
+    Activate(DocumentId),
+    Close(DocumentId),
+    /// Scroll the strip one tab left (`-1`) or right (`1`).
+    Scroll(isize),
 }
 
 impl App {
@@ -100,11 +109,22 @@ impl App {
             }
             return;
         }
-        if let Some((pane_id, document_id)) = self.document_tab_at(mouse.column, mouse.row) {
+        if let Some((pane_id, hit)) = self.document_tab_hit(mouse.column, mouse.row) {
             self.state.focus = Focus::Pane(pane_id);
             self.state.workspaces.active_mut().focus = pane_id;
-            let result = self.activate_document(document_id);
-            self.finish(result);
+            match hit {
+                DocumentTabHit::Activate(id) => {
+                    let result = self.activate_document(id);
+                    self.finish(result);
+                }
+                DocumentTabHit::Close(id) => {
+                    let result = self.close_document_id(id);
+                    self.finish(result);
+                }
+                DocumentTabHit::Scroll(direction) => {
+                    self.scroll_document_tabs(pane_id, direction);
+                }
+            }
             return;
         }
         if let Some((path, index)) = self.tab_at(mouse.column, mouse.row) {
@@ -203,6 +223,10 @@ impl App {
             self.state.explorer.move_selection(steps * 3);
             return;
         }
+        if let Some((pane_id, _)) = self.document_tab_hit(column, row) {
+            self.scroll_document_tabs(pane_id, steps.signum());
+            return;
+        }
         if let Some(pane_id) = self.pane_at(column, row) {
             self.scroll_pane(pane_id, steps * 3, 0);
         }
@@ -210,6 +234,10 @@ impl App {
 
     fn on_horizontal_wheel(&mut self, column: u16, row: u16, steps: isize) {
         if self.state.explorer.visible && contains(self.state.ui.explorer, column, row) {
+            return;
+        }
+        if let Some((pane_id, _)) = self.document_tab_hit(column, row) {
+            self.scroll_document_tabs(pane_id, steps.signum());
             return;
         }
         if let Some(pane_id) = self.pane_at(column, row) {
@@ -380,60 +408,127 @@ impl App {
         self.state.workspaces.active_mut().focus = pane_id;
     }
 
-    /// Document tabs inside a pane border. The width calculation matches
-    /// `ui::pane::render_tabs`, including the `|` separator after each tab.
-    fn document_tab_at(&self, column: u16, row: u16) -> Option<(PaneId, DocumentId)> {
+    /// Document tabs inside a pane border. Rendering and hit-testing share
+    /// `ui::pane::document_tabs` and `tab_strip_geometry`.
+    fn document_tab_hit(&self, column: u16, row: u16) -> Option<(PaneId, DocumentTabHit)> {
         if !self.state.config.appearance.show_document_tabs {
             return None;
         }
-        let tab_width = self.state.config.editor.tab_size.max(1);
-        for (pane_id, pane) in &self.state.panes {
-            let Some(rect) = self.state.ui.pane_rects.get(pane_id) else {
+        for pane_id in self.state.panes.keys() {
+            let Some((tabs, inner, geometry)) = self.document_tab_geometry(*pane_id) else {
                 continue;
             };
-            let inner = Block::default().borders(Borders::ALL).inner(*rect);
-            if inner.height < 3 || row != inner.y {
+            if row != inner.y || column < inner.x || column >= inner.x + inner.width {
                 continue;
             }
-            let right = inner.x.saturating_add(inner.width);
-            if column < inner.x || column >= right {
+            if geometry.overflow {
+                if column == inner.x {
+                    return Some((*pane_id, DocumentTabHit::Scroll(-1)));
+                }
+                if column == inner.x + inner.width - 1 {
+                    return Some((*pane_id, DocumentTabHit::Scroll(1)));
+                }
+            }
+            if !contains(geometry.content, column, row) {
                 continue;
             }
-            if let Some(id) = self.document_tab_in_pane(pane, inner, column, tab_width) {
-                return Some((*pane_id, id));
+            let x = column
+                .saturating_sub(geometry.content.x)
+                .saturating_add(geometry.scroll);
+            let index = tabs.partition_point(|tab| tab.start <= x);
+            if let Some(tab) = index.checked_sub(1).and_then(|index| tabs.get(index))
+                && x < tab.close_start().saturating_add(1)
+            {
+                let hit = if x >= tab.close_start() {
+                    DocumentTabHit::Close(tab.id)
+                } else {
+                    DocumentTabHit::Activate(tab.id)
+                };
+                return Some((*pane_id, hit));
             }
         }
         None
     }
 
-    fn document_tab_in_pane(
+    fn document_tab_geometry(
         &self,
-        pane: &crate::state::Pane,
-        inner: Rect,
-        column: u16,
-        tab_width: usize,
-    ) -> Option<DocumentId> {
-        let right = inner.x.saturating_add(inner.width);
-        let mut x = inner.x;
-        for id in &pane.tabs {
-            let Some(document) = self.state.documents.get(id) else {
-                continue;
-            };
-            let label = format!(
-                " {}{} ",
-                document.display_name(),
-                if document.dirty { "*" } else { "" }
-            );
-            let width = textutil::cells(&label, tab_width, 0);
-            if column >= x && column < x.saturating_add(width) {
-                return Some(*id);
-            }
-            x = x.saturating_add(width).saturating_add(1);
-            if x >= right {
-                break;
-            }
+        pane_id: PaneId,
+    ) -> Option<(Vec<DocumentTab>, Rect, crate::ui::pane::TabStripGeometry)> {
+        let pane = self.state.panes.get(&pane_id)?;
+        let rect = self.state.ui.pane_rects.get(&pane_id).copied()?;
+        let inner = Block::default().borders(Borders::ALL).inner(rect);
+        if inner.height < 3 || inner.width == 0 {
+            return None;
         }
-        None
+        let tab_width = self.state.config.editor.tab_size.max(1);
+        let tabs = document_tabs(&self.state, pane, tab_width);
+        let total = tabs
+            .last()
+            .map(|tab| tab.start.saturating_add(tab.width))
+            .unwrap_or(0);
+        let geometry = tab_strip_geometry(inner, total, pane.tab_scroll);
+        Some((tabs, inner, geometry))
+    }
+
+    fn scroll_document_tabs(&mut self, pane_id: PaneId, direction: isize) {
+        let Some((tabs, _, geometry)) = self.document_tab_geometry(pane_id) else {
+            return;
+        };
+        if !geometry.overflow {
+            return;
+        }
+        let target = if direction < 0 {
+            tabs.iter()
+                .filter(|tab| tab.start < geometry.scroll)
+                .map(|tab| tab.start)
+                .max()
+                .unwrap_or(0)
+        } else if direction > 0 {
+            tabs.iter()
+                .find(|tab| tab.start > geometry.scroll)
+                .map(|tab| tab.start)
+                .unwrap_or(geometry.max_scroll)
+        } else {
+            return;
+        };
+        let target = target.min(geometry.max_scroll);
+        if let Some(pane) = self.state.panes.get_mut(&pane_id) {
+            pane.tab_scroll = target;
+            pane.tab_follow = false;
+        }
+        self.state.focus = Focus::Pane(pane_id);
+        self.state.workspaces.active_mut().focus = pane_id;
+        self.dirty = true;
+    }
+
+    /// Keep the active document's tab visible after activation or a close.
+    pub(crate) fn reveal_document_tab(&mut self, pane_id: PaneId, id: DocumentId) {
+        if let Some(pane) = self.state.panes.get_mut(&pane_id) {
+            pane.tab_follow = true;
+        }
+        let Some((tabs, _, geometry)) = self.document_tab_geometry(pane_id) else {
+            return;
+        };
+        if !geometry.overflow {
+            return;
+        }
+        let Some(tab) = tabs.iter().find(|tab| tab.id == id) else {
+            return;
+        };
+        let mut scroll = geometry.scroll;
+        if tab.start < scroll {
+            scroll = tab.start;
+        } else if tab.start.saturating_add(tab.width) > scroll + geometry.content.width {
+            scroll = tab
+                .start
+                .saturating_add(tab.width)
+                .saturating_sub(geometry.content.width);
+        }
+        let scroll = scroll.min(geometry.max_scroll);
+        if let Some(pane) = self.state.panes.get_mut(&pane_id) {
+            pane.tab_scroll = scroll;
+        }
+        self.dirty = true;
     }
 
     fn tab_at(&self, column: u16, row: u16) -> Option<(Vec<usize>, usize)> {

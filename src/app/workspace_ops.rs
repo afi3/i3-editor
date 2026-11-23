@@ -41,6 +41,8 @@ impl App {
         pane.cursor = source.cursor;
         pane.scroll_top = source.scroll_top;
         pane.scroll_left = source.scroll_left;
+        pane.tab_scroll = source.tab_scroll;
+        pane.tab_follow = source.tab_follow;
         self.state.panes.insert(new_id, pane);
 
         let workspace = self.state.workspaces.active_mut();

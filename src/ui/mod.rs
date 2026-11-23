@@ -490,6 +490,27 @@ mod tests {
     }
 
     #[test]
+    fn document_tabs_render_close_buttons_and_scroll_arrows() {
+        let (mut state, dir) = state("x\n");
+        let pane_id = PaneId(1);
+        for index in 0..10 {
+            let id = DocumentId(100 + index);
+            let mut document = Document::empty(
+                id,
+                Some(dir.join(format!("long-document-name-{index}.txt"))),
+            );
+            document.rope = ropey::Rope::from_str("x\n");
+            state.documents.insert(id, document);
+            state.panes.get_mut(&pane_id).expect("pane").tabs.push(id);
+        }
+        let screen = draw(&mut state, 40, 10);
+        assert!(screen.contains('×'), "{screen}");
+        assert!(screen.contains('‹'), "{screen}");
+        assert!(screen.contains('›'), "{screen}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
     fn renders_every_pane_in_a_nested_split() {
         let (mut state, dir) = state("alpha\nbeta\n");
         let second = PaneId(2);

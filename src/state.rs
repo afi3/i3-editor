@@ -97,6 +97,10 @@ pub struct Pane {
     pub anchor: Option<usize>,
     pub scroll_top: usize,
     pub scroll_left: u16,
+    /// Horizontal offset of the document tab strip, in cells.
+    pub tab_scroll: u16,
+    /// Keep the active tab in view until the user scrolls the strip manually.
+    pub tab_follow: bool,
     pub target_col: Option<usize>,
     /// Secondary cursors/selections, kept in no particular order.
     pub extra: Vec<Cursor>,
@@ -112,6 +116,8 @@ impl Pane {
             anchor: None,
             scroll_top: 0,
             scroll_left: 0,
+            tab_scroll: 0,
+            tab_follow: true,
             target_col: None,
             extra: Vec::new(),
         }

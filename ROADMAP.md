@@ -669,6 +669,21 @@ v0.1.3 unless explicitly promoted into a workstream above.
 
 No unscoped backlog items remain.
 
+## Unreleased v0.1.7 — tab ergonomics
+
+- Every document tab renders a clickable `×`; closing a dirty document still
+  opens the discard prompt instead of losing the buffer.
+- An overflowing document tab strip reserves `‹` / `›` at its edges. Clicking an
+  arrow or using the wheel scrolls the strip; the active tab is revealed after
+  activation or close, and stays in view until the user scrolls manually.
+- Rendering, hit-testing, and scroll clamping share
+  `ui::pane::document_tabs` and `tab_strip_geometry`, so a click lands on the
+  close button or tab the user sees.
+
+Verification: `cargo test` (367 unit + 6 CLI process + 1 PTY smoke = 374),
+`cargo fmt --check`, `cargo clippy --all-targets --all-features`, and
+`forgeguard gate --changed --output compact`.
+
 ## Verification commands
 
 ```bash
@@ -679,4 +694,4 @@ cargo clippy --all-targets --all-features
 cargo run -- --dump-keymap
 ```
 
-Last recorded run: `cargo test` → 370 passed (363 unit + 6 CLI process + 1 PTY smoke), `cargo clippy` → 0 warnings.
+Last recorded run: `cargo test` → 374 passed (367 unit + 6 CLI process + 1 PTY smoke), `cargo clippy` → 0 warnings.

@@ -1024,6 +1024,116 @@ fn clicking_a_document_tab_activates_it() {
 }
 
 #[test]
+fn clicking_a_tab_close_button_closes_that_document() {
+    use ratatui::crossterm::event::KeyModifiers;
+
+    let (mut app, dir) = fixture("one\n");
+    let first = app.state.active_document().expect("first").id;
+    let other = dir.join("other.txt");
+    std::fs::write(&other, "two\n").expect("other");
+    app.open_document(other).expect("open other");
+
+    let pane_id = app.state.focused_pane_id().expect("pane");
+    let rect = app.state.ui.pane_rects[&pane_id];
+    let inner = ratatui::widgets::Block::default()
+        .borders(ratatui::widgets::Borders::ALL)
+        .inner(rect);
+    let tabs = crate::ui::pane::document_tabs(&app.state, &app.state.panes[&pane_id], 4);
+    let first = tabs.iter().find(|tab| tab.id == first).expect("first tab");
+    click(
+        &mut app,
+        inner.x + first.close_start(),
+        inner.y,
+        KeyModifiers::NONE,
+    );
+
+    assert!(!app.state.documents.contains_key(&first.id));
+    assert_eq!(app.state.panes[&pane_id].tabs.len(), 1);
+    assert_eq!(
+        app.state
+            .active_document()
+            .map(|document| document.display_name()),
+        Some("other.txt".to_string())
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn clicking_a_dirty_tab_close_button_asks_before_discarding() {
+    use ratatui::crossterm::event::KeyModifiers;
+
+    let (mut app, dir) = fixture("one\n");
+    app.dispatch(Command::InsertText("x".to_string()))
+        .expect("dirty the buffer");
+    let id = app.state.active_document().expect("document").id;
+    let pane_id = app.state.focused_pane_id().expect("pane");
+    let rect = app.state.ui.pane_rects[&pane_id];
+    let inner = ratatui::widgets::Block::default()
+        .borders(ratatui::widgets::Borders::ALL)
+        .inner(rect);
+    let tabs = crate::ui::pane::document_tabs(&app.state, &app.state.panes[&pane_id], 4);
+    let tab = tabs.iter().find(|tab| tab.id == id).expect("tab");
+    click(
+        &mut app,
+        inner.x + tab.close_start(),
+        inner.y,
+        KeyModifiers::NONE,
+    );
+
+    assert!(app.state.documents.contains_key(&id));
+    assert!(matches!(app.state.mode, InputMode::Prompt(_)));
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn tab_arrows_and_wheel_scroll_an_overflowing_strip() {
+    use ratatui::crossterm::event::MouseEventKind;
+
+    let (mut app, dir) = fixture("one\n");
+    for index in 0..10 {
+        let path = dir.join(format!("long-document-name-{index}.txt"));
+        std::fs::write(&path, "x\n").expect("file");
+        app.open_document(path).expect("open");
+    }
+    let pane_id = app.state.focused_pane_id().expect("pane");
+    let rect = app.state.ui.pane_rects[&pane_id];
+    let inner = ratatui::widgets::Block::default()
+        .borders(ratatui::widgets::Borders::ALL)
+        .inner(rect);
+    let tabs = crate::ui::pane::document_tabs(&app.state, &app.state.panes[&pane_id], 4);
+    let total = tabs
+        .last()
+        .map(|tab| tab.start.saturating_add(tab.width))
+        .unwrap_or(0);
+    assert!(
+        total > inner.width,
+        "tabs should overflow: {total} > {}",
+        inner.width
+    );
+
+    app.state.panes.get_mut(&pane_id).expect("pane").tab_scroll = 0;
+    click(
+        &mut app,
+        inner.x + inner.width - 1,
+        inner.y,
+        ratatui::crossterm::event::KeyModifiers::NONE,
+    );
+    assert!(app.state.panes[&pane_id].tab_scroll > 0);
+
+    click(
+        &mut app,
+        inner.x,
+        inner.y,
+        ratatui::crossterm::event::KeyModifiers::NONE,
+    );
+    assert_eq!(app.state.panes[&pane_id].tab_scroll, 0);
+
+    wheel(&mut app, MouseEventKind::ScrollDown, inner.x + 2, inner.y);
+    assert!(app.state.panes[&pane_id].tab_scroll > 0);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn clicking_an_explorer_row_selects_and_double_click_opens() {
     use ratatui::crossterm::event::KeyModifiers;
 

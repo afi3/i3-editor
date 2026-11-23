@@ -394,13 +394,27 @@ impl App {
         }
     }
 
+    fn reveal_active_tabs(&mut self) {
+        let targets: Vec<(PaneId, DocumentId)> = self
+            .state
+            .panes
+            .iter()
+            .filter(|(_, pane)| pane.tab_follow)
+            .filter_map(|(pane_id, pane)| pane.active.map(|id| (*pane_id, id)))
+            .collect();
+        for (pane_id, id) in targets {
+            self.reveal_document_tab(pane_id, id);
+        }
+    }
+
     fn draw(&mut self) -> Result<()> {
+        let size = self.terminal.size()?;
+        let area = ratatui::layout::Rect::new(0, 0, size.width, size.height);
+        ui::compute_layout(&mut self.state, area);
+        self.reveal_active_tabs();
         let App {
             terminal, state, ..
         } = self;
-        let size = terminal.size()?;
-        let area = ratatui::layout::Rect::new(0, 0, size.width, size.height);
-        ui::compute_layout(state, area);
         terminal.draw(|frame| ui::render(frame, state))?;
         self.resize_shell();
         Ok(())
@@ -629,7 +643,9 @@ impl App {
         pane.active = Some(id);
         pane.anchor = None;
         pane.cursor = pane.cursor.min(self.state.documents[&id].len_chars());
-        self.state.focus = Focus::Pane(pane.id);
+        let pane_id = pane.id;
+        self.state.focus = Focus::Pane(pane_id);
+        self.reveal_document_tab(pane_id, id);
         self.plugin_event("focus");
         Ok(())
     }

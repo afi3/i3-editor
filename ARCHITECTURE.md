@@ -100,8 +100,11 @@ the next draw.
 area, tab row, gutter, and scroll offset once; the renderer and mouse handlers
 both call them. A click therefore lands on the cell it visually points at, and a
 layout change cannot desynchronize hit-testing from drawing. Document tabs inside
-a pane reuse the renderer's label widths; clicking one focuses that pane and
-activates the document.
+a pane share `ui::pane::document_tabs` and `tab_strip_geometry`: clicking a label
+focuses that pane and activates the document, clicking `×` closes it, and an
+overflowing strip reserves `‹` / `›` for one-tab scrolling while the wheel scrolls
+it horizontally. `Pane::tab_scroll` is the stored offset; `tab_follow` keeps the
+active tab visible until the user scrolls manually.
 
 **Wheel scrolling moves the viewport, not the cursor.** `scroll_pane` clamps
 `scroll_top` to `line_count - rows` and `scroll_left` to the widest visible line.

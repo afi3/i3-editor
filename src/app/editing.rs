@@ -191,6 +191,10 @@ impl App {
         let Some(id) = pane.active else {
             return Ok(());
         };
+        self.close_document_id(id)
+    }
+
+    pub(crate) fn close_document_id(&mut self, id: DocumentId) -> Result<()> {
         let dirty = self
             .state
             .documents
@@ -208,7 +212,8 @@ impl App {
     }
 
     pub(crate) fn force_close_document(&mut self, id: DocumentId) {
-        for pane in self.state.panes.values_mut() {
+        let mut revealed = Vec::new();
+        for (pane_id, pane) in self.state.panes.iter_mut() {
             pane.tabs.retain(|tab| *tab != id);
             if pane.active == Some(id) {
                 pane.active = pane.tabs.first().copied();
@@ -216,6 +221,12 @@ impl App {
                 pane.anchor = None;
                 pane.scroll_top = 0;
                 pane.scroll_left = 0;
+                revealed.push((*pane_id, pane.active));
+            }
+        }
+        for (pane_id, active) in revealed {
+            if let Some(active) = active {
+                self.reveal_document_tab(pane_id, active);
             }
         }
         if !self.state.is_document_referenced(id) {
@@ -267,6 +278,7 @@ impl App {
         if let Some(document) = documents.get(&id) {
             pane.cursor = pane.cursor.min(document.len_chars());
         }
+        self.reveal_document_tab(pane_id, id);
         Ok(())
     }
 

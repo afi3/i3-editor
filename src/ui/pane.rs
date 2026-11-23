@@ -12,7 +12,89 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::editor::document::Document;
 use crate::editor::text as textutil;
-use crate::state::{AppState, Focus, Pane};
+use crate::state::{AppState, DocumentId, Focus, Pane};
+
+pub const DOCUMENT_TAB_CLOSE: &str = "×";
+pub const TAB_SCROLL_LEFT: &str = "‹";
+pub const TAB_SCROLL_RIGHT: &str = "›";
+
+/// One document tab in the strip. `start` and `width` are cell offsets relative
+/// to the strip content, including the close button and the `|` separator.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DocumentTab {
+    pub id: DocumentId,
+    pub label: String,
+    pub label_width: u16,
+    pub start: u16,
+    pub width: u16,
+}
+
+impl DocumentTab {
+    pub fn close_start(&self) -> u16 {
+        self.start.saturating_add(self.label_width)
+    }
+}
+
+/// The visible tab-strip region and its horizontal scroll state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TabStripGeometry {
+    pub content: Rect,
+    pub overflow: bool,
+    pub scroll: u16,
+    pub max_scroll: u16,
+}
+
+pub fn document_tabs(state: &AppState, pane: &Pane, tab_width: usize) -> Vec<DocumentTab> {
+    let mut start = 0u16;
+    let mut tabs = Vec::with_capacity(pane.tabs.len());
+    for id in &pane.tabs {
+        let Some(document) = state.documents.get(id) else {
+            continue;
+        };
+        let label = format!(
+            " {}{} ",
+            document.display_name(),
+            if document.dirty { "*" } else { "" }
+        );
+        let label_width = textutil::cells(&label, tab_width, 0);
+        let width = label_width.saturating_add(2);
+        tabs.push(DocumentTab {
+            id: *id,
+            label,
+            label_width,
+            start,
+            width,
+        });
+        start = start.saturating_add(width);
+    }
+    tabs
+}
+
+/// Reserve one cell on each side for scroll arrows only when the tabs overflow.
+pub fn tab_strip_geometry(area: Rect, total: u16, requested: u16) -> TabStripGeometry {
+    let overflow = area.width > 2 && total > area.width;
+    if !overflow {
+        return TabStripGeometry {
+            content: area,
+            overflow: false,
+            scroll: 0,
+            max_scroll: 0,
+        };
+    }
+    let content = Rect::new(
+        area.x.saturating_add(1),
+        area.y,
+        area.width.saturating_sub(2),
+        area.height,
+    );
+    let max_scroll = total.saturating_sub(content.width);
+    TabStripGeometry {
+        content,
+        overflow: true,
+        scroll: requested.min(max_scroll),
+        max_scroll,
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TextGeometry {
@@ -433,31 +515,52 @@ fn cursor_visual_row(
 fn render_tabs(frame: &mut Frame, state: &AppState, pane: &Pane, area: Rect) {
     let theme = state.theme;
     frame.buffer_mut().set_style(area, theme.base());
-    let mut spans = Vec::new();
-    for id in &pane.tabs {
-        let Some(document) = state.documents.get(id) else {
-            continue;
-        };
-        let active = pane.active == Some(*id);
+    let tab_width = state.config.editor.tab_size.max(1);
+    let tabs = document_tabs(state, pane, tab_width);
+    let total = tabs
+        .last()
+        .map(|tab| tab.start.saturating_add(tab.width))
+        .unwrap_or(0);
+    let geometry = tab_strip_geometry(area, total, pane.tab_scroll);
+    let mut spans = Vec::with_capacity(tabs.len() * 3);
+    for tab in &tabs {
+        let active = pane.active == Some(tab.id);
         let style = if active {
             theme.tab_active_style()
         } else {
             theme.tab_inactive_style()
         };
-        spans.push(Span::styled(
-            format!(
-                " {}{} ",
-                document.display_name(),
-                if document.dirty { "*" } else { "" }
-            ),
-            style,
-        ));
+        spans.push(Span::styled(tab.label.clone(), style));
+        spans.push(Span::styled(DOCUMENT_TAB_CLOSE, style));
         spans.push(Span::styled(
             "|",
             Style::default().bg(theme.background).fg(theme.gutter),
         ));
     }
-    frame.render_widget(Paragraph::new(Line::from(spans)), area);
+    frame.render_widget(
+        Paragraph::new(Line::from(spans)).scroll((0, geometry.scroll)),
+        geometry.content,
+    );
+    if geometry.overflow {
+        let left = if geometry.scroll > 0 {
+            theme.tab_active_style()
+        } else {
+            theme.tab_inactive_style()
+        };
+        let right = if geometry.scroll < geometry.max_scroll {
+            theme.tab_active_style()
+        } else {
+            theme.tab_inactive_style()
+        };
+        let buffer = frame.buffer_mut();
+        let right_x = area.x.saturating_add(area.width).saturating_sub(1);
+        buffer[(area.x, area.y)]
+            .set_symbol(TAB_SCROLL_LEFT)
+            .set_style(left);
+        buffer[(right_x, area.y)]
+            .set_symbol(TAB_SCROLL_RIGHT)
+            .set_style(right);
+    }
 }
 
 fn highlight_brackets(
