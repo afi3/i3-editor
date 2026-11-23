@@ -166,6 +166,7 @@ Mouse: click a pane to focus it, drag a pane border to resize the split.
   (horizontal wheel or `Shift`+wheel) scrolls four columns.
 - Explorer: click selects a row, double-click opens the file (or toggles a
   directory), wheel moves the selection three rows at a time.
+- Document tabs: click a tab to focus its pane and activate that file.
 - Container tab strip: click a tab to activate it.
 
 ### Help overlay

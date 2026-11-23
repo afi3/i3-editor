@@ -91,7 +91,9 @@ the next draw.
 `ui::pane::text_geometry` and `ui::overlay::explorer_geometry` compute the inner
 area, tab row, gutter, and scroll offset once; the renderer and mouse handlers
 both call them. A click therefore lands on the cell it visually points at, and a
-layout change cannot desynchronize hit-testing from drawing.
+layout change cannot desynchronize hit-testing from drawing. Document tabs inside
+a pane reuse the renderer's label widths; clicking one focuses that pane and
+activates the document.
 
 **Wheel scrolling moves the viewport, not the cursor.** `scroll_pane` clamps
 `scroll_top` to `line_count - rows` and `scroll_left` to the widest visible line.

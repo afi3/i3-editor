@@ -291,6 +291,17 @@ Verification: `cargo test` (342), `cargo fmt --check`,
 
 Git depth is complete for the v0.1.5 line.
 
+## Unreleased v0.1.6 — navigation polish
+
+- Document tabs inside a pane are clickable. Hit-testing uses the same label
+  widths as `ui::pane::render_tabs`; clicking focuses the pane and activates the
+  document.
+- A mouse regression test switches from a second document back to the first by
+  clicking its tab.
+
+Verification: `cargo test` (343), `cargo fmt --check`,
+`cargo clippy --all-targets --all-features`.
+
 Policy that applied during the cycle:
 
 - `Cargo.toml` stayed at `0.1.2` until every workstream below passed acceptance.
@@ -592,4 +603,4 @@ cargo clippy --all-targets --all-features
 cargo run -- --dump-keymap
 ```
 
-Last recorded run: `cargo test` → 342 passed, `cargo clippy` → 0 warnings.
+Last recorded run: `cargo test` → 343 passed, `cargo clippy` → 0 warnings.

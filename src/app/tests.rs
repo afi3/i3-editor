@@ -1008,6 +1008,33 @@ fn shell_mouse_reports_reach_the_program() {
 }
 
 #[test]
+fn clicking_a_document_tab_activates_it() {
+    use ratatui::crossterm::event::KeyModifiers;
+
+    let (mut app, dir) = fixture("one\n");
+    let other = dir.join("other.txt");
+    std::fs::write(&other, "two\n").expect("other");
+    app.open_document(other).expect("open other");
+    assert_eq!(
+        app.state
+            .active_document()
+            .map(|document| document.display_name()),
+        Some("other.txt".to_string())
+    );
+
+    let pane_id = app.state.focused_pane_id().expect("pane");
+    let rect = app.state.ui.pane_rects[&pane_id];
+    click(&mut app, rect.x + 1, rect.y + 1, KeyModifiers::NONE);
+    assert_eq!(
+        app.state
+            .active_document()
+            .map(|document| document.display_name()),
+        Some("note.txt".to_string())
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn clicking_an_explorer_row_selects_and_double_click_opens() {
     use ratatui::crossterm::event::KeyModifiers;
 

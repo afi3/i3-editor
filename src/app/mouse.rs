@@ -5,9 +5,10 @@ use std::time::{Duration, Instant};
 
 use ratatui::crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::Rect;
+use ratatui::widgets::{Block, Borders};
 
 use crate::editor::text as textutil;
-use crate::state::{AppState, Focus, InputMode, PaneId};
+use crate::state::{AppState, DocumentId, Focus, InputMode, PaneId};
 use crate::workspace::SplitAxis;
 use crate::workspace::layout::{LayoutNode, Separator, SplitMode, split_area, tabbed_regions};
 
@@ -97,6 +98,13 @@ impl App {
                 let result = self.switch_workspace(index);
                 self.finish(result);
             }
+            return;
+        }
+        if let Some((pane_id, document_id)) = self.document_tab_at(mouse.column, mouse.row) {
+            self.state.focus = Focus::Pane(pane_id);
+            self.state.workspaces.active_mut().focus = pane_id;
+            let result = self.activate_document(document_id);
+            self.finish(result);
             return;
         }
         if let Some((path, index)) = self.tab_at(mouse.column, mouse.row) {
@@ -370,6 +378,62 @@ impl App {
         pane.scroll_left = left;
         self.state.focus = Focus::Pane(pane_id);
         self.state.workspaces.active_mut().focus = pane_id;
+    }
+
+    /// Document tabs inside a pane border. The width calculation matches
+    /// `ui::pane::render_tabs`, including the `|` separator after each tab.
+    fn document_tab_at(&self, column: u16, row: u16) -> Option<(PaneId, DocumentId)> {
+        if !self.state.config.appearance.show_document_tabs {
+            return None;
+        }
+        let tab_width = self.state.config.editor.tab_size.max(1);
+        for (pane_id, pane) in &self.state.panes {
+            let Some(rect) = self.state.ui.pane_rects.get(pane_id) else {
+                continue;
+            };
+            let inner = Block::default().borders(Borders::ALL).inner(*rect);
+            if inner.height < 3 || row != inner.y {
+                continue;
+            }
+            let right = inner.x.saturating_add(inner.width);
+            if column < inner.x || column >= right {
+                continue;
+            }
+            if let Some(id) = self.document_tab_in_pane(pane, inner, column, tab_width) {
+                return Some((*pane_id, id));
+            }
+        }
+        None
+    }
+
+    fn document_tab_in_pane(
+        &self,
+        pane: &crate::state::Pane,
+        inner: Rect,
+        column: u16,
+        tab_width: usize,
+    ) -> Option<DocumentId> {
+        let right = inner.x.saturating_add(inner.width);
+        let mut x = inner.x;
+        for id in &pane.tabs {
+            let Some(document) = self.state.documents.get(id) else {
+                continue;
+            };
+            let label = format!(
+                " {}{} ",
+                document.display_name(),
+                if document.dirty { "*" } else { "" }
+            );
+            let width = textutil::cells(&label, tab_width, 0);
+            if column >= x && column < x.saturating_add(width) {
+                return Some(*id);
+            }
+            x = x.saturating_add(width).saturating_add(1);
+            if x >= right {
+                break;
+            }
+        }
+        None
     }
 
     fn tab_at(&self, column: u16, row: u16) -> Option<(Vec<usize>, usize)> {
