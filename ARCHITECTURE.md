@@ -142,10 +142,13 @@ mouse reports. `vt100::Parser` turns bytes into a screen grid; rendering maps
 cells (colors, bold, underline, inverse) onto the theme and places the terminal
 cursor when the panel has focus. Resizing recomputes both the PTY size and the
 parser grid, and the panel reserves rows before panes are laid out, so the
-minimum pane size still holds. Dropping a `ShellPanel` kills its child. The
-parser also tracks the program's mouse protocol mode and encoding; while active,
-mouse events inside the panel body are forwarded as SGR, UTF-8, or X10 reports
-gated by that mode, and the wheel no longer scrolls the local scrollback.
+minimum pane size still holds. Dropping a `ShellPanel` kills and waits for its
+child. The parser also tracks the program's mouse protocol mode and encoding;
+while active, mouse events inside the panel body are forwarded as SGR, UTF-8, or
+X10 reports gated by that mode, and the wheel no longer scrolls the local
+scrollback. Scrollback is clamped to the configured limit, and `encode_key`
+emits xterm CSI modifier parameters for navigation/function keys instead of
+dropping Ctrl/Alt/Shift.
 
 **Nothing modified is discarded without an explicit choice.** `Ctrl+Q` with
 modified documents opens a prompt offering save-all/discard-all (discard only for
@@ -225,7 +228,9 @@ over a channel; an atomic flag cancels the previous worker when the query
 changes, and a dropped receiver stops it at its next send. The app drains the
 channel once per frame, appends labels to the prompt without fuzzy-refiltering
 them (they are already matches), and jumps by converting line plus char column
-into a document offset. The worker skips files above 1 MiB and invalid UTF-8, and
+into a document offset. Preview strings are capped to a window around the match
+and reuse the current line's char buffer, so a very long line cannot multiply
+1000 stored previews. The worker skips files above 1 MiB and invalid UTF-8, and
 stops at 1000 matches.
 
 **Replace in Files is the same worker plus one explicit writer.**

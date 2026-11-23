@@ -333,10 +333,17 @@ four platform assets are the release milestone.
 - `[profile.release]` uses thin LTO, one codegen unit, and stripped symbols.
   Release binary on this machine: **13.3 MB → 11.4 MB** (about 14% smaller).
 - README now has a CI badge and no longer calls the suite “integration tests”.
+- Find in Files previews are capped to about 160 chars around the match and reuse
+  the current line's char buffer; a 128 KiB single-line regression keeps 1000
+  previews under 1 MB instead of storing the whole line 1000 times. Columns are
+  char offsets, covered by a Unicode test.
+- Terminal scrollback is clamped to `[terminal] scrollback`; modified arrows,
+  Home/End, Insert/Delete, PageUp/PageDown, and F1–F12 use xterm CSI modifiers;
+  `Ctrl+[ \ ] ^ _` are forwarded; killed shells are reaped with `wait()`.
 
-Verification: `cargo test` (344), `cargo fmt --check`,
+Verification: `cargo test` (348), `cargo fmt --check`,
 `cargo clippy --all-targets --all-features`, `cargo +1.91.0 check --locked`,
-and `cargo build --release --locked`.
+`cargo audit`, and `cargo build --release --locked`.
 
 Policy that applied during the cycle:
 
@@ -639,4 +646,4 @@ cargo clippy --all-targets --all-features
 cargo run -- --dump-keymap
 ```
 
-Last recorded run: `cargo test` → 344 passed, `cargo clippy` → 0 warnings.
+Last recorded run: `cargo test` → 348 passed, `cargo clippy` → 0 warnings.

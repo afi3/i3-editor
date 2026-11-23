@@ -233,9 +233,10 @@ cannot distinguish `Ctrl+Shift+F`; run `find_in_files` from the command palette
 
 - Matching uses the shared search options above: literal or regex, whole word,
   and case-insensitive unless `Alt+C` is on.
-- Results show `path:line:column` plus the matching line. `Up` / `Down` choose a
-  result; `Enter` opens that file and puts the cursor on the match; `Esc` cancels
-  the scan and closes the prompt.
+- Results show `path:line:column` plus a preview window capped to about 160
+  characters around the match. Long lines do not inflate memory; the column is a
+  char offset. `Up` / `Down` choose a result; `Enter` opens that file and puts
+  the cursor on the match; `Esc` cancels the scan and closes the prompt.
 - Typing restarts the scan. The previous worker is cancelled, so only the newest
   query can publish results.
 - The scan searches files on disk, not unsaved buffer contents, skips files above
@@ -640,7 +641,11 @@ same command closes the panel and kills every shell in it.
   (`workspace_terminal_dir`, default: the explorer root), except a tab opened by
   `reveal_in_terminal`, which starts in the revealed directory.
 - While the panel has focus, every key is forwarded to the shell except `Ctrl+Q`,
-  `F1`, the terminal toggle, and the terminal-tab commands.
+  `F1`, the terminal toggle, and the terminal-tab commands. Modified arrows,
+  Home/End, Insert/Delete, PageUp/PageDown, and F1–F12 use xterm CSI modifier
+  sequences; `Ctrl+[`, `Ctrl+\`, `Ctrl+]`, `Ctrl+^`, and `Ctrl+_` are forwarded.
+- Scrollback is clamped to `[terminal] scrollback`, not a fixed 2000 lines.
+  Dropping a shell kills and reaps its child process.
 - Click the panel to focus it. When the program in the shell enables mouse
   reporting (`DECSET 1000`, `1002`, or `1003`), clicks, drags, and wheel events
   inside the panel are sent to it using the encoding it asked for (SGR, UTF-8,

@@ -43,6 +43,7 @@ pub struct ShellPanel {
     rows: u16,
     cols: u16,
     scrollback: usize,
+    max_scrollback: usize,
     title: String,
     cwd: std::path::PathBuf,
     exit_reported: bool,
@@ -121,6 +122,7 @@ impl ShellPanel {
             rows,
             cols,
             scrollback: 0,
+            max_scrollback: scrollback,
             title: shell.to_string(),
             cwd: cwd.to_path_buf(),
             exit_reported: false,
@@ -197,7 +199,8 @@ impl ShellPanel {
 
     /// Scroll the visible window into scrollback. Returns true on change.
     pub fn scroll(&mut self, delta: isize) -> bool {
-        let next = (self.scrollback as isize + delta).clamp(0, 2000) as usize;
+        let next =
+            (self.scrollback as isize + delta).clamp(0, self.max_scrollback as isize) as usize;
         if next == self.scrollback {
             return false;
         }
@@ -244,6 +247,7 @@ impl ShellPanel {
 impl Drop for ShellPanel {
     fn drop(&mut self) {
         let _ = self.child.kill();
+        let _ = self.child.wait();
     }
 }
 
@@ -315,44 +319,139 @@ impl Terminals {
 
 /// Encode a key event as the byte sequence a terminal would send.
 pub fn encode_key(key: KeyEvent) -> Vec<u8> {
-    let mut out = Vec::new();
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
     let alt = key.modifiers.contains(KeyModifiers::ALT);
-    if alt {
-        out.push(0x1b);
+    let shift = key.modifiers.contains(KeyModifiers::SHIFT);
+    let modifier = 1 + u8::from(shift) + if alt { 2 } else { 0 } + if ctrl { 4 } else { 0 };
+    if let KeyCode::Char(ch) = key.code {
+        return encode_char(ch, ctrl, alt);
     }
-    match key.code {
-        KeyCode::Char(ch) => {
-            if ctrl {
-                let lower = ch.to_ascii_lowercase();
-                if lower.is_ascii_lowercase() {
-                    out.push((lower as u8) & 0x1f);
-                } else if ch == ' ' {
-                    out.push(0);
-                }
-            } else {
-                out.extend(ch.to_string().bytes());
+    encode_special(key.code, modifier, modifier > 1)
+}
+
+fn encode_char(ch: char, ctrl: bool, alt: bool) -> Vec<u8> {
+    let mut out = Vec::new();
+    if ctrl {
+        let lower = ch.to_ascii_lowercase();
+        let byte = match lower {
+            'a'..='z' => Some((lower as u8) & 0x1f),
+            '[' => Some(0x1b),
+            '\\' => Some(0x1c),
+            ']' => Some(0x1d),
+            '^' => Some(0x1e),
+            '_' => Some(0x1f),
+            ' ' => Some(0),
+            _ => None,
+        };
+        if let Some(byte) = byte {
+            if alt {
+                out.push(0x1b);
             }
+            out.push(byte);
         }
-        KeyCode::Enter => out.push(b'\r'),
-        KeyCode::Tab => out.push(b'\t'),
-        KeyCode::Backspace => out.push(0x7f),
-        KeyCode::Esc => out.push(0x1b),
-        KeyCode::Up => out.extend(b"\x1b[A"),
-        KeyCode::Down => out.extend(b"\x1b[B"),
-        KeyCode::Right => out.extend(b"\x1b[C"),
-        KeyCode::Left => out.extend(b"\x1b[D"),
-        KeyCode::Home => out.extend(b"\x1b[H"),
-        KeyCode::End => out.extend(b"\x1b[F"),
-        KeyCode::Delete => out.extend(b"\x1b[3~"),
-        KeyCode::Insert => out.extend(b"\x1b[2~"),
-        KeyCode::PageUp => out.extend(b"\x1b[5~"),
-        KeyCode::PageDown => out.extend(b"\x1b[6~"),
-        KeyCode::BackTab => out.extend(b"\x1b[Z"),
-        KeyCode::F(number) => out.extend(function_key(number)),
-        _ => {}
+    } else {
+        if alt {
+            out.push(0x1b);
+        }
+        out.extend(ch.to_string().bytes());
     }
     out
+}
+
+fn encode_special(code: KeyCode, modifier: u8, modified: bool) -> Vec<u8> {
+    match code {
+        KeyCode::Enter => vec![b'\r'],
+        KeyCode::Tab => vec![b'\t'],
+        KeyCode::Backspace => vec![0x7f],
+        KeyCode::Esc => vec![0x1b],
+        KeyCode::Up
+        | KeyCode::Down
+        | KeyCode::Right
+        | KeyCode::Left
+        | KeyCode::Home
+        | KeyCode::End => encode_navigation(code, modifier, modified),
+        KeyCode::Delete | KeyCode::Insert | KeyCode::PageUp | KeyCode::PageDown => {
+            encode_tilde_key(code, modifier, modified)
+        }
+        KeyCode::BackTab => b"\x1b[Z".to_vec(),
+        KeyCode::F(number) => {
+            let mut out = Vec::new();
+            push_function(&mut out, number, modifier, modified);
+            out
+        }
+        _ => Vec::new(),
+    }
+}
+
+fn encode_navigation(code: KeyCode, modifier: u8, modified: bool) -> Vec<u8> {
+    let final_byte = match code {
+        KeyCode::Up => b'A',
+        KeyCode::Down => b'B',
+        KeyCode::Right => b'C',
+        KeyCode::Left => b'D',
+        KeyCode::Home => b'H',
+        KeyCode::End => b'F',
+        _ => return Vec::new(),
+    };
+    let mut out = Vec::new();
+    push_csi(&mut out, final_byte, modifier, modified);
+    out
+}
+
+fn encode_tilde_key(code: KeyCode, modifier: u8, modified: bool) -> Vec<u8> {
+    let number = match code {
+        KeyCode::Delete => 3,
+        KeyCode::Insert => 2,
+        KeyCode::PageUp => 5,
+        KeyCode::PageDown => 6,
+        _ => return Vec::new(),
+    };
+    let mut out = Vec::new();
+    push_tilde(&mut out, number, modifier, modified);
+    out
+}
+
+fn push_csi(out: &mut Vec<u8>, final_byte: u8, modifier: u8, modified: bool) {
+    if modified {
+        out.extend(format!("\x1b[1;{modifier}{}", final_byte as char).bytes());
+    } else {
+        out.extend([0x1b, b'[', final_byte]);
+    }
+}
+
+fn push_tilde(out: &mut Vec<u8>, code: u8, modifier: u8, modified: bool) {
+    if modified {
+        out.extend(format!("\x1b[{code};{modifier}~").bytes());
+    } else {
+        out.extend(format!("\x1b[{code}~").bytes());
+    }
+}
+
+fn push_function(out: &mut Vec<u8>, number: u8, modifier: u8, modified: bool) {
+    if !modified {
+        out.extend(function_key(number));
+        return;
+    }
+    match number {
+        1..=4 => {
+            let final_byte = b'P' + number - 1;
+            out.extend(format!("\x1b[1;{modifier}{}", final_byte as char).bytes());
+        }
+        5..=12 => {
+            let code = match number {
+                5 => 15,
+                6 => 17,
+                7 => 18,
+                8 => 19,
+                9 => 20,
+                10 => 21,
+                11 => 23,
+                _ => 24,
+            };
+            out.extend(format!("\x1b[{code};{modifier}~").bytes());
+        }
+        _ => {}
+    }
 }
 
 fn button_number(button: MouseButton) -> u8 {
@@ -527,6 +626,49 @@ mod tests {
             encode_key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::ALT)),
             vec![0x1b, b'a']
         );
+    }
+
+    #[test]
+    fn encodes_modified_navigation_and_function_keys() {
+        assert_eq!(
+            encode_key(KeyEvent::new(KeyCode::Left, KeyModifiers::CONTROL)),
+            b"\x1b[1;5D".to_vec()
+        );
+        assert_eq!(
+            encode_key(KeyEvent::new(KeyCode::Up, KeyModifiers::SHIFT)),
+            b"\x1b[1;2A".to_vec()
+        );
+        assert_eq!(
+            encode_key(KeyEvent::new(KeyCode::Left, KeyModifiers::ALT)),
+            b"\x1b[1;3D".to_vec()
+        );
+        assert_eq!(
+            encode_key(KeyEvent::new(
+                KeyCode::F(5),
+                KeyModifiers::CONTROL | KeyModifiers::SHIFT
+            )),
+            b"\x1b[15;6~".to_vec()
+        );
+        assert_eq!(
+            encode_key(KeyEvent::new(KeyCode::Char('['), KeyModifiers::CONTROL)),
+            vec![0x1b]
+        );
+        assert_eq!(
+            encode_key(KeyEvent::new(KeyCode::Char('_'), KeyModifiers::CONTROL)),
+            vec![0x1f]
+        );
+    }
+
+    #[test]
+    fn scrollback_uses_the_configured_limit() {
+        let dir = std::env::temp_dir().join(format!("i3-shell-scroll-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let mut panel = ShellPanel::spawn_shell(&dir, 4, 40, "/bin/sh", 5000).expect("shell");
+        assert!(panel.scroll(10_000));
+        assert_eq!(panel.scrollback, 5000);
+        assert!(!panel.scroll(1));
+        drop(panel);
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
