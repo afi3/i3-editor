@@ -26,10 +26,11 @@ from PIL import Image, ImageDraw, ImageFont
 ROOT = Path(__file__).resolve().parent.parent
 BIN = ROOT / "target/release/i3-editor"
 OUT = ROOT / "docs" / "demo.gif"
-COLS, ROWS = 100, 30
-FPS = 8
+COLS, ROWS = 110, 32
+FPS = 12
+PADDING = 12
 FONT_PATH = "/System/Library/Fonts/Menlo.ttc"
-FONT_SIZE = 13
+FONT_SIZE = 14
 
 NAMED = {
     "black": (0, 0, 0),
@@ -102,14 +103,53 @@ def colour(name, default):
 
 
 def make_workspace(base: Path) -> tuple[Path, Path]:
+    base = base.resolve()
     (base / "src").mkdir(parents=True)
     (base / "docs").mkdir()
     (base / "src" / "main.rs").write_text(SAMPLE)
+    (base / "src" / "lib.rs").write_text(
+        """\
+//! Small library used by the demo binary.
+
+pub fn tab_title(name: &str, dirty: bool) -> String {
+    if dirty {
+        format!("{name} *")
+    } else {
+        name.to_string()
+    }
+}
+
+pub fn clamp_tab(value: usize, len: usize) -> usize {
+    value.min(len.saturating_sub(1))
+}
+"""
+    )
     (base / "Cargo.toml").write_text(
         '[package]\nname = "demo"\nversion = "0.1.0"\nedition = "2021"\n'
     )
-    (base / "README.md").write_text("# demo\n\nA workspace used for the README recording.\n")
-    (base / "docs" / "notes.md").write_text("## notes\n\n- panes\n- tabs\n- themes\n")
+    (base / "README.md").write_text(
+        """\
+# demo
+
+A workspace used for the README recording.
+
+- keyboard-first panes
+- document tabs with close buttons
+- a terminal panel
+"""
+    )
+    (base / "docs" / "notes.md").write_text(
+        """\
+## notes
+
+- panes
+- tabs
+- themes
+- search
+
+> The right edge of a long file gets a scrollbar.
+"""
+    )
 
     config = base.parent / "cfg" / "i3-editor"
     themes = config / "themes"
@@ -135,6 +175,27 @@ def make_workspace(base: Path) -> tuple[Path, Path]:
         'operator = "#abb2bf"\n'
         'punctuation = "#8b93a1"\n'
     )
+    main = base / "src" / "main.rs"
+    (config / "session.toml").write_text(
+        "version = 1\n"
+        f'root = "{base}"\n'
+        "active = 0\n"
+        "show_hidden = false\n"
+        f'documents = ["{main}"]\n\n'
+        "[[workspaces]]\n"
+        'name = "work"\n'
+        f'root = "{base}"\n'
+        "focus = 0\n\n"
+        "[workspaces.layout]\n"
+        'kind = "pane"\n'
+        "index = 0\n\n"
+        "[[workspaces.panes]]\n"
+        "cursor = 0\n"
+        "scroll_top = 0\n"
+        "scroll_left = 0\n"
+        "active = 0\n"
+        "tabs = [0]\n"
+    )
     return base, config.parent
 
 
@@ -147,21 +208,44 @@ def schedule():
         t += delay
         keys.append((t, data))
 
-    at(0.6, b"\x1bOR")                 # F3 split left/right
-    at(1.2, b"\x1bOP")                 # F1 palette
-    at(0.4, b"toggle_term")            # unique prefix of toggle_terminal
-    at(0.3, b"\r")
-    at(1.0, b"printf 'terminal panel ready\\n'\r")
-    at(1.8, b"\x1bOP")
-    at(0.4, b"next_theme")
-    at(0.3, b"\r")
-    at(1.4, b"\x1bOP")
-    at(0.4, b"next_theme")
-    at(0.3, b"\r")
-    at(1.6, b"\x1b[<0;30;6M\x1b[<0;30;6m")   # click into the left pane
-    at(0.5, b"// edited live\r")
-    at(0.8, b"\x11")                  # Ctrl+Q, dirty document
-    at(1.2, b"\x1b[B")                # choose Discard all and quit
+    def type_text(text, delay=0.045):
+        for char in text:
+            at(delay, char.encode())
+
+    # Show the vertical scrollbar, then return to the top.
+    at(0.8, b"\x1b[6~")
+    at(0.6, b"\x1b[6~")
+    at(0.8, b"\x1b[5~")
+    at(0.6, b"\x1b[5~")
+
+    # Open more documents through quick open; the tab strip gets close buttons.
+    at(0.8, b"\x10")
+    type_text("readme")
+    at(0.5, b"\r")
+    at(0.8, b"\x10")
+    type_text("lib.rs")
+    at(0.5, b"\r")
+    at(0.8, b"\x10")
+    type_text("notes")
+    at(0.5, b"\r")
+
+    # Search the active document.
+    at(0.9, b"\x06")
+    type_text("tab")
+    at(0.6, b"\r")
+
+    # Split the pane and open the terminal panel.
+    at(0.9, b"\x1bOR")                 # F3 split left/right
+    at(1.0, b"\x1bOP")                 # F1 palette
+    type_text("toggle_terminal")
+    at(0.5, b"\r")
+    at(0.8, b"printf 'ready for the demo\\n'\r")
+
+    # Focus the editor and make one live edit, then quit.
+    at(2.0, b"\x1b[<0;30;6M\x1b[<0;30;6m")
+    at(0.5, b"// live edit\r")
+    at(0.9, b"\x11")
+    at(1.0, b"\x1b[B")
     at(0.4, b"\r")
     return keys
 
@@ -174,8 +258,8 @@ def capture(workdir: Path, cfg_root: Path, keys):
         env.pop("NO_COLOR", None)
         env["TERM"] = "xterm-256color"
         env["XDG_CONFIG_HOME"] = str(cfg_root)
-        target = str(workdir / "src" / "main.rs")
-        os.execve(str(BIN), ["i3-editor", target], env)
+        os.chdir(workdir)
+        os.execve(str(BIN), ["i3-editor"], env)
     fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", ROWS, COLS, 0, 0))
 
     events = []
@@ -203,7 +287,7 @@ def capture(workdir: Path, cfg_root: Path, keys):
                 break
             events.append((time.monotonic() - start, data))
             if not answered and b"\x1b[c" in data:
-                os.write(fd, b"\x1b[?1;2c\x1b[?0u")
+                os.write(fd, b"\x1b[?1u\x1b[?1;2c")
                 answered = True
     try:
         os.kill(pid, signal.SIGKILL)
@@ -220,7 +304,7 @@ def main():
     if not BIN.is_file():
         sys.exit(f"missing {BIN}; run `cargo build --release` first")
 
-    temp = Path(tempfile.mkdtemp(prefix="i3-demo-"))
+    temp = Path(tempfile.mkdtemp(prefix="demo-", dir="/tmp")).resolve()
     workdir, cfg_root = make_workspace(temp / "work")
     events = capture(workdir, cfg_root, schedule())
 
@@ -254,12 +338,21 @@ def main():
         loop=0,
         optimize=True,
     )
-    print(f"wrote {OUT} ({len(frames)} frames, {width}x{height})")
+    print(f"wrote {OUT} ({len(frames)} frames, {width + 2 * PADDING}x{height + 2 * PADDING})")
 
 
 def render(screen, font, advance, line_height, width, height):
-    image = Image.new("RGB", (width, height), DEFAULT_BG)
+    total_width = width + 2 * PADDING
+    total_height = height + 2 * PADDING
+    image = Image.new("RGB", (total_width, total_height), (9, 9, 13))
     draw = ImageDraw.Draw(image)
+    draw.rounded_rectangle(
+        (0, 0, total_width - 1, total_height - 1),
+        radius=10,
+        fill=DEFAULT_BG,
+        outline=(48, 48, 64),
+        width=1,
+    )
     for row in range(ROWS):
         runs = []
         for col in range(COLS):
@@ -271,9 +364,9 @@ def render(screen, font, advance, line_height, width, height):
             else:
                 runs.append(((fg, bg), [cell.data or " "]))
         for index, ((fg, bg), chars) in enumerate(runs):
-            start = sum(len(c) for _, c in runs[:index]) * advance
+            start = PADDING + sum(len(c) for _, c in runs[:index]) * advance
             text = "".join(chars)
-            y = row * line_height
+            y = PADDING + row * line_height
             if bg != DEFAULT_BG:
                 draw.rectangle(
                     (start, y, start + len(text) * advance, y + line_height), fill=bg
@@ -285,8 +378,8 @@ def render(screen, font, advance, line_height, width, height):
         cell = screen.buffer[cursor.y][cursor.x]
         fg = colour(cell.bg, DEFAULT_BG)
         bg = colour(cell.fg, DEFAULT_FG)
-        x = cursor.x * advance
-        y = cursor.y * line_height
+        x = PADDING + cursor.x * advance
+        y = PADDING + cursor.y * line_height
         draw.rectangle((x, y, x + advance, y + line_height), fill=fg)
         draw.text((x, y), cell.data or " ", font=font, fill=bg)
     return image
