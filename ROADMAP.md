@@ -263,9 +263,13 @@ Release record: `cargo fmt --check`, `cargo test` (331), and
 --changed` reports no errors or warnings. Version `0.1.4`, tag `v0.1.4`, and the
 four platform assets are the release milestone.
 
-## Unreleased v0.1.5 — Git depth
+## Release v0.1.5 — shipped
 
-`v0.1.5` stays on the hardening line; `v0.2.x` is still reserved for AI/MCP.
+Shipped as `v0.1.5` on 2026-11-23. This release contains Git depth, clickable
+document tabs, and quit confirmation. `v0.1.x` remains the hardening line;
+`v0.2.x` is still reserved for AI/MCP.
+
+### Git depth
 
 - `git::hunks` splits a single-file diff into independently applicable patches.
 - `git_stage_hunk` applies one hunk to the index with `git apply --cached`;
@@ -291,7 +295,7 @@ Verification: `cargo test` (342), `cargo fmt --check`,
 
 Git depth is complete for the v0.1.5 line.
 
-## Unreleased v0.1.6 — navigation polish
+### Navigation polish
 
 - Document tabs inside a pane are clickable. Hit-testing uses the same label
   widths as `ui::pane::render_tabs`; clicking focuses the pane and activates the
@@ -302,7 +306,7 @@ Git depth is complete for the v0.1.5 line.
 Verification: `cargo test` (343), `cargo fmt --check`,
 `cargo clippy --all-targets --all-features`.
 
-## Unreleased v0.1.7 — exit confirmation
+### Exit confirmation
 
 - `Ctrl+Q` no longer exits a clean session immediately: it opens a `Quit` /
   `Cancel` prompt. The dirty-session prompt now also includes `Cancel`.
@@ -310,6 +314,11 @@ Verification: `cargo test` (343), `cargo fmt --check`,
 
 Verification: `cargo test` (344), `cargo fmt --check`,
 `cargo clippy --all-targets --all-features`.
+
+Release record: `cargo fmt --check`, `cargo test` (344), and
+`cargo clippy --all-targets --all-features` are clean; `forgeguard gate
+--changed` reports no errors or warnings. Version `0.1.5`, tag `v0.1.5`, and the
+four platform assets are the release milestone.
 
 Policy that applied during the cycle:
 
