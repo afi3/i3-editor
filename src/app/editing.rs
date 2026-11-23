@@ -21,7 +21,10 @@ impl App {
             .map(|(id, _)| *id)
             .collect();
         if dirty.is_empty() {
-            self.state.should_quit = true;
+            let mut prompt = crate::input::PromptState::new(PromptKind::QuitConfirm);
+            prompt.set_candidates(vec!["Quit".to_string(), "Cancel".to_string()]);
+            self.state.mode = crate::state::InputMode::Prompt(prompt);
+            self.notify("quit? Enter confirms, Esc cancels");
             return Ok(());
         }
         let all_saved = dirty
@@ -32,11 +35,12 @@ impl App {
             candidates.push("Save all and quit".to_string());
         }
         candidates.push("Discard all and quit".to_string());
+        candidates.push("Cancel".to_string());
         let mut prompt = crate::input::PromptState::new(PromptKind::QuitDirty);
         prompt.set_candidates(candidates);
         self.state.mode = crate::state::InputMode::Prompt(prompt);
         self.notify(format!(
-            "{} modified document(s): save all or discard all",
+            "{} modified document(s): save, discard, or cancel",
             dirty.len()
         ));
         Ok(())

@@ -386,7 +386,8 @@ the terminal unusable.
 **Dirty documents are never dropped implicitly.** Closing a dirty document opens
 a discard prompt. Closing a pane keeps its dirty documents registered (orphaned)
 until the user saves or discards them, and closing a workspace with unsaved
-changes is refused with a message.
+changes is refused with a message. Quit always opens a confirmation prompt:
+clean sessions offer Quit/Cancel, dirty sessions add Save all/Discard all.
 
 ## Data flow
 

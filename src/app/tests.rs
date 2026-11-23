@@ -1230,10 +1230,28 @@ fn shell_focus_routes_keys_away_from_the_document() {
 }
 
 #[test]
-fn quit_with_clean_documents_exits_immediately() {
+fn quit_with_clean_documents_asks_first() {
     let (mut app, dir) = fixture("x\n");
     app.dispatch(Command::Quit).expect("quit");
+    assert!(!app.state.should_quit, "clean quit must still confirm");
+    let InputMode::Prompt(prompt) = &app.state.mode else {
+        panic!("quit confirmation missing")
+    };
+    assert_eq!(prompt.kind, crate::input::PromptKind::QuitConfirm);
+    assert_eq!(prompt.selected_candidate(), Some("Quit"));
+    app.submit_prompt().expect("confirm quit");
     assert!(app.state.should_quit);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn quit_confirmation_can_be_cancelled() {
+    let (mut app, dir) = fixture("x\n");
+    app.dispatch(Command::Quit).expect("quit");
+    assert!(!app.state.should_quit);
+    app.cancel_prompt();
+    assert!(!app.state.should_quit);
+    assert!(matches!(app.state.mode, InputMode::Normal));
     std::fs::remove_dir_all(&dir).ok();
 }
 

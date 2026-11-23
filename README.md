@@ -588,8 +588,9 @@ quickest way to confirm a config and theme file were read.
 
 ### Saving and quitting
 
-- `Ctrl+Q` with modified documents opens a prompt with `Save all and quit` and
-  `Discard all and quit`; arrow keys choose, `Enter` confirms, `Esc` cancels.
+- `Ctrl+Q` always confirms first. Clean sessions offer `Quit` / `Cancel`;
+  modified documents offer `Save all and quit` / `Discard all and quit` /
+  `Cancel`. Arrow keys choose, `Enter` confirms, `Esc` cancels.
 - `Ctrl+W` on a modified document asks before discarding.
 - `F6` is refused while the pane still holds modified documents; save or close
   them first, so no document becomes unreachable.

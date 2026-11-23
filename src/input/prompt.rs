@@ -26,6 +26,7 @@ pub enum PromptKind {
     Delete,
     Discard,
     QuitDirty,
+    QuitConfirm,
     GoToLine,
     Symbols,
     WorkspaceRoot,
@@ -139,6 +140,7 @@ impl PromptKind {
         match self {
             PromptKind::Discard => "Unsaved changes: Enter discards, Esc cancels",
             PromptKind::QuitDirty => "Unsaved changes",
+            PromptKind::QuitConfirm => "Quit i3-editor?",
             PromptKind::Theme => "Theme",
             PromptKind::RenameWorkspace => "Rename Workspace",
             PromptKind::TerminalRename => "Rename Terminal",
@@ -155,6 +157,7 @@ impl PromptKind {
             | PromptKind::Messages
             | PromptKind::Discard
             | PromptKind::QuitDirty
+            | PromptKind::QuitConfirm
             | PromptKind::Overwrite
             | PromptKind::ExternalChange
             | PromptKind::Recovery => 0,
@@ -176,6 +179,7 @@ impl PromptKind {
                 | PromptKind::Conflicts
                 | PromptKind::Recovery
                 | PromptKind::QuitDirty
+                | PromptKind::QuitConfirm
                 | PromptKind::ExternalChange
         )
     }
@@ -557,6 +561,7 @@ mod tests {
             PromptKind::Delete,
             PromptKind::Discard,
             PromptKind::QuitDirty,
+            PromptKind::QuitConfirm,
             PromptKind::GoToLine,
             PromptKind::Theme,
             PromptKind::RenameWorkspace,

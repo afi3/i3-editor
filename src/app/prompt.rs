@@ -480,6 +480,12 @@ impl App {
             }
             PromptKind::RenameWorkspace => self.rename_workspace(&prompt.fields[0]),
             PromptKind::TerminalRename => self.rename_terminal(&prompt.fields[0]),
+            PromptKind::QuitConfirm => {
+                if prompt.selected_candidate() == Some("Quit") {
+                    self.state.should_quit = true;
+                }
+                Ok(())
+            }
             PromptKind::QuitDirty => {
                 match prompt.selected_candidate() {
                     Some("Save all and quit") => {

@@ -302,6 +302,15 @@ Git depth is complete for the v0.1.5 line.
 Verification: `cargo test` (343), `cargo fmt --check`,
 `cargo clippy --all-targets --all-features`.
 
+## Unreleased v0.1.7 — exit confirmation
+
+- `Ctrl+Q` no longer exits a clean session immediately: it opens a `Quit` /
+  `Cancel` prompt. The dirty-session prompt now also includes `Cancel`.
+- Tests cover both confirming and cancelling a clean quit.
+
+Verification: `cargo test` (344), `cargo fmt --check`,
+`cargo clippy --all-targets --all-features`.
+
 Policy that applied during the cycle:
 
 - `Cargo.toml` stayed at `0.1.2` until every workstream below passed acceptance.
@@ -603,4 +612,4 @@ cargo clippy --all-targets --all-features
 cargo run -- --dump-keymap
 ```
 
-Last recorded run: `cargo test` → 343 passed, `cargo clippy` → 0 warnings.
+Last recorded run: `cargo test` → 344 passed, `cargo clippy` → 0 warnings.
