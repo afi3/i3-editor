@@ -669,7 +669,12 @@ v0.1.3 unless explicitly promoted into a workstream above.
 
 No unscoped backlog items remain.
 
-## Unreleased v0.1.7 — tab ergonomics
+## Release v0.1.7 — shipped
+
+Shipped as `v0.1.7` on 2026-11-23. Tab close and overflow scrolling, a
+proportional vertical scrollbar, default LSP completion/hover keys, and a
+refreshed README recording on top of v0.1.6; `v0.1.x` remains the hardening
+line and `v0.2.x` stays reserved for AI/MCP.
 
 - Every document tab renders a clickable `×`; closing a dirty document still
   opens the discard prompt instead of losing the buffer.
@@ -690,6 +695,12 @@ No unscoped backlog items remain.
 Verification: `cargo test` (370 unit + 6 CLI process + 1 PTY smoke = 377),
 `cargo fmt --check`, `cargo clippy --all-targets --all-features`, and
 `forgeguard gate --changed --output compact`.
+
+Release record: `cargo fmt --check`, `cargo test` (377), and
+`cargo clippy --all-targets --all-features` are clean; `cargo audit` reports no
+vulnerabilities and `forgeguard gate --changed` reports no errors or warnings.
+The refreshed README recording ships with this tag. Version `0.1.7`, tag
+`v0.1.7`, and the four platform assets are the release milestone.
 
 ## Verification commands
 
