@@ -787,7 +787,7 @@ limit in the status bar.
 ```bash
 cargo fmt --check
 cargo check
-cargo test              # unit, property, and CLI process tests; no TUI
+cargo test              # unit, property, CLI, and PTY smoke tests
 cargo clippy --all-targets --all-features
 python3 scripts/make_demo.py   # regenerate docs/demo.gif (needs pyte + Pillow)
 ```

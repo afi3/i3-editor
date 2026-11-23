@@ -358,10 +358,13 @@ four platform assets are the release milestone.
   undoing everything restores the original and redo restores the final text.
 - `assert_cmd` exercises the real binary contract: version, help, unknown-option
   errors, mode/path conflicts, and `--dump-keymap` without a TTY.
+- `portable-pty` + `vt100` smoke test opens a file, types `hello`, saves with
+  `Ctrl+S`, confirms quit with Enter, and asserts the saved bytes.
 
-Verification: `cargo test` (363 unit + 6 CLI process = 369), `cargo fmt --check`,
-`cargo clippy --all-targets --all-features`, `cargo +1.91.0 check --locked`,
-`cargo audit`, and `cargo build --release --locked`.
+Verification: `cargo test` (363 unit + 6 CLI process + 1 PTY smoke = 370),
+`cargo fmt --check`, `cargo clippy --all-targets --all-features`,
+`cargo +1.91.0 check --locked`, `cargo audit`, and
+`cargo build --release --locked`.
 
 Policy that applied during the cycle:
 
@@ -664,4 +667,4 @@ cargo clippy --all-targets --all-features
 cargo run -- --dump-keymap
 ```
 
-Last recorded run: `cargo test` → 369 passed (363 unit + 6 CLI process), `cargo clippy` → 0 warnings.
+Last recorded run: `cargo test` → 370 passed (363 unit + 6 CLI process + 1 PTY smoke), `cargo clippy` → 0 warnings.

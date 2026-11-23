@@ -437,6 +437,8 @@ KeyEvent ──► KeyCombo ──► prompt / scope resolution ──► Comman
   original and redo back to the final text.
 - CLI: `assert_cmd` process tests for version/help, unknown options, mode/path
   conflicts, and `--dump-keymap` without a TTY.
+- PTY smoke: `portable-pty` + `vt100` drive the real TUI through type, save,
+  confirm quit, and assert the file bytes.
 - Text: grapheme motion (combining marks, ZWJ), word motion, cell widths, clipping.
 - Layout: proportional splits, min sizes, nesting, collapse, separators.
 - Workspaces: switching, closing, last-workspace guard.
