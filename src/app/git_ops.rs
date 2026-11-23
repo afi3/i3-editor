@@ -20,6 +20,7 @@ impl App {
         }
         self.last_git = Instant::now();
         self.refresh_git_marks();
+        self.dirty = true;
     }
 
     /// Recompute per-line markers for documents shown in panes.

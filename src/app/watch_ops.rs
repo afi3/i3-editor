@@ -1,6 +1,12 @@
 //! Filesystem watcher integration: one coalesced pass per frame.
 
+use std::collections::hash_map::DefaultHasher;
+use std::collections::{HashMap, HashSet};
+use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
+
+use crate::state::WorkspaceId;
+use crate::workspace::Workspace;
 
 use super::{App, same_path};
 
@@ -12,6 +18,7 @@ impl App {
     /// Drain queued watcher events, refresh the explorer once, and react to
     /// open buffers whose files changed underneath them.
     pub(crate) fn pump_watcher(&mut self) {
+        self.sync_workspace_watchers();
         self.sync_external_watcher();
         if self.watchers.is_empty() && self.external_watcher.is_none() {
             return;
@@ -32,6 +39,7 @@ impl App {
         if paths.is_empty() {
             return;
         }
+        self.dirty = true;
         let config_path = self.state.config_path.clone();
         let config_dir = config_path
             .as_ref()
@@ -70,6 +78,78 @@ impl App {
         }
         for path in paths {
             self.handle_external_change(&path);
+        }
+    }
+
+    fn watcher_signature(&self) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        self.state.workspaces.active().id.hash(&mut hasher);
+        self.state.explorer.revision.hash(&mut hasher);
+        for workspace in &self.state.workspaces.workspaces {
+            workspace.id.hash(&mut hasher);
+            workspace.root.hash(&mut hasher);
+        }
+        let mut paths: Vec<&Path> = self
+            .state
+            .documents
+            .values()
+            .filter_map(|document| document.path.as_deref())
+            .collect();
+        paths.sort();
+        for path in paths {
+            path.hash(&mut hasher);
+        }
+        hasher.finish()
+    }
+
+    fn desired_watch_dirs(&self, workspace: &Workspace, active: WorkspaceId) -> HashSet<PathBuf> {
+        let root = workspace
+            .root
+            .canonicalize()
+            .unwrap_or_else(|_| workspace.root.clone());
+        let mut dirs = HashSet::from([root.clone()]);
+        if workspace.id == active {
+            dirs.extend(self.state.explorer.watched_dirs());
+        }
+        for path in self
+            .state
+            .documents
+            .values()
+            .filter_map(|document| document.path.as_deref())
+        {
+            let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+            if path.starts_with(&root)
+                && let Some(parent) = path.parent()
+            {
+                dirs.insert(parent.to_path_buf());
+            }
+        }
+        dirs
+    }
+
+    /// Reconfigure non-recursive workspace watchers when the explorer expands,
+    /// the active workspace changes, or an open document path changes.
+    fn sync_workspace_watchers(&mut self) {
+        let signature = self.watcher_signature();
+        if self.watch_signature == Some(signature) {
+            return;
+        }
+        self.watch_signature = Some(signature);
+        let active = self.state.workspaces.active().id;
+        let desired: HashMap<WorkspaceId, HashSet<PathBuf>> = self
+            .state
+            .workspaces
+            .workspaces
+            .iter()
+            .map(|workspace| (workspace.id, self.desired_watch_dirs(workspace, active)))
+            .collect();
+        let App {
+            watchers, state, ..
+        } = self;
+        for (id, watcher) in watchers.iter_mut() {
+            if let Some(dirs) = desired.get(id) {
+                state.warnings.extend(watcher.sync_dirs(dirs));
+            }
         }
     }
 

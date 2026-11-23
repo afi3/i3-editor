@@ -138,6 +138,9 @@ impl App {
 
     /// Drain every shell; called once per loop iteration before drawing.
     pub(crate) fn pump_shell(&mut self) {
+        if !self.state.terminals.is_empty() {
+            self.dirty = true;
+        }
         let mut messages = Vec::new();
         for shell in self.state.terminals.iter_mut() {
             shell.pump();

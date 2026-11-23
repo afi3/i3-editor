@@ -212,15 +212,19 @@ bonuses); `keep_selection` preserves an arrow-key choice while the query narrows
 While a prompt is active it consumes every key except the quit binding, so a
 dialog cannot leak input into a document.
 
-**Watching is one recursive notify watcher.** `watch::Watcher` owns the
-recommended backend and a channel. The event loop drains that channel once per
-frame, drops `Access` events, and coalesces the rest: a visible path rebuilds the
-explorer with its selection preserved by path, and each open document whose file
-appears in the batch is checked with `disk_changed` — clean buffers reload, dirty
-buffers only get a status message. The same batch clears the quick-open cache, so
-the project is scanned once instead of once per prompt. Ignored paths still
-produce notify events because the backend cannot skip them, but they never
-rebuild the tree, which keeps build output from causing churn.
+**Watching is non-recursive and follows the active surface.** `watch::Watcher`
+owns the recommended backend, a channel, and the set of directories it tracks.
+Workspace watchers follow the canonical root, the active explorer's expanded
+directories, and parent directories of open documents; `sync_workspace_watchers`
+compares a hash of roots, the explorer revision, and open paths before adding or
+removing watches. The event loop drains each channel once per frame, drops
+`Access` events, and coalesces the rest: a visible path rebuilds the explorer
+with its selection preserved by path, and each open document whose file appears
+in the batch is checked with `disk_changed` — clean buffers reload, dirty buffers
+only get a status message. The same batch clears the quick-open cache, so the
+project is scanned once instead of once per prompt. Ignored paths are not watched
+unless the explorer reaches them, so build output cannot create watches or churn
+the tree.
 
 **Find in Files is one worker per query.** `project_search::Task` receives the
 cached quick-open list, reads each file, and streams `Message::Matches` batches
@@ -360,15 +364,17 @@ path. Session autosave keeps a path and a five-second clock on `App` and reuses
 persisted in `session.toml`. A root change follows into `terminal_dir` only when
 the terminal directory still pointed at the old root.
 
-**Each workspace owns a root and a watcher.** `Workspace.root` is persisted in
-`session.toml`. `AppState` keeps one explorer for the active workspace; switching
-rebuilds it from the target root and clears the quick-open cache. `App.watchers`
-holds one recursive watcher per workspace id; the loop drains all of them,
-coalesces paths, and only rebuilds the explorer when the event came from the
-active workspace. Open buffers react to their own paths regardless of workspace.
-A second non-recursive watcher covers the parent directories of open documents
-outside every workspace root; `sync_external_watcher` adds and removes those
-directories as documents open and close, and drops the watcher when none remain.
+**Each workspace owns a root and a watcher set.** `Workspace.root` is persisted
+in `session.toml`. `AppState` keeps one explorer for the active workspace;
+switching rebuilds it from the target root and clears the quick-open cache.
+`App.watchers` holds one non-recursive watcher per workspace id, reconfigured
+from the root, expanded explorer directories, and open-document parents; the loop
+drains all of them, coalesces paths, and only rebuilds the explorer when the
+event came from the active workspace. Open buffers react to their own paths
+regardless of workspace. A second non-recursive watcher covers the parent
+directories of open documents outside every workspace root;
+`sync_external_watcher` adds and removes those directories as documents open and
+close, and drops the watcher when none remain.
 
 **Crash recovery is a swap directory, not a journal.** `recovery::write_to`
 writes each dirty document to `<config>/i3-editor/swap/` through `tempfile` +
@@ -378,8 +384,12 @@ The event loop runs it at most once per second. Startup replays swaps into
 as tabs, and prompts per file: save, reload, or keep. A graceful exit clears the
 directory, so discarded quit choices cannot come back.
 
-**Rendering is read-only.** `ui::render` takes `&AppState`. The only mutation
-before a draw is `compute_layout`, which fills the rect cache.
+**Rendering is read-only and demand-driven.** `ui::render` takes `&AppState`.
+The only mutation before a draw is `compute_layout`, which fills the rect cache.
+The event loop sets `App.dirty` on input, shell output, watcher events, LSP
+traffic, search batches, and due Git refreshes; it draws only when that flag is
+set, then clears it. The idle poll is one second when no shell, search, or LSP
+needs a faster cadence.
 
 **Terminal cleanup does not depend on a clean exit.** Ratatui installs a panic
 hook; `terminal.rs` chains its own hook to leave bracketed paste, mouse capture,

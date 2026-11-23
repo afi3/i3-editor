@@ -24,6 +24,9 @@ impl App {
             return;
         };
         let events = manager.pump(&self.state.documents);
+        if !events.is_empty() {
+            self.dirty = true;
+        }
         let open: std::collections::HashSet<DocumentId> =
             self.state.documents.keys().copied().collect();
         self.state.lsp_diagnostics.retain(|id, _| open.contains(id));

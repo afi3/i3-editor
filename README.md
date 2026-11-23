@@ -303,7 +303,8 @@ revealed; only regular files can be duplicated.
 
 ### Workspace roots
 
-Each workspace owns its explorer root and a recursive watcher for that root:
+Each workspace watches its root, the expanded explorer directories, and the
+parent directories of its open documents without recursion:
 
 - `workspace_root` from the palette prompts for a directory and rebuilds the
   explorer, quick-open list, and watcher for the active workspace. A new
@@ -311,8 +312,9 @@ Each workspace owns its explorer root and a recursive watcher for that root:
 - Switching workspaces (`Ctrl+1`..`Ctrl+9`, `F7`/`F8`, or the palette) swaps the
   explorer to that workspace's root and clears the quick-open cache; the tree is
   rebuilt for the new root.
-- Every workspace root is watched. File events from an inactive workspace still
-  reload open buffers but do not rebuild the active explorer tree.
+- Workspace watchers are non-recursive. File events from an inactive workspace
+  still reload open buffers but do not rebuild the active explorer tree.
+  Unexpanded directories are watched after the explorer opens them.
 - Open documents outside every workspace root get a non-recursive watcher on
   their parent directory, so external saves still reload clean buffers and warn
   on dirty ones.
@@ -612,7 +614,8 @@ quickest way to confirm a config and theme file were read.
   `F2` saves it through Save As; scratch buffers are not written to
   `session.toml` or crash recovery.
 - `F2` Save As asks for confirmation before replacing a different existing file.
-- The workspace root is watched recursively. A clean buffer reloads when
+- The workspace root, expanded explorer directories, and parent directories of
+  open documents are watched without recursion. A clean buffer reloads when
   another program writes its file; a modified buffer is left alone and the status
   bar reports the change, so `Ctrl+S` still asks before anything is written.
   Explorer rows refresh on create, rename, and delete without pressing refresh.
@@ -662,8 +665,9 @@ same command closes the panel and kills every shell in it.
 - Output is parsed with `vt100` (colors, bold, underline, inverse, cursor) and
   rendered with the active theme's background.
 
-Frame redraws run at 30 ms while the shell has focus, 60 ms when the panel is
-visible but unfocused, and 250 ms otherwise.
+When a shell is visible, redraws run at 30 ms while it has focus and 60 ms when
+unfocused. Without a shell, the loop draws only when state changes and polls for
+at most one second.
 
 ## Switching themes from the palette
 
@@ -807,8 +811,10 @@ every check.
 
 - Syntax highlighting is structural for every supported language. An unknown
   fence language stays plain text.
-- Every workspace root is watched, and open documents outside every root watch
-  their parent directory. Quick open still caps its cached list at 5000 files.
+- Workspace watchers are non-recursive: root, expanded explorer directories, and
+  parent directories of open documents. Changes inside unexpanded directories are
+  not observed until the directory is opened or the explorer is refreshed. Quick
+  open still caps its cached list at 5000 files.
 - Folds are per-session and close on the next edit; the editor does not persist
   them. `go_to_symbol` uses a per-language node-kind table rather than each
   grammar's locals query, so unusual definitions can be missing.

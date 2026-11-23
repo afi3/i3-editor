@@ -74,6 +74,7 @@ impl App {
         if messages.is_empty() {
             return;
         }
+        self.dirty = true;
         let kind = match &self.state.mode {
             InputMode::Prompt(prompt) => Some(prompt.kind),
             _ => None,

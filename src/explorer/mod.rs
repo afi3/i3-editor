@@ -304,6 +304,14 @@ impl ExplorerState {
         self.ignore = build_ignore(&self.root);
         self.rebuild();
     }
+
+    /// Root plus every expanded directory; non-recursive watchers follow these.
+    pub fn watched_dirs(&self) -> Vec<PathBuf> {
+        let mut dirs = Vec::with_capacity(self.expanded.len() + 1);
+        dirs.push(self.root.clone());
+        dirs.extend(self.expanded.iter().cloned());
+        dirs
+    }
 }
 
 fn resolve_in_root(root: &Path, path: &Path) -> Result<PathBuf> {
@@ -346,6 +354,31 @@ mod tests {
         let visible: Vec<&str> = explorer.rows.iter().map(|row| row.name.as_str()).collect();
         assert_eq!(visible, ["target", ".env", ".gitignore", "main.rs"]);
 
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn watched_dirs_follow_expanded_directories() {
+        let dir = std::env::temp_dir().join(format!("i3-explorer-watch-{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::create_dir_all(dir.join("sub")).expect("sub");
+        let mut explorer = ExplorerState::new(dir.clone(), false).expect("explorer");
+        assert_eq!(
+            explorer.watched_dirs(),
+            vec![dir.canonicalize().expect("canonical")]
+        );
+        let index = explorer
+            .rows
+            .iter()
+            .position(|row| row.name == "sub")
+            .expect("sub row");
+        explorer.selected = index;
+        explorer.expand_selected();
+        assert!(
+            explorer
+                .watched_dirs()
+                .contains(&dir.join("sub").canonicalize().expect("canonical"))
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 

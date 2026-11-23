@@ -1230,6 +1230,15 @@ fn shell_focus_routes_keys_away_from_the_document() {
 }
 
 #[test]
+fn idle_timeout_is_one_second_without_shell_or_lsp() {
+    use std::time::Duration;
+
+    let (app, dir) = fixture("x\n");
+    assert_eq!(app.frame_timeout(), Duration::from_secs(1));
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn quit_with_clean_documents_asks_first() {
     let (mut app, dir) = fixture("x\n");
     app.dispatch(Command::Quit).expect("quit");

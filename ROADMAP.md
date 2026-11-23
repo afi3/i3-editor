@@ -343,8 +343,13 @@ four platform assets are the release milestone.
 - CLI parsing uses `pico-args`: unknown options are errors, multiple files open
   as tabs, `FILE:LINE` accepts one file at a 1-based line, and a directory must
   be the only target. `--update`/`--dump-keymap` reject path arguments.
+- The event loop draws only when `App.dirty` is set. Idle polling is one second
+  without a shell/search/LSP; shell and search retain their faster cadences.
+- Workspace watchers are non-recursive and track the root, expanded explorer
+  directories, and parent directories of open documents. Unexpanded directories
+  are not watched.
 
-Verification: `cargo test` (354), `cargo fmt --check`,
+Verification: `cargo test` (357), `cargo fmt --check`,
 `cargo clippy --all-targets --all-features`, `cargo +1.91.0 check --locked`,
 `cargo audit`, and `cargo build --release --locked`.
 
@@ -649,4 +654,4 @@ cargo clippy --all-targets --all-features
 cargo run -- --dump-keymap
 ```
 
-Last recorded run: `cargo test` → 354 passed, `cargo clippy` → 0 warnings.
+Last recorded run: `cargo test` → 357 passed, `cargo clippy` → 0 warnings.

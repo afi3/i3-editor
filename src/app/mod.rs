@@ -63,6 +63,8 @@ impl App {
             history_path: None,
             session_path: None,
             last_session_save: std::time::Instant::now(),
+            dirty: true,
+            watch_signature: None,
         }
     }
 }
@@ -137,6 +139,10 @@ pub struct App {
     /// Session file used by periodic autosave and graceful exit.
     pub(crate) session_path: Option<PathBuf>,
     pub(crate) last_session_save: std::time::Instant,
+    /// Set by input or background work; cleared after a successful draw.
+    dirty: bool,
+    /// Hash of roots, explorer revision, and open paths used to resync watchers.
+    watch_signature: Option<u64>,
 }
 
 impl App {
@@ -241,6 +247,8 @@ impl App {
             history_path,
             session_path: crate::session::default_path(),
             last_session_save: std::time::Instant::now(),
+            dirty: true,
+            watch_signature: None,
         };
         if let Err(error) = app.apply_active_root() {
             app.state
@@ -331,18 +339,16 @@ impl App {
             self.pump_lsp();
             self.refresh_git_if_due();
             self.autosave_swaps();
-            self.draw()?;
+            if self.dirty {
+                self.draw()?;
+                self.dirty = false;
+            }
             self.autosave_session();
-            let timeout = if !self.state.terminals.is_empty() && self.state.focus == Focus::Shell {
-                Duration::from_millis(30)
-            } else if !self.state.terminals.is_empty() {
-                Duration::from_millis(60)
-            } else {
-                Duration::from_millis(250)
-            };
+            let timeout = self.frame_timeout();
             if !event::poll(timeout).map_err(Error::from)? {
                 continue;
             }
+            self.dirty = true;
             match event::read().map_err(Error::from)? {
                 Event::Key(key) => self.handle_key(key),
                 Event::Mouse(mouse) => self.handle_mouse(mouse),
@@ -396,6 +402,26 @@ impl App {
         terminal.draw(|frame| ui::render(frame, state))?;
         self.resize_shell();
         Ok(())
+    }
+
+    fn frame_timeout(&self) -> Duration {
+        if !self.state.terminals.is_empty() {
+            if self.state.focus == Focus::Shell {
+                Duration::from_millis(30)
+            } else {
+                Duration::from_millis(60)
+            }
+        } else if self.project_task.is_some() {
+            Duration::from_millis(50)
+        } else if self
+            .lsp
+            .as_ref()
+            .is_some_and(crate::lsp::LspManager::is_configured)
+        {
+            Duration::from_millis(250)
+        } else {
+            Duration::from_secs(1)
+        }
     }
 
     fn handle_key(&mut self, key: KeyEvent) {
