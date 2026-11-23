@@ -1419,6 +1419,46 @@ fn rename_workspace_updates_the_active_name() {
 }
 
 #[test]
+fn cli_targets_open_multiple_files_as_tabs_and_jump_to_a_line() {
+    let (mut app, dir) = fixture("one\n");
+    let second = dir.join("second.txt");
+    let third = dir.join("third.txt");
+    std::fs::write(&second, "a\nb\nc\n").expect("second");
+    std::fs::write(&third, "x\n").expect("third");
+
+    app.open_targets(vec![super::OpenTarget {
+        path: second.clone(),
+        line: Some(3),
+    }])
+    .expect("single target");
+    let document = app.state.active_document().expect("second");
+    assert_eq!(document.path.as_deref(), Some(second.as_path()));
+    let cursor = app.state.focused_pane().expect("pane").cursor;
+    assert_eq!(document.line_of_char(cursor), 2);
+
+    app.open_targets(vec![
+        super::OpenTarget {
+            path: third.clone(),
+            line: None,
+        },
+        super::OpenTarget {
+            path: second.clone(),
+            line: None,
+        },
+    ])
+    .expect("multiple targets");
+    assert_eq!(app.state.documents.len(), 3);
+    assert_eq!(app.state.focused_pane().expect("pane").tabs.len(), 3);
+    assert_eq!(
+        app.state
+            .active_document()
+            .and_then(|document| document.path.clone()),
+        Some(second)
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn open_prompt_opens_a_typed_path() {
     let (mut app, dir) = fixture("x\n");
     std::fs::write(dir.join("other.txt"), "other\n").expect("file");
@@ -1802,7 +1842,10 @@ fn config_visibility_is_applied_at_startup() {
         },
         config,
         Vec::new(),
-        Some(dir.clone()),
+        vec![super::OpenTarget {
+            path: dir.clone(),
+            line: None,
+        }],
     )
     .expect("app");
     assert!(!app.state.explorer.visible);

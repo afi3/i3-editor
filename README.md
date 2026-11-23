@@ -84,11 +84,17 @@ cargo build --release
 cargo run                      # open the current directory
 cargo run -- .                 # same, explicit
 cargo run -- src/main.rs       # open a file directly
+cargo run -- src/main.rs:42    # open one file at a 1-based line
+cargo run -- a.rs b.rs         # open multiple files as tabs
 cargo run -- --update          # self-update from the latest release
 cargo run -- --dump-keymap     # probe and print the resolved bindings
 cargo run -- --version         # print the version
 cargo run -- --help            # usage summary
 ```
+
+Multiple file arguments open as document tabs. `FILE:LINE` accepts one file; a
+directory must be the only target. Unknown options are errors, and `--update` or
+`--dump-keymap` cannot be combined with paths.
 
 Stable Rust 1.91+ (edition 2024). The editor needs no system dependencies beyond
 a POSIX terminal; `--update` additionally uses `curl` and `tar`.

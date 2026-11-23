@@ -1,6 +1,7 @@
 //! i3-editor: a keyboard-first terminal editor.
 
 mod app;
+mod cli;
 mod clipboard;
 mod command;
 mod config;
@@ -28,8 +29,6 @@ mod update;
 mod watch;
 mod workspace;
 
-use std::path::PathBuf;
-
 fn main() -> std::process::ExitCode {
     match run() {
         Ok(()) => std::process::ExitCode::SUCCESS,
@@ -41,41 +40,24 @@ fn main() -> std::process::ExitCode {
 }
 
 fn run() -> error::Result<()> {
-    let mut target: Option<PathBuf> = None;
-    let mut dump_keymap = false;
-    let mut show_version = false;
-    let mut show_help = false;
-    let mut run_update = false;
-    for argument in std::env::args().skip(1) {
-        match argument.as_str() {
-            "--dump-keymap" => dump_keymap = true,
-            "--version" | "-V" => show_version = true,
-            "--help" | "-h" => show_help = true,
-            "--update" => run_update = true,
-            other => {
-                if target.is_none() {
-                    target = Some(PathBuf::from(other));
-                }
-            }
-        }
-    }
+    let options = cli::parse()?;
 
-    if show_version {
+    if options.version {
         use std::io::Write;
         let mut out = std::io::stdout();
         let _ = writeln!(out, "i3-editor {}", env!("CARGO_PKG_VERSION"));
         return Ok(());
     }
-    if show_help {
+    if options.help {
         print_usage();
         return Ok(());
     }
-    if run_update {
+    if options.update {
         return update::run();
     }
 
     let (config, warnings) = config::load();
-    if dump_keymap {
+    if options.dump_keymap {
         use std::io::Write;
 
         let enhanced = terminal::keyboard_enhancement_supported();
@@ -101,7 +83,7 @@ fn run() -> error::Result<()> {
     let setup = terminal::init()?;
     let keyboard_enhancement = setup.keyboard_enhancement;
     terminal::install_signal_restore(keyboard_enhancement).ok();
-    let result = app::App::new(setup, config, warnings, target).and_then(app::App::run);
+    let result = app::App::new(setup, config, warnings, options.targets).and_then(app::App::run);
     terminal::restore(keyboard_enhancement);
     result
 }
@@ -114,13 +96,17 @@ fn print_usage() {
         out,
         "i3-editor {}\n\
          \n\
-         usage: i3-editor [PATH] [--update] [--dump-keymap] [--version]\n\
+         usage: i3-editor [OPTIONS] [FILE|DIR]...\n\
          \n\
-         PATH            file or directory to open (default: current directory)\n\
+         FILE            open one or more files as document tabs\n\
+         FILE:LINE       open one file at a 1-based line\n\
+         DIR             open a directory as the workspace root (only target)\n\
          --update        download and install the latest release, then exit\n\
          --dump-keymap   print resolved key bindings and theme, then exit\n\
          --version, -V   print the version and exit\n\
-         --help, -h      print this help and exit",
+         --help, -h      print this help and exit\n\
+         \n\
+         Unknown options are errors. Multiple targets must be files.",
         env!("CARGO_PKG_VERSION")
     );
 }

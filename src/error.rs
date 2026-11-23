@@ -45,6 +45,8 @@ pub enum Error {
     InvalidPath(PathBuf),
     #[error("invalid key binding {entry}: {reason}")]
     InvalidBinding { entry: String, reason: String },
+    #[error("{0}")]
+    Cli(String),
     #[error("unhandled command {0}")]
     UnhandledCommand(&'static str),
 }

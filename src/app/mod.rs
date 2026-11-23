@@ -89,6 +89,12 @@ use crate::workspace::{Workspace, WorkspaceManager};
 
 const SESSION_AUTOSAVE: Duration = Duration::from_secs(5);
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OpenTarget {
+    pub path: PathBuf,
+    pub line: Option<usize>,
+}
+
 pub struct App {
     pub state: AppState,
     pub terminal: Terminal<CrosstermBackend<Stdout>>,
@@ -138,11 +144,11 @@ impl App {
         setup: Setup,
         config: AppConfig,
         warnings: Vec<String>,
-        target: Option<PathBuf>,
+        targets: Vec<OpenTarget>,
     ) -> Result<Self> {
         let enhanced = setup.keyboard_enhancement;
-        let restore_session = target.is_none();
-        let (root, file) = split_target(target)?;
+        let restore_session = targets.is_empty();
+        let (root, files) = split_targets(targets)?;
         let mut explorer = ExplorerState::new(root.clone(), config.explorer.show_hidden)?;
         explorer.visible = config.explorer.visible;
         let mut ids = Ids::default();
@@ -261,9 +267,7 @@ impl App {
             }
         }
         app.init_watchers(config_path.as_deref());
-        if let Some(path) = file {
-            app.open_document(path)?;
-        }
+        app.open_targets(files)?;
         app.load_recoveries();
         app.refresh_plugin_status();
         app.state.ui.message = startup_message(&app.state.warnings);
@@ -523,6 +527,16 @@ impl App {
         }
     }
 
+    pub(crate) fn open_targets(&mut self, targets: Vec<OpenTarget>) -> Result<()> {
+        for target in targets {
+            self.open_document(target.path)?;
+            if let Some(line) = target.line {
+                self.goto_line(line.saturating_sub(1))?;
+            }
+        }
+        Ok(())
+    }
+
     pub(crate) fn open_document(&mut self, path: PathBuf) -> Result<()> {
         let path = absolutize(&path)?;
         if let Some(existing) = self.find_document_by_path(&path) {
@@ -626,24 +640,38 @@ fn log_keymap(path: Option<&Path>, keymap: &KeyMap, enhanced: bool) {
     let _ = std::fs::write(path, text);
 }
 
-fn split_target(target: Option<PathBuf>) -> Result<(PathBuf, Option<PathBuf>)> {
+fn split_targets(targets: Vec<OpenTarget>) -> Result<(PathBuf, Vec<OpenTarget>)> {
     let current = std::env::current_dir().map_err(|error| Error::io("cwd", ".", error))?;
-    match target {
-        None => Ok((current, None)),
-        Some(path) => {
-            let absolute = if path.is_absolute() {
-                path
-            } else {
-                current.join(path)
-            };
-            if absolute.is_dir() {
-                Ok((absolute, None))
-            } else {
-                let parent = absolute.parent().map(Path::to_path_buf).unwrap_or(current);
-                Ok((parent, Some(absolute)))
-            }
+    let Some(first) = targets.first() else {
+        return Ok((current, Vec::new()));
+    };
+    let absolute = absolutize(&first.path)?;
+    if absolute.is_dir() {
+        if targets.len() > 1 {
+            return Err(Error::Cli(
+                "only the first target may be a directory".to_string(),
+            ));
         }
+        if first.line.is_some() {
+            return Err(Error::Cli("line numbers require a file".to_string()));
+        }
+        return Ok((absolute, Vec::new()));
     }
+    let root = absolute.parent().map(Path::to_path_buf).unwrap_or(current);
+    let mut files = Vec::with_capacity(targets.len());
+    for target in targets {
+        let path = absolutize(&target.path)?;
+        if path.is_dir() {
+            return Err(Error::Cli(
+                "only the first target may be a directory".to_string(),
+            ));
+        }
+        files.push(OpenTarget {
+            path,
+            line: target.line,
+        });
+    }
+    Ok((root, files))
 }
 
 pub(crate) fn absolutize(path: &Path) -> Result<PathBuf> {

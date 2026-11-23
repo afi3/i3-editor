@@ -340,8 +340,11 @@ four platform assets are the release milestone.
 - Terminal scrollback is clamped to `[terminal] scrollback`; modified arrows,
   Home/End, Insert/Delete, PageUp/PageDown, and F1–F12 use xterm CSI modifiers;
   `Ctrl+[ \ ] ^ _` are forwarded; killed shells are reaped with `wait()`.
+- CLI parsing uses `pico-args`: unknown options are errors, multiple files open
+  as tabs, `FILE:LINE` accepts one file at a 1-based line, and a directory must
+  be the only target. `--update`/`--dump-keymap` reject path arguments.
 
-Verification: `cargo test` (348), `cargo fmt --check`,
+Verification: `cargo test` (354), `cargo fmt --check`,
 `cargo clippy --all-targets --all-features`, `cargo +1.91.0 check --locked`,
 `cargo audit`, and `cargo build --release --locked`.
 
@@ -646,4 +649,4 @@ cargo clippy --all-targets --all-features
 cargo run -- --dump-keymap
 ```
 
-Last recorded run: `cargo test` → 348 passed, `cargo clippy` → 0 warnings.
+Last recorded run: `cargo test` → 354 passed, `cargo clippy` → 0 warnings.
