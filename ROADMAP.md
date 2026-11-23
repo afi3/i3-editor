@@ -321,7 +321,11 @@ Release record: `cargo fmt --check`, `cargo test` (344), and
 --changed` reports no errors or warnings. Version `0.1.5`, tag `v0.1.5`, and the
 four platform assets are the release milestone.
 
-## Unreleased v0.1.6 — release engineering
+## Release v0.1.6 — shipped
+
+Shipped as `v0.1.6` on 2026-11-23. Release engineering, CLI contract hardening,
+idle/perf fixes, and test depth on top of v0.1.5; `v0.1.x` remains the hardening
+line and `v0.2.x` stays reserved for AI/MCP.
 
 - `ci.yml` runs formatting, `clippy -D warnings`, and tests on Linux, macOS, and
   the declared MSRV; a separate job runs `cargo audit`.
@@ -365,6 +369,12 @@ Verification: `cargo test` (363 unit + 6 CLI process + 1 PTY smoke = 370),
 `cargo fmt --check`, `cargo clippy --all-targets --all-features`,
 `cargo +1.91.0 check --locked`, `cargo audit`, and
 `cargo build --release --locked`.
+
+Release record: `cargo fmt --check`, `cargo test` (370), and
+`cargo clippy --all-targets --all-features` are clean; `cargo audit` reports no
+vulnerabilities and `forgeguard gate --changed` reports no errors or warnings.
+Version `0.1.6`, tag `v0.1.6`, and the four platform assets are the release
+milestone.
 
 Policy that applied during the cycle:
 
