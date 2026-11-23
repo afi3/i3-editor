@@ -160,6 +160,8 @@ it.
 | `Ctrl+C` / `Ctrl+X` / `Ctrl+V` | Copy / cut / paste |
 | `Ctrl+F` / `Ctrl+R` | Find / replace all |
 | `Ctrl+D` | Duplicate line |
+| `Ctrl+Space` | LSP completion |
+| `Ctrl+K` | LSP hover |
 | `Tab` | Indent: spaces to the next stop, or a literal tab |
 
 Explorer focus keys: `Up`/`Down`, `Enter` (open), `Right`/`Left` (expand or
@@ -364,14 +366,13 @@ extensions = ["py", "pyi"]
 
 - Diagnostics appear as `•` markers in the gutter (red error, yellow warning,
   cyan info) and as `LSP nE mW` in the status bar for the active document.
-- `lsp_completion` (palette) opens a popup above the status bar. `Up` / `Down`
-  choose an item, `Enter` inserts its text, and `Esc` or any other key closes the
-  popup without eating that key.
-- `lsp_hover` (palette) shows the server's hover text in a bordered popup; any
+- `lsp_completion` (`Ctrl+Space`) opens a popup above the status bar. `Up` /
+  `Down` choose an item, `Enter` inserts its text, and `Esc` or any other key
+  closes the popup without eating that key.
+- `lsp_hover` (`Ctrl+K`) shows the server's hover text in a bordered popup; any
   key closes it.
-- `lsp_definition` (palette) opens the target file, unfolds the line, and puts
-  the cursor on the definition. `lsp_completion`, `lsp_hover`, and
-  `lsp_definition` are palette-only so no terminal binding is assumed.
+- `lsp_definition` (palette-only) opens the target file, unfolds the line, and
+  puts the cursor on the definition. Bind a key if your terminal can emit it.
 - Sync is full-text on every change; positions convert between char offsets and
   LSP's UTF-16 columns. Server failures and protocol errors surface through the
   status bar once per server.
@@ -381,8 +382,10 @@ extensions = ["py", "pyi"]
   completion/hover/definition. A timed-out `initialize` marks that server failed
   for the current root/config.
 
-None of the commands has a default key. Bind one under `[keys.editing]` if the
-terminal can emit it, for example `"ctrl+space" = "lsp_completion"`.
+`Ctrl+Space` and `Ctrl+K` are the default completion and hover bindings; both
+can be overridden. `lsp_definition` has no default key; bind it under
+`[keys.editing]` if the terminal can emit the combination, for example
+`"ctrl+u" = "lsp_definition"`.
 
 ### Git
 

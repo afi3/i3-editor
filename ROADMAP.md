@@ -683,8 +683,11 @@ No unscoped backlog items remain.
   vertical scrollbar. Clicking its track jumps, dragging its thumb traverses the
   document, and `ui::pane::scrollbar_geometry` keeps the thumb and mouse mapping
   aligned with `scroll_top`.
+- `lsp_completion` defaults to `Ctrl+Space` and `lsp_hover` to `Ctrl+K`; both
+  remain overridable under `[keys.editing]`, while `lsp_definition` stays
+  palette-only.
 
-Verification: `cargo test` (369 unit + 6 CLI process + 1 PTY smoke = 376),
+Verification: `cargo test` (370 unit + 6 CLI process + 1 PTY smoke = 377),
 `cargo fmt --check`, `cargo clippy --all-targets --all-features`, and
 `forgeguard gate --changed --output compact`.
 
@@ -698,4 +701,4 @@ cargo clippy --all-targets --all-features
 cargo run -- --dump-keymap
 ```
 
-Last recorded run: `cargo test` → 376 passed (369 unit + 6 CLI process + 1 PTY smoke), `cargo clippy` → 0 warnings.
+Last recorded run: `cargo test` → 377 passed (370 unit + 6 CLI process + 1 PTY smoke), `cargo clippy` → 0 warnings.

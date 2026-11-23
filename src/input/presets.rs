@@ -118,6 +118,8 @@ impl KeyMap {
             bind(scope, "ctrl+r", Command::ReplacePrompt);
             bind(scope, "ctrl+d", Command::DuplicateLine);
             bind(scope, "ctrl+t", Command::ToggleComment);
+            bind(scope, "ctrl+space", Command::LspCompletion);
+            bind(scope, "ctrl+k", Command::LspHover);
             bind(
                 scope,
                 "ctrl+shift+left",
@@ -289,6 +291,24 @@ mod tests {
     }
 
     #[test]
+    fn lsp_completion_and_hover_have_default_bindings() {
+        for safe in [false, true] {
+            let map = KeyMap::preset(safe);
+            assert_eq!(
+                map.editing
+                    .get(&KeyCombo::parse("ctrl+space").expect("combo")),
+                Some(&Command::LspCompletion),
+                "safe={safe}"
+            );
+            assert_eq!(
+                map.editing.get(&KeyCombo::parse("ctrl+k").expect("combo")),
+                Some(&Command::LspHover),
+                "safe={safe}"
+            );
+        }
+    }
+
+    #[test]
     fn safe_preset_drops_best_effort_workspace_keys() {
         let safe = KeyMap::preset(true);
         assert!(
@@ -364,11 +384,11 @@ mod tests {
     #[test]
     fn duplicate_override_keeps_the_first_action() {
         let mut keys = KeysConfig::default();
-        keys.global.insert("save".to_string(), "ctrl+k".to_string());
-        keys.global.insert("quit".to_string(), "ctrl+k".to_string());
+        keys.global.insert("save".to_string(), "ctrl+e".to_string());
+        keys.global.insert("quit".to_string(), "ctrl+e".to_string());
         let (map, warnings) = KeyMap::from_config(&keys, true);
         assert_eq!(warnings.len(), 1, "{warnings:?}");
         // BTreeMap ordering decides which action is seen first.
-        assert_eq!(lookup(&map, "ctrl+k"), Some(Command::Quit));
+        assert_eq!(lookup(&map, "ctrl+e"), Some(Command::Quit));
     }
 }
