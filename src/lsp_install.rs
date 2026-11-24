@@ -182,7 +182,8 @@ fn install_python(
             .or_else(|| find_on_path("python"))
             .ok_or_else(|| "Python is required to install pylsp".to_string())?;
         status(tx, "creating an isolated Python environment");
-        run_path(&python, &["-m", "venv"], Some(&venv))?;
+        let venv_arg = venv.to_string_lossy().into_owned();
+        run_path(&python, &["-m", "venv", venv_arg.as_str()], None)?;
         let python = venv.join("bin").join("python");
         status(tx, "installing python-lsp-server with pip");
         run_path(
