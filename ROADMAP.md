@@ -737,7 +737,9 @@ Release record: `cargo fmt --check`, `cargo test` (383), and
 `cargo clippy --all-targets --all-features` are clean; `cargo audit` reports no
 vulnerabilities and `forgeguard gate --changed` reports no errors or warnings.
 Version `0.1.8`, tag `v0.1.8`, and the four platform assets are the release
-milestone.
+milestone. Release workflow run `45332605999` built and published all four
+targets; the aarch64 macOS asset passed its SHA-256 check, reported
+`i3-editor 0.1.8`, and a v0.1.7 binary self-updated to v0.1.8 successfully.
 
 ## Verification commands
 
