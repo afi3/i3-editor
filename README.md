@@ -204,7 +204,7 @@ filesystem watcher; quick open no longer walks the project on every invocation.
 | Query | Result |
 |---|---|
 | `sm` | `src/main.rs`, ranked above `docs/domain_main.md` |
-| `tt` | `toggle_terminal` |
+| `trm` | `terminal` |
 | `SM` | only candidates containing uppercase `S` then `M` |
 
 Enter opens the selected candidate. While typing, the best-ranked candidate is
@@ -284,12 +284,12 @@ terminals disagree about `Ctrl+Shift` combinations.
   (Rust, Python, JavaScript/TypeScript, Go, C, Shell, Lua, Markdown headings,
   TOML tables). Typing filters the list; `Enter` jumps to the definition and
   opens any fold covering it.
-- `toggle_fold` folds the smallest block starting at the cursor line: functions,
+- `fold` folds the smallest block starting at the cursor line: functions,
   classes, `impl`/`mod`, match and block expressions, Markdown sections and
   fenced code, and TOML tables. The header line stays visible and the rest of the
   range disappears from the viewport; fold headers keep their original line
   numbers.
-- A second `toggle_fold` on the header opens it. Any edit unfolds the document,
+- A second `fold` on the header opens it. Any edit unfolds the document,
   because tree-sitter line ranges move under edits.
 
 ### File operations
@@ -461,7 +461,7 @@ These commands are palette-only; bind them under `[keys.editing]` if wanted.
 - Alt-drag inside a pane is a rectangular (column) selection: every line in the
   dragged range gets a selection between the anchor column and the release
   column. Copy joins the selections with newlines; Cut removes them as one step.
-- `toggle_word_wrap` (palette) or `[editor] word_wrap = true` enables soft wrap.
+- `word_wrap` (palette) or `[editor] word_wrap = true` enables soft wrap.
   Wrapped rows break at spaces when possible; long words break at the width.
   `Up`/`Down` move by visual row, clicking maps to the clicked visual row, and
   the cursor/selection/gutter all follow the same mapping. Horizontal scrolling
@@ -667,7 +667,7 @@ workspace; a broken session is reported and ignored.
 ## Terminal panel
 
 The editor can host real shells in a panel at the bottom of the window, outside
-the panes. Open it from the command palette (`F1`, then `toggle_terminal`); the
+the panes. Open it from the command palette (`F1`, then `terminal`); the
 same command closes the panel and kills every shell in it.
 
 - `F5` (or `new_terminal`) adds a shell tab and focuses it; `F11` (or
@@ -701,13 +701,11 @@ at most one second.
 
 ## Switching themes from the palette
 
-`F1` exposes three theme commands:
+`F1` exposes one theme command:
 
 | Action | Effect |
 |---|---|
 | `select_theme` | Prompt listing every preset and `themes/*.toml` file |
-| `next_theme` | Apply the next theme in that list |
-| `prev_theme` | Apply the previous theme |
 
 The switch is immediate and updates `appearance.theme` in memory **and in the
 config file**: the `theme` line is rewritten while other sections, comments, and
@@ -715,10 +713,10 @@ key bindings stay untouched. If the write fails, the theme still applies and the
 status bar reports the error. Presets, syntax colors, status bar, and explorer all
 follow without a restart.
 
-The palette also lists every explorer action, `messages`, and
-`switch_workspace_N` for each open workspace; `next_workspace` / `prev_workspace`
-cycle through them. `messages` opens the full startup warning list when the
-status bar only has room for the first one plus a count.
+The palette also lists every explorer action, `messages`, and `select_workspace`
+for the open workspaces; `next_workspace` / `prev_workspace` cycle through them.
+`messages` opens the full startup warning list when the status bar only has room
+for the first one plus a count.
 
 ## Configuration
 
@@ -734,7 +732,7 @@ tab_size = 4
 insert_spaces = true
 line_numbers = true
 auto_indent = true
-word_wrap = false          # toggle at runtime with `toggle_word_wrap`
+word_wrap = false          # switch at runtime with `word_wrap`
 
 [explorer]
 visible = true
@@ -788,7 +786,7 @@ Binding values are `ctrl+`/`alt+`/`shift+` plus a key name (`a`, `f2`, `enter`,
 `backspace`, arrows). `--dump-keymap` probes the current terminal, prints whether keyboard enhancement
 is available, then prints bound actions; piping it reports `false` and shows the
 safe preset. The palette (`F1`) also lists unbound actions such as
-`toggle_terminal` and the theme commands.
+`terminal` and `select_theme`.
 Conflicts, unknown names, and invalid values are reported with the config path
 and line, never silently dropped: a binding may not take a combination reserved
 for quit. The status bar shows the first warning and how many remain; `messages`

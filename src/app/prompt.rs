@@ -235,6 +235,17 @@ impl App {
         }
     }
 
+    fn submit_workspace_choice(&mut self, candidate: Option<&str>) -> Result<()> {
+        let index = candidate
+            .and_then(|candidate| candidate.split_whitespace().next())
+            .and_then(|index| index.parse::<usize>().ok())
+            .map(|index| index.saturating_sub(1));
+        match index {
+            Some(index) => self.switch_workspace(index),
+            None => Ok(()),
+        }
+    }
+
     fn submit_query_prompt(&mut self, prompt: PromptState) -> Result<()> {
         if matches!(
             prompt.kind,
@@ -256,6 +267,9 @@ impl App {
                     return Ok(());
                 };
                 self.submit_palette(name)
+            }
+            PromptKind::SelectWorkspace => {
+                self.submit_workspace_choice(prompt.selected_candidate())
             }
             PromptKind::Messages => Ok(()),
             PromptKind::Find => self.commit_search(prompt.fields[0].clone()),
@@ -325,9 +339,6 @@ impl App {
             .iter()
             .map(|command| command.name().to_string())
             .collect();
-        for index in 1..=self.state.workspaces.workspaces.len() {
-            candidates.push(format!("switch_workspace_{index}"));
-        }
         for name in self.plugin_command_names() {
             if !candidates.contains(&name) {
                 candidates.push(name);
@@ -529,6 +540,47 @@ impl App {
         }
     }
 
+    fn fill_workspace_candidates(&self, prompt: &mut PromptState) {
+        prompt.set_candidates(
+            self.state
+                .workspaces
+                .workspaces
+                .iter()
+                .enumerate()
+                .map(|(index, workspace)| {
+                    format!(
+                        "{}  {}{}",
+                        index + 1,
+                        workspace.name,
+                        if index == self.state.workspaces.active {
+                            " *"
+                        } else {
+                            ""
+                        }
+                    )
+                })
+                .collect(),
+        );
+    }
+
+    fn fill_search_prompt(&self, kind: PromptKind, prompt: &mut PromptState) {
+        prompt.history.entries = self.search_history.list(kind).to_vec();
+        let query = if matches!(kind, PromptKind::FindInFiles | PromptKind::ReplaceInFiles) {
+            self.state
+                .project_search
+                .as_ref()
+                .map(|search| search.query.clone())
+        } else {
+            self.state
+                .search
+                .as_ref()
+                .map(|search| search.query.clone())
+        };
+        if let Some(query) = query {
+            prompt.set_input(query);
+        }
+    }
+
     fn fill_query_prompt(&mut self, kind: PromptKind, prompt: &mut PromptState) -> bool {
         if kind == PromptKind::GitStatus {
             return self.fill_git_status(prompt);
@@ -540,6 +592,7 @@ impl App {
             PromptKind::CommandPalette => {
                 prompt.set_candidates(self.palette_candidates());
             }
+            PromptKind::SelectWorkspace => self.fill_workspace_candidates(prompt),
             PromptKind::Messages => {
                 if self.state.warnings.is_empty() {
                     self.notify("no messages");
@@ -547,18 +600,10 @@ impl App {
                 }
                 prompt.set_candidates(self.state.warnings.clone());
             }
-            PromptKind::Find | PromptKind::Replace => {
-                prompt.history.entries = self.search_history.list(kind).to_vec();
-                if let Some(search) = &self.state.search {
-                    prompt.set_input(search.query.clone());
-                }
-            }
-            PromptKind::FindInFiles | PromptKind::ReplaceInFiles => {
-                prompt.history.entries = self.search_history.list(kind).to_vec();
-                if let Some(search) = &self.state.project_search {
-                    prompt.set_input(search.query.clone());
-                }
-            }
+            PromptKind::Find
+            | PromptKind::Replace
+            | PromptKind::FindInFiles
+            | PromptKind::ReplaceInFiles => self.fill_search_prompt(kind, prompt),
             PromptKind::GoToLine => {
                 if let (Some(pane), Some(document)) =
                     (self.state.focused_pane(), self.state.active_document())

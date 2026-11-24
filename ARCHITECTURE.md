@@ -194,9 +194,9 @@ installs by copying to a sibling file, setting mode 755, and renaming over the
 canonical executable. The running process keeps its mapping until exit, and a
 failure leaves the old binary intact. Only the executable changes.
 
-**Theme switching is a runtime state change, not a restart.** `select_theme`,
-`next_theme`, and `prev_theme` run through the same command path as everything
-else: `Theme::names` merges presets with `themes/*.toml`, `Theme::from_config`
+**Theme switching is a runtime state change, not a restart.** `select_theme`
+runs through the same command path as everything else: `Theme::names` merges
+presets with `themes/*.toml`, `Theme::from_config`
 resolves the chosen name, and `AppState::theme` is replaced. Rendering reads the
 palette from state each frame, so panes, syntax, explorer, status bar, prompts,
 and the terminal panel all switch together.

@@ -38,6 +38,7 @@ pub enum PromptKind {
     Conflicts,
     CommitMessage,
     Theme,
+    SelectWorkspace,
 }
 
 /// Grouping used by the prompt setup and submit code, so neither needs one
@@ -74,6 +75,7 @@ impl PromptKind {
                 | PromptKind::GitStatus
                 | PromptKind::Conflicts
                 | PromptKind::CommitMessage
+                | PromptKind::SelectWorkspace
         )
     }
 
@@ -115,6 +117,7 @@ impl PromptKind {
             PromptKind::GitStatus => "Git Status",
             PromptKind::Conflicts => "Merge Conflicts",
             PromptKind::CommitMessage => "Commit Message",
+            PromptKind::SelectWorkspace => "Workspace",
             _ => "",
         }
     }
@@ -181,6 +184,7 @@ impl PromptKind {
                 | PromptKind::QuitDirty
                 | PromptKind::QuitConfirm
                 | PromptKind::ExternalChange
+                | PromptKind::SelectWorkspace
         )
     }
 }
@@ -467,11 +471,12 @@ mod tests {
         prompt.set_candidates(vec![
             "split_top_bottom".to_string(),
             "select_theme".to_string(),
-            "toggle_terminal".to_string(),
+            "terminal".to_string(),
         ]);
         prompt.insert_char('t');
-        prompt.insert_char('t');
-        assert_eq!(prompt.selected_candidate(), Some("toggle_terminal"));
+        prompt.insert_char('e');
+        prompt.insert_char('r');
+        assert_eq!(prompt.selected_candidate(), Some("terminal"));
     }
 
     #[test]

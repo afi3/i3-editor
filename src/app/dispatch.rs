@@ -228,8 +228,7 @@ impl App {
             Command::PrevTerminal => self.cycle_terminal(-1),
             Command::TerminalRename => self.rename_terminal_prompt(),
             Command::SelectTheme => self.open_prompt(PromptKind::Theme),
-            Command::NextTheme => self.cycle_theme(1),
-            Command::PrevTheme => self.cycle_theme(-1),
+            Command::SelectWorkspace => self.open_prompt(PromptKind::SelectWorkspace),
             other => return Ok(Some(other)),
         }
         Ok(None)

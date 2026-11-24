@@ -202,19 +202,4 @@ impl App {
             None => self.notify(format!("theme: {name}")),
         }
     }
-
-    pub(crate) fn cycle_theme(&mut self, step: isize) {
-        let names = Theme::names(&self.state.themes_dir);
-        if names.is_empty() {
-            return;
-        }
-        let current = self.state.config.appearance.theme.to_ascii_lowercase();
-        let index = names
-            .iter()
-            .position(|name| name.eq_ignore_ascii_case(&current))
-            .unwrap_or(0) as isize;
-        let next = (index + step).rem_euclid(names.len() as isize) as usize;
-        let name = names[next].clone();
-        self.apply_theme(&name);
-    }
 }

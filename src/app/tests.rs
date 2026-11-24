@@ -1260,7 +1260,13 @@ fn theme_commands_cycle_and_select_files() {
     .expect("write");
     app.state.themes_dir = themes;
 
-    app.dispatch(Command::NextTheme).expect("next");
+    app.dispatch(Command::SelectTheme).expect("prompt");
+    if let InputMode::Prompt(prompt) = &mut app.state.mode {
+        prompt.select_candidate("dark");
+    } else {
+        panic!("expected theme prompt");
+    }
+    app.submit_prompt().expect("dark");
     assert_eq!(app.state.config.appearance.theme, "dark");
     assert_eq!(app.state.theme, Theme::preset("dark"));
 
@@ -1730,7 +1736,13 @@ fn theme_choice_is_written_back_to_the_config_file() {
     std::fs::write(&config_path, "[editor]\ntab_size = 2\n").expect("write");
     app.state.config_path = Some(config_path.clone());
 
-    app.dispatch(Command::NextTheme).expect("next");
+    app.dispatch(Command::SelectTheme).expect("prompt");
+    if let InputMode::Prompt(prompt) = &mut app.state.mode {
+        prompt.select_candidate("dark");
+    } else {
+        panic!("expected theme prompt");
+    }
+    app.submit_prompt().expect("dark");
     let text = std::fs::read_to_string(&config_path).expect("read");
     assert!(text.contains("theme = \"dark\""), "{text}");
     assert!(text.contains("tab_size = 2"), "{text}");
@@ -2112,21 +2124,26 @@ fn palette_lists_and_switches_workspaces() {
         prompt
             .candidates
             .iter()
-            .any(|name| name == "switch_workspace_1")
+            .any(|name| name == "select_workspace")
     );
     assert!(
-        prompt
+        !prompt
             .candidates
             .iter()
-            .any(|name| name == "switch_workspace_2")
+            .any(|name| name.starts_with("switch_workspace_"))
     );
-    assert!(
-        prompt
-            .candidates
-            .iter()
-            .any(|name| name == "explorer_refresh")
-    );
-    prompt.select_candidate("switch_workspace_1");
+    app.dispatch(Command::SelectWorkspace)
+        .expect("workspace prompt");
+    let InputMode::Prompt(prompt) = &mut app.state.mode else {
+        panic!("workspace prompt missing")
+    };
+    let first = prompt
+        .candidates
+        .iter()
+        .find(|candidate| candidate.starts_with("1  "))
+        .cloned()
+        .expect("first workspace");
+    prompt.select_candidate(&first);
     app.submit_prompt().expect("switch");
     assert_eq!(app.state.workspaces.active, 0);
     std::fs::remove_dir_all(&dir).ok();

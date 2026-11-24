@@ -123,8 +123,6 @@ pub enum Command {
     PrevTerminal,
     TerminalRename,
     SelectTheme,
-    NextTheme,
-    PrevTheme,
     NewWorkspace,
     SetWorkspaceRoot,
     SetWorkspaceTerminalDir,
@@ -133,6 +131,7 @@ pub enum Command {
     SwitchWorkspace(usize),
     NextWorkspace,
     PrevWorkspace,
+    SelectWorkspace,
     SaveTo(PathBuf),
     CreateFile(PathBuf),
     CreateDir(PathBuf),
@@ -183,7 +182,7 @@ impl Command {
 
     fn edit_spec(&self) -> Option<(&'static str, &'static str)> {
         Some(match self {
-            Command::ToggleComment => ("toggle_comment", "Toggle comments for the selection"),
+            Command::ToggleComment => ("comment", "Comment or uncomment the selection"),
             Command::ResolveConflictOurs => (
                 "resolve_conflict_ours",
                 "Resolve the conflict at/after the cursor with ours",
@@ -196,11 +195,11 @@ impl Command {
                 "resolve_conflict_both",
                 "Resolve the conflict at/after the cursor with both sides",
             ),
-            Command::ToggleFold => ("toggle_fold", "Fold or unfold the block at the cursor"),
+            Command::ToggleFold => ("fold", "Fold or unfold the block at the cursor"),
             Command::AddCursorBelow => ("add_cursor_below", "Add a cursor on the next line"),
             Command::AddCursorAbove => ("add_cursor_above", "Add a cursor on the previous line"),
             Command::ClearCursors => ("clear_cursors", "Remove secondary cursors"),
-            Command::ToggleWordWrap => ("toggle_word_wrap", "Turn soft word wrap on or off"),
+            Command::ToggleWordWrap => ("word_wrap", "Turn soft word wrap on or off"),
             Command::LineEndingsLf => ("line_endings_lf", "Convert the document to LF"),
             Command::LineEndingsCrlf => ("line_endings_crlf", "Convert the document to CRLF"),
             Command::GoToSymbol => ("go_to_symbol", "Jump to a definition in the document"),
@@ -271,7 +270,7 @@ impl Command {
             Command::NewPrompt => ("new_file", "Create a new file"),
             Command::NewScratch => ("new_scratch", "New scratch buffer"),
             Command::CloseDocument => ("close_document", "Close the active document tab"),
-            Command::ToggleExplorer => ("toggle_explorer", "Show or hide the explorer"),
+            Command::ToggleExplorer => ("explorer", "Show or hide the explorer"),
             Command::Palette => ("command_palette", "Run a command"),
             Command::Messages => ("messages", "Show startup warnings"),
             Command::Help => ("help", "Show keybindings"),
@@ -329,7 +328,9 @@ impl Command {
             Command::ExplorerRename => ("explorer_rename", "Rename the selected entry"),
             Command::ExplorerDelete => ("explorer_delete", "Delete the selected entry"),
             Command::ExplorerRefresh => ("explorer_refresh", "Reload the explorer"),
-            Command::ExplorerToggleHidden => ("explorer_toggle_hidden", "Toggle hidden files"),
+            Command::ExplorerToggleHidden => {
+                ("hidden_files", "Show or hide hidden and ignored files")
+            }
             _ => return None,
         })
     }
@@ -341,17 +342,12 @@ impl Command {
                 direction_name(*direction),
                 "Move the focused pane in a direction",
             ),
-            Command::ToggleMoveMode => {
-                ("toggle_move_mode", "Grab the focused pane (arrows move it)")
-            }
+            Command::ToggleMoveMode => ("move_mode", "Grab the focused pane (arrows move it)"),
             Command::SplitLeftRight => ("split_left_right", "Split pane left/right"),
             Command::SplitTopBottom => ("split_top_bottom", "Split pane top/bottom"),
             Command::ClosePane => ("close_pane", "Close the focused pane"),
-            Command::ToggleFullscreen => (
-                "toggle_fullscreen",
-                "Toggle fullscreen for the focused pane",
-            ),
-            Command::ToggleTabbed => ("toggle_tabbed", "Toggle tabbed layout for this container"),
+            Command::ToggleFullscreen => ("fullscreen", "Make the focused pane fullscreen"),
+            Command::ToggleTabbed => ("tabbed", "Use a tabbed layout for this container"),
             Command::NextPaneTab => ("next_pane_tab", "Next tab in the tabbed container"),
             Command::PrevPaneTab => ("prev_pane_tab", "Previous tab in the tabbed container"),
             _ => return None,
@@ -360,20 +356,23 @@ impl Command {
 
     fn terminal_spec(&self) -> Option<(&'static str, &'static str)> {
         Some(match self {
-            Command::ToggleTerminal => ("toggle_terminal", "Open or close the bottom terminal"),
+            Command::ToggleTerminal => ("terminal", "Open or close the bottom terminal"),
             Command::TerminalNew => ("new_terminal", "Open another terminal tab"),
             Command::TerminalClose => ("close_terminal", "Close the active terminal tab"),
             Command::NextTerminal => ("next_terminal", "Next terminal tab"),
             Command::PrevTerminal => ("prev_terminal", "Previous terminal tab"),
             Command::TerminalRename => ("rename_terminal", "Rename the active terminal tab"),
             Command::SelectTheme => ("select_theme", "Pick a theme from the themes directory"),
-            Command::NextTheme => ("next_theme", "Apply the next available theme"),
-            Command::PrevTheme => ("prev_theme", "Apply the previous available theme"),
             _ => return None,
         })
     }
 
     fn workspace_spec(&self) -> Option<(&'static str, &'static str)> {
+        self.workspace_edit_spec()
+            .or_else(|| self.workspace_navigation_spec())
+    }
+
+    fn workspace_edit_spec(&self) -> Option<(&'static str, &'static str)> {
         Some(match self {
             Command::NewWorkspace => ("new_workspace", "Create a workspace"),
             Command::SetWorkspaceRoot => (
@@ -386,14 +385,21 @@ impl Command {
             ),
             Command::CloseWorkspace => ("close_workspace", "Close the active workspace"),
             Command::RenameWorkspace => ("rename_workspace", "Rename the active workspace"),
-            Command::SwitchWorkspace(_) => ("switch_workspace", "Switch workspace"),
-            Command::NextWorkspace => ("next_workspace", "Switch to the next workspace"),
-            Command::PrevWorkspace => ("prev_workspace", "Switch to the previous workspace"),
             Command::SaveTo(_) => ("save_to", "Save path"),
             Command::CreateFile(_) => ("create_file", "Create file"),
             Command::CreateDir(_) => ("create_dir", "Create directory"),
             Command::RenameTo(_) => ("rename_to", "Rename"),
             Command::DeleteTarget(_) => ("delete_target", "Delete"),
+            _ => return None,
+        })
+    }
+
+    fn workspace_navigation_spec(&self) -> Option<(&'static str, &'static str)> {
+        Some(match self {
+            Command::SelectWorkspace => ("select_workspace", "Pick a workspace"),
+            Command::SwitchWorkspace(_) => ("switch_workspace", "Switch workspace"),
+            Command::NextWorkspace => ("next_workspace", "Switch to the next workspace"),
+            Command::PrevWorkspace => ("prev_workspace", "Switch to the previous workspace"),
             _ => return None,
         })
     }
@@ -472,8 +478,7 @@ impl Command {
             Command::PrevTerminal,
             Command::TerminalRename,
             Command::SelectTheme,
-            Command::NextTheme,
-            Command::PrevTheme,
+            Command::SelectWorkspace,
             Command::MovePane(Direction::Left),
             Command::MovePane(Direction::Right),
             Command::MovePane(Direction::Up),
@@ -500,6 +505,7 @@ impl Command {
             Command::CloseWorkspace,
             Command::NextWorkspace,
             Command::PrevWorkspace,
+            Command::SelectWorkspace,
             Command::Quit,
         ]
     }
@@ -631,8 +637,6 @@ mod tests {
             Command::PrevTerminal,
             Command::TerminalRename,
             Command::SelectTheme,
-            Command::NextTheme,
-            Command::PrevTheme,
             Command::NewWorkspace,
             Command::SetWorkspaceRoot,
             Command::SetWorkspaceTerminalDir,
@@ -647,6 +651,21 @@ mod tests {
             Command::RenameTo(PathBuf::from("x")),
             Command::DeleteTarget(PathBuf::from("/tmp/x")),
         ]
+    }
+
+    #[test]
+    fn palette_names_are_concise() {
+        let names: Vec<&str> = Command::palette().iter().map(Command::name).collect();
+        assert!(names.iter().all(|name| !name.contains("toggle")));
+        assert!(!names.contains(&"next_theme"));
+        assert!(!names.contains(&"prev_theme"));
+        assert!(names.contains(&"select_theme"));
+        assert!(names.contains(&"select_workspace"));
+        assert!(
+            !names
+                .iter()
+                .any(|name| name.starts_with("switch_workspace_"))
+        );
     }
 
     #[test]
