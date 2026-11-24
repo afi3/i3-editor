@@ -211,7 +211,7 @@ fn read_checksum(path: &Path) -> Result<String> {
     Ok(checksum.to_string())
 }
 
-fn sha256_file(path: &Path) -> Result<String> {
+pub(crate) fn sha256_file(path: &Path) -> Result<String> {
     let mut file = std::fs::File::open(path).map_err(|error| Error::io("read", path, error))?;
     let mut hasher = Sha256::new();
     let mut buffer = [0u8; 64 * 1024];

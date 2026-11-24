@@ -13,6 +13,7 @@ mod explorer;
 mod git;
 mod input;
 mod lsp;
+mod lsp_install;
 mod plugins;
 mod project_search;
 mod recovery;

@@ -2651,6 +2651,7 @@ fn lsp_diagnostics_completion_hover_and_definition_reach_the_ui() {
             command: "fake".to_string(),
             args: Vec::new(),
             extensions: vec!["rs".to_string()],
+            filenames: Vec::new(),
         },
     );
     let mut manager = LspManager::new(&config, dir.clone());
@@ -2755,6 +2756,31 @@ fn lsp_diagnostics_completion_hover_and_definition_reach_the_ui() {
 }
 
 #[test]
+fn lsp_install_refuses_an_already_configured_language() {
+    let (mut app, dir) = fixture("fn main() {}\n");
+    let rust = dir.join("main.rs");
+    std::fs::write(&rust, "fn main() {}\n").expect("rust file");
+    app.open_document(rust).expect("open rust");
+    app.state.config.lsp.servers.insert(
+        "rust".to_string(),
+        crate::config::LspServerConfig {
+            command: "rust-analyzer".to_string(),
+            args: Vec::new(),
+            extensions: vec!["rs".to_string()],
+            filenames: Vec::new(),
+        },
+    );
+    app.dispatch(Command::LspInstall).expect("install command");
+    assert!(app.lsp_install.is_none());
+    assert!(
+        app.state.ui.message.contains("already configured"),
+        "{}",
+        app.state.ui.message
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn workspace_root_change_restarts_lsp() {
     use crate::config::{LspConfig, LspServerConfig};
     use crate::lsp::LspManager;
@@ -2767,6 +2793,7 @@ fn workspace_root_change_restarts_lsp() {
             command: "fake".to_string(),
             args: Vec::new(),
             extensions: vec!["rs".to_string()],
+            filenames: Vec::new(),
         },
     );
     app.state.config.lsp = config.clone();

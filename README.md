@@ -351,8 +351,24 @@ The editor speaks a minimal subset of LSP over stdio: full document sync,
 diagnostics, completion, hover, and go-to-definition. Servers start lazily when a
 matching document opens; a missing or crashing server never blocks editing.
 
-- Configure one table per server. The table name is the default language match;
-  `extensions` overrides it:
+- **Install from the palette:** open a file, press `F1`, and choose
+  `lsp_install`. The active file selects the provider, so `.rs` installs Rust,
+  `.py` installs Python, and so on. Installation runs in the background and
+  reports progress in the status bar.
+- Built-in providers: Rust (`rust-analyzer`), Python (`pylsp`), JavaScript /
+  TypeScript, Lua, YAML, and Dockerfile/Containerfile. A server already on
+  `PATH` is reused; otherwise Rust uses `rustup`, Python uses an isolated
+  virtualenv + `pip`, JavaScript/TypeScript/YAML/Dockerfile use `npm`, and Lua
+  downloads a pinned, checksum-verified GitHub release.
+- Local servers live under `<config>/i3-editor/lsp/`. The installer writes
+  `<config>/i3-editor/lsp.toml`; an explicit `[lsp.<name>]` in `config.toml`
+  always wins. Delete the table or `lsp.toml` entry to opt out.
+- Requirements when a system server is absent: `rustup` for Rust, Python 3 +
+  `pip` for Python, and Node.js + `npm` for JavaScript/TypeScript, YAML, and
+  Dockerfile. The installer reports the missing tool instead of running a
+  partial install.
+- Configure one table per server manually when using a custom binary. The table
+  name is the default language match; `extensions`/`filenames` override it:
 
 ```toml
 [lsp.rust]
@@ -362,6 +378,11 @@ args = []
 [lsp.python]
 command = "pylsp"
 extensions = ["py", "pyi"]
+
+[lsp.dockerfile]
+command = "docker-langserver"
+args = ["--stdio"]
+filenames = ["Dockerfile", "Containerfile"]
 ```
 
 - Diagnostics appear as `•` markers in the gutter (red error, yellow warning,

@@ -80,8 +80,95 @@ impl App {
         {
             return true;
         }
-        self.notify("no language servers configured ([lsp.<name>] in config.toml)");
+        self.notify("no language servers configured; F1 > lsp_install");
         false
+    }
+
+    pub(crate) fn lsp_install(&mut self) -> Result<()> {
+        if self.lsp_install.is_some() {
+            self.notify("a language server install is already running");
+            return Ok(());
+        }
+        let Some(document) = self.state.active_document() else {
+            self.notify("open a file before installing its language server");
+            return Ok(());
+        };
+        let Some(path) = document.path.as_deref() else {
+            self.notify("save the document before installing its language server");
+            return Ok(());
+        };
+        let Some(provider) = crate::lsp_install::provider_for_path(path) else {
+            self.notify(format!(
+                "no installable language server for {}",
+                document.display_name()
+            ));
+            return Ok(());
+        };
+        if self.state.config.lsp.servers.contains_key(provider.id) {
+            self.notify(format!(
+                "{} language server is already configured",
+                provider.label
+            ));
+            return Ok(());
+        }
+        let Some(directory) = crate::config::lsp_dir() else {
+            self.notify("no config directory for language servers");
+            return Ok(());
+        };
+        self.lsp_install = Some(crate::lsp_install::spawn(provider, directory));
+        self.notify(format!(
+            "installing {} language server in the background",
+            provider.label
+        ));
+        self.dirty = true;
+        Ok(())
+    }
+
+    pub(crate) fn pump_lsp_install(&mut self) {
+        let Some(task) = self.lsp_install.as_ref() else {
+            return;
+        };
+        let mut events = Vec::new();
+        while let Ok(event) = task.rx.try_recv() {
+            events.push(event);
+        }
+        let label = task.label;
+        let mut finished = false;
+        for event in events {
+            match event {
+                crate::lsp_install::Event::Status(message) => {
+                    self.notify(message);
+                    self.dirty = true;
+                }
+                crate::lsp_install::Event::Done { key, server } => {
+                    self.state
+                        .config
+                        .lsp
+                        .servers
+                        .insert(key.clone(), server.clone());
+                    let persistence = crate::config::persist_lsp_server(&key, &server);
+                    self.restart_lsp();
+                    match persistence {
+                        Ok(()) => self.notify(format!(
+                            "{label} language server installed; diagnostics will follow"
+                        )),
+                        Err(error) => self.notify(format!(
+                            "{label} language server active, but lsp.toml was not saved: {error}"
+                        )),
+                    }
+                    finished = true;
+                    self.dirty = true;
+                }
+                crate::lsp_install::Event::Failed { key, message } => {
+                    self.notify(format!("{key} language server install failed: {message}"));
+                    finished = true;
+                    self.dirty = true;
+                }
+            }
+        }
+        if finished {
+            self.lsp_install = None;
+        }
     }
 
     fn document_for_path(&self, path: &std::path::Path) -> Option<DocumentId> {

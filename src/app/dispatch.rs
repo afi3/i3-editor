@@ -119,6 +119,7 @@ impl App {
             Command::LspCompletion => self.lsp_completion()?,
             Command::LspHover => self.lsp_hover()?,
             Command::LspDefinition => self.lsp_definition()?,
+            Command::LspInstall => self.lsp_install()?,
             other => return Ok(Some(other)),
         }
         Ok(None)

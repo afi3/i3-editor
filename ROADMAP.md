@@ -705,6 +705,23 @@ workflow run `45215664509` built and published all four targets; the aarch64
 macOS asset passed its SHA-256 check, reported `i3-editor 0.1.7`, and a v0.1.6
 binary self-updated to v0.1.7 successfully.
 
+## Unreleased v0.1.8 — language-server installer
+
+- `lsp_install` (palette) selects a provider from the active file and installs
+  its server in the background, with status messages while it works.
+- Built-in providers cover Rust, Python, JavaScript/TypeScript, Lua, YAML, and
+  Dockerfile/Containerfile. Servers on `PATH` are reused; local installs use
+  rustup, an isolated Python virtualenv, npm, or a checksum-pinned Lua release.
+- Installer metadata lives in `<config>/i3-editor/lsp.toml`; explicit
+  `[lsp.<name>]` config wins, and `filenames` now selects files such as
+  `Dockerfile` and `Containerfile` without requiring an extension.
+- `lsp_install` refuses to overwrite an explicit configuration and reports
+  missing `rustup`, Python, or Node/npm prerequisites.
+
+Verification: `cargo test` (374 unit + 6 CLI process + 1 PTY smoke = 381),
+`cargo fmt --check`, `cargo clippy --all-targets --all-features`, and
+`forgeguard gate --changed --output compact`.
+
 ## Verification commands
 
 ```bash
@@ -715,4 +732,4 @@ cargo clippy --all-targets --all-features
 cargo run -- --dump-keymap
 ```
 
-Last recorded run: `cargo test` → 377 passed (370 unit + 6 CLI process + 1 PTY smoke), `cargo clippy` → 0 warnings.
+Last recorded run: `cargo test` → 381 passed (374 unit + 6 CLI process + 1 PTY smoke), `cargo clippy` → 0 warnings.

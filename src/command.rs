@@ -73,6 +73,7 @@ pub enum Command {
     LspCompletion,
     LspHover,
     LspDefinition,
+    LspInstall,
     GitStatus,
     GitDiff,
     GitLog,
@@ -231,6 +232,10 @@ impl Command {
             Command::LspDefinition => (
                 "lsp_definition",
                 "Jump to the definition via the language server",
+            ),
+            Command::LspInstall => (
+                "lsp_install",
+                "Install the language server for the active file",
             ),
             _ => return None,
         })
@@ -441,6 +446,7 @@ impl Command {
             Command::LspCompletion,
             Command::LspHover,
             Command::LspDefinition,
+            Command::LspInstall,
             Command::GitStatus,
             Command::GitDiff,
             Command::GitLog,
@@ -572,6 +578,7 @@ mod tests {
             Command::LspCompletion,
             Command::LspHover,
             Command::LspDefinition,
+            Command::LspInstall,
             Command::GitStatus,
             Command::GitDiff,
             Command::GitLog,

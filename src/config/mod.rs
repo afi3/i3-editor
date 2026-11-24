@@ -78,6 +78,9 @@ pub struct LspServerConfig {
     /// File extensions that select this server; empty uses the table key.
     #[serde(default)]
     pub extensions: Vec<String>,
+    /// Exact file names for servers such as Dockerfile.
+    #[serde(default)]
+    pub filenames: Vec<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -250,6 +253,67 @@ pub fn themes_dir() -> Option<PathBuf> {
     config_dir().map(|dir| dir.join("themes"))
 }
 
+pub fn lsp_dir() -> Option<PathBuf> {
+    config_dir().map(|dir| dir.join("lsp"))
+}
+
+pub fn managed_lsp_path() -> Option<PathBuf> {
+    config_dir().map(|dir| dir.join("lsp.toml"))
+}
+
+pub fn load_managed_lsp() -> (LspConfig, Vec<String>) {
+    let Some(path) = managed_lsp_path() else {
+        return (LspConfig::default(), Vec::new());
+    };
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return (LspConfig::default(), Vec::new());
+        }
+        Err(error) => {
+            return (
+                LspConfig::default(),
+                vec![format!("cannot read {}: {error}", path.display())],
+            );
+        }
+    };
+    match toml::from_str::<LspConfig>(&text) {
+        Ok(config) => (config, Vec::new()),
+        Err(error) => (
+            LspConfig::default(),
+            vec![format!("{} is not valid LSP TOML: {error}", path.display())],
+        ),
+    }
+}
+
+/// Merge installer-managed servers. An explicit `[lsp.<name>]` in the user
+/// config always wins, so an install never silently overrides a hand-written
+/// command.
+pub fn merge_managed_lsp(config: &mut AppConfig) -> Vec<String> {
+    let (managed, warnings) = load_managed_lsp();
+    for (key, server) in managed.servers {
+        config.lsp.servers.entry(key).or_insert(server);
+    }
+    warnings
+}
+
+pub fn persist_lsp_server(key: &str, server: &LspServerConfig) -> std::io::Result<()> {
+    let Some(path) = managed_lsp_path() else {
+        return Err(std::io::Error::other("no config directory"));
+    };
+    let (mut managed, _) = load_managed_lsp();
+    managed.servers.insert(key.to_string(), server.clone());
+    let text = toml::to_string(&managed).map_err(std::io::Error::other)?;
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent)?;
+    }
+    let temporary = path.with_extension("toml.tmp");
+    std::fs::write(&temporary, text)?;
+    std::fs::rename(&temporary, path)
+}
+
 pub fn default_path() -> Option<PathBuf> {
     config_dir().map(|dir| dir.join("config.toml"))
 }
@@ -260,7 +324,11 @@ pub fn history_path() -> Option<PathBuf> {
 
 pub fn load() -> (AppConfig, Vec<String>) {
     match default_path() {
-        Some(path) => load_from(&path),
+        Some(path) => {
+            let (mut config, mut warnings) = load_from(&path);
+            warnings.extend(merge_managed_lsp(&mut config));
+            (config, warnings)
+        }
         None => (AppConfig::default(), Vec::new()),
     }
 }
@@ -768,6 +836,23 @@ mod strict_tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn managed_lsp_config_round_trips() {
+        let mut config = LspConfig::default();
+        config.servers.insert(
+            "dockerfile".to_string(),
+            LspServerConfig {
+                command: "/tmp/docker-langserver".to_string(),
+                args: vec!["--stdio".to_string()],
+                extensions: vec!["dockerfile".to_string()],
+                filenames: vec!["Dockerfile".to_string()],
+            },
+        );
+        let text = toml::to_string(&config).expect("serialize");
+        let restored: LspConfig = toml::from_str(&text).expect("parse");
+        assert_eq!(restored, config);
     }
 
     #[test]

@@ -44,6 +44,7 @@ impl App {
             terminal,
             drag: None,
             scrollbar_drag: None,
+            lsp_install: None,
             last_explorer_click: None,
             watchers: Vec::new(),
             external_watcher: None,
@@ -104,6 +105,8 @@ pub struct App {
     pub(crate) drag: Option<mouse::Drag>,
     /// Active vertical scrollbar drag, if any.
     pub(crate) scrollbar_drag: Option<mouse::ScrollbarDrag>,
+    /// Running on-demand language-server installer.
+    pub(crate) lsp_install: Option<crate::lsp_install::Task>,
     /// Last explorer row click, for double-click detection.
     pub(crate) last_explorer_click: Option<(usize, std::time::Instant)>,
     /// Recursive watcher per workspace root; empty when unavailable.
@@ -231,6 +234,7 @@ impl App {
             terminal: setup.terminal,
             drag: None,
             scrollbar_drag: None,
+            lsp_install: None,
             last_explorer_click: None,
             watchers: Vec::new(),
             external_watcher: None,
@@ -343,6 +347,7 @@ impl App {
             self.pump_watcher();
             self.pump_project_search();
             self.pump_lsp();
+            self.pump_lsp_install();
             self.refresh_git_if_due();
             self.autosave_swaps();
             if self.dirty {
@@ -425,6 +430,9 @@ impl App {
     }
 
     fn frame_timeout(&self) -> Duration {
+        if self.lsp_install.is_some() {
+            return Duration::from_millis(100);
+        }
         if !self.state.terminals.is_empty() {
             if self.state.focus == Focus::Shell {
                 Duration::from_millis(30)

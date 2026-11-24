@@ -540,6 +540,17 @@ impl LspManager {
     }
 
     fn config_key(&self, path: &Path) -> Option<String> {
+        let filename = path.file_name().map(|name| name.to_string_lossy());
+        for (key, config) in &self.configs {
+            if filename.as_ref().is_some_and(|filename| {
+                config
+                    .filenames
+                    .iter()
+                    .any(|expected| expected.eq_ignore_ascii_case(filename))
+            }) {
+                return Some(key.clone());
+            }
+        }
         let extension = path
             .extension()
             .map(|extension| extension.to_string_lossy().to_ascii_lowercase())?;
@@ -723,6 +734,7 @@ fn default_extensions(key: &str) -> &'static [&'static str] {
         "go" | "gopls" => &["go"],
         "c" | "clangd" | "cpp" => &["c", "h", "cc", "cpp", "hpp", "cxx"],
         "lua" | "lua-language-server" => &["lua"],
+        "yaml" | "yaml-language-server" => &["yml", "yaml"],
         "shell" | "bash" | "bash-language-server" => &["sh", "bash", "zsh"],
         "toml" | "taplo" => &["toml"],
         "json" | "jsonls" => &["json"],
@@ -731,23 +743,38 @@ fn default_extensions(key: &str) -> &'static [&'static str] {
     }
 }
 
+fn is_dockerfile(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| {
+            name.eq_ignore_ascii_case("Dockerfile") || name.eq_ignore_ascii_case("Containerfile")
+        })
+}
+
 pub fn language_id(path: &Path) -> &'static str {
-    match path
-        .extension()
-        .map(|extension| extension.to_string_lossy().to_ascii_lowercase())
-        .as_deref()
-    {
-        Some("rs") => "rust",
-        Some("py") | Some("pyi") => "python",
-        Some("js") | Some("jsx") | Some("mjs") | Some("cjs") => "javascript",
-        Some("ts") | Some("tsx") => "typescript",
-        Some("go") => "go",
-        Some("c") | Some("h") | Some("cc") | Some("cpp") | Some("hpp") | Some("cxx") => "c",
-        Some("sh") | Some("bash") | Some("zsh") => "shellscript",
-        Some("lua") => "lua",
-        Some("md") | Some("markdown") => "markdown",
-        Some("toml") => "toml",
-        Some("json") => "json",
+    if is_dockerfile(path) {
+        return "dockerfile";
+    }
+    path.extension()
+        .map(|extension| language_for_extension(&extension.to_string_lossy().to_ascii_lowercase()))
+        .unwrap_or("plaintext")
+}
+
+fn language_for_extension(extension: &str) -> &'static str {
+    match extension {
+        "rs" => "rust",
+        "py" | "pyi" => "python",
+        "js" | "jsx" | "mjs" | "cjs" => "javascript",
+        "ts" | "tsx" => "typescript",
+        "go" => "go",
+        "c" | "h" | "cc" | "cpp" | "hpp" | "cxx" => "c",
+        "sh" | "bash" | "zsh" => "shellscript",
+        "lua" => "lua",
+        "yml" | "yaml" => "yaml",
+        "dockerfile" => "dockerfile",
+        "md" | "markdown" => "markdown",
+        "toml" => "toml",
+        "json" => "json",
         _ => "plaintext",
     }
 }
@@ -894,6 +921,7 @@ mod tests {
                 command: "fake".to_string(),
                 args: Vec::new(),
                 extensions: vec!["rs".to_string()],
+                filenames: Vec::new(),
             },
         );
         LspManager::new(&config, std::env::temp_dir())
@@ -1207,6 +1235,27 @@ mod tests {
             Some("fake")
         );
         assert!(manager.config_key(Path::new("/tmp/main.py")).is_none());
+    }
+
+    #[test]
+    fn dockerfile_filenames_and_yaml_ids_match() {
+        let mut config = LspConfig::default();
+        config.servers.insert(
+            "dockerfile".to_string(),
+            crate::config::LspServerConfig {
+                command: "docker-langserver".to_string(),
+                args: Vec::new(),
+                extensions: Vec::new(),
+                filenames: vec!["Dockerfile".to_string()],
+            },
+        );
+        let manager = LspManager::new(&config, std::env::temp_dir());
+        assert_eq!(
+            manager.config_key(Path::new("/tmp/Dockerfile")).as_deref(),
+            Some("dockerfile")
+        );
+        assert_eq!(language_id(Path::new("/tmp/Dockerfile")), "dockerfile");
+        assert_eq!(language_id(Path::new("/tmp/ci.yml")), "yaml");
     }
 
     #[test]

@@ -345,6 +345,16 @@ workspace root or the `[lsp.*]` tables calls `LspManager::restart`, which drops
 the old children and reopens the documents against the new root/config on the
 next pump.
 
+**Language-server installation is a separate background task.**
+`lsp_install::PROVIDERS` maps the active file extension or filename to one
+built-in provider. The installer first reuses a binary on `PATH`, otherwise it
+runs rustup, creates an isolated Python virtualenv, invokes npm into
+`<config>/i3-editor/lsp/<provider>`, or downloads a pinned Lua release with a
+checksum check. A worker thread sends status and completion events to
+`App::pump_lsp_install`; only the UI thread mutates config, writes
+`lsp.toml`, and restarts `LspManager`. Explicit `[lsp.<name>]` entries are never
+overwritten by the installer.
+
 **File operations follow the focused surface.** `duplicate_file`, `copy_path`,
 and `reveal_in_terminal` take the explorer row when the explorer has focus;
 otherwise the active document's path wins, with the explorer row as fallback.
