@@ -741,7 +741,11 @@ milestone. Release workflow run `45332605999` built and published all four
 targets; the aarch64 macOS asset passed its SHA-256 check, reported
 `i3-editor 0.1.8`, and a v0.1.7 binary self-updated to v0.1.8 successfully.
 
-## Unreleased v0.1.9 — reload hardening
+## Release v0.1.9 — shipped
+
+Shipped as `v0.1.9` on 2026-11-24. Reload hardening, `lsp_uninstall`, pinned
+installer packages, and Dockerfile pattern matching land on top of v0.1.8;
+`v0.1.x` remains the hardening line and `v0.2.x` stays reserved for AI/MCP.
 
 - `App::new` now stores the real keyboard-enhancement probe result instead of
   `false`; config reload keeps enhanced bindings and no longer reintroduces the
@@ -759,6 +763,12 @@ targets; the aarch64 macOS asset passed its SHA-256 check, reported
 Verification: `cargo test` (378 unit + 6 CLI process + 1 PTY smoke = 385),
 `cargo fmt --check`, `cargo clippy --all-targets --all-features`, and
 `forgeguard gate --changed --output compact`.
+
+Release record: `cargo fmt --check`, `cargo test` (385), and
+`cargo clippy --all-targets --all-features` are clean; `cargo audit` reports no
+vulnerabilities and `forgeguard gate --changed` reports no errors or warnings.
+Version `0.1.9`, tag `v0.1.9`, and the four platform assets are the release
+milestone.
 
 ## Verification commands
 
