@@ -29,7 +29,7 @@ curl -fsSL https://raw.githubusercontent.com/afi3/i3-editor/main/install.sh \
 
 # pinned version
 curl -fsSL https://raw.githubusercontent.com/afi3/i3-editor/main/install.sh \
-  | sh -s -- --version 0.1.7
+  | sh -s -- --version 0.1.8
 
 # update an existing install (installer or the binary itself)
 i3-editor --update
@@ -831,13 +831,13 @@ cargo test
 cargo clippy --all-targets --all-features
 
 # 2. commit, then tag the same commit
-git tag -a v0.1.7 -m "v0.1.7"
+git tag -a v0.1.8 -m "v0.1.8"
 git push origin main
-git push origin v0.1.7
+git push origin v0.1.8
 
 # 3. the release workflow builds four targets and publishes assets:
 #    i3-editor-<target>.tar.gz + .sha256
-gh release view v0.1.7
+gh release view v0.1.8
 
 # 4. verify the updater against the published release
 i3-editor --update

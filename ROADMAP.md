@@ -705,7 +705,12 @@ workflow run `45215664509` built and published all four targets; the aarch64
 macOS asset passed its SHA-256 check, reported `i3-editor 0.1.7`, and a v0.1.6
 binary self-updated to v0.1.7 successfully.
 
-## Unreleased v0.1.8 — language-server installer
+## Release v0.1.8 — shipped
+
+Shipped as `v0.1.8` on 2026-11-24. The on-demand language-server installer,
+simplified command palette, and QTerminal Backspace/Delete compatibility land on
+top of v0.1.7; `v0.1.x` remains the hardening line and `v0.2.x` stays reserved
+for AI/MCP.
 
 - `lsp_install` (palette) selects a provider from the active file and installs
   its server in the background, with status messages while it works.
@@ -727,6 +732,12 @@ binary self-updated to v0.1.7 successfully.
 Verification: `cargo test` (376 unit + 6 CLI process + 1 PTY smoke = 383),
 `cargo fmt --check`, `cargo clippy --all-targets --all-features`, and
 `forgeguard gate --changed --output compact`.
+
+Release record: `cargo fmt --check`, `cargo test` (383), and
+`cargo clippy --all-targets --all-features` are clean; `cargo audit` reports no
+vulnerabilities and `forgeguard gate --changed` reports no errors or warnings.
+Version `0.1.8`, tag `v0.1.8`, and the four platform assets are the release
+milestone.
 
 ## Verification commands
 

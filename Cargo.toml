@@ -1,6 +1,6 @@
 [package]
 name = "i3-editor"
-version = "0.1.7"
+version = "0.1.8"
 edition = "2024"
 rust-version = "1.91"
 description = "A keyboard-first terminal text editor with file explorer, panes, workspaces, Git, LSP, and Lua plugins."
