@@ -74,6 +74,7 @@ pub enum Command {
     LspHover,
     LspDefinition,
     LspInstall,
+    LspUninstall,
     GitStatus,
     GitDiff,
     GitLog,
@@ -235,6 +236,10 @@ impl Command {
             Command::LspInstall => (
                 "lsp_install",
                 "Install the language server for the active file",
+            ),
+            Command::LspUninstall => (
+                "lsp_uninstall",
+                "Remove the installed language server for the active file",
             ),
             _ => return None,
         })
@@ -453,6 +458,7 @@ impl Command {
             Command::LspHover,
             Command::LspDefinition,
             Command::LspInstall,
+            Command::LspUninstall,
             Command::GitStatus,
             Command::GitDiff,
             Command::GitLog,
@@ -585,6 +591,7 @@ mod tests {
             Command::LspHover,
             Command::LspDefinition,
             Command::LspInstall,
+            Command::LspUninstall,
             Command::GitStatus,
             Command::GitDiff,
             Command::GitLog,
@@ -661,6 +668,7 @@ mod tests {
         assert!(!names.contains(&"prev_theme"));
         assert!(names.contains(&"select_theme"));
         assert!(names.contains(&"select_workspace"));
+        assert!(names.contains(&"lsp_uninstall"));
         assert!(
             !names
                 .iter()

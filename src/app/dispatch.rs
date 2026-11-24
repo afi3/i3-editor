@@ -120,6 +120,7 @@ impl App {
             Command::LspHover => self.lsp_hover()?,
             Command::LspDefinition => self.lsp_definition()?,
             Command::LspInstall => self.lsp_install()?,
+            Command::LspUninstall => self.lsp_uninstall()?,
             other => return Ok(Some(other)),
         }
         Ok(None)

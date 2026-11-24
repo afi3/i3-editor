@@ -124,6 +124,59 @@ impl App {
         Ok(())
     }
 
+    pub(crate) fn lsp_uninstall(&mut self) -> Result<()> {
+        if self.lsp_install.is_some() {
+            self.notify("a language server install is already running");
+            return Ok(());
+        }
+        let Some(document) = self.state.active_document() else {
+            self.notify("open a file before removing its language server");
+            return Ok(());
+        };
+        let Some(path) = document.path.as_deref() else {
+            self.notify("save the document before removing its language server");
+            return Ok(());
+        };
+        let Some(provider) = crate::lsp_install::provider_for_path(path) else {
+            self.notify(format!(
+                "no installable language server for {}",
+                document.display_name()
+            ));
+            return Ok(());
+        };
+        match crate::config::take_managed_lsp_server(provider.id) {
+            Ok(Some(_)) => {}
+            Ok(None) => {
+                self.notify(format!(
+                    "{} was not installed by i3-editor; edit config.toml instead",
+                    provider.label
+                ));
+                return Ok(());
+            }
+            Err(error) => {
+                self.notify(format!("cannot remove managed LSP config: {error}"));
+                return Ok(());
+            }
+        };
+        self.reload_config();
+        if self.state.config_path.is_none() {
+            self.state.config.lsp.servers.remove(provider.id);
+            self.restart_lsp();
+        }
+        if self.state.config.lsp.servers.contains_key(provider.id) {
+            self.notify(format!(
+                "{} managed entry removed; explicit config still active",
+                provider.label
+            ));
+            return Ok(());
+        }
+        self.notify(format!(
+            "{} language server unregistered; local files under lsp/ are kept",
+            provider.label
+        ));
+        Ok(())
+    }
+
     pub(crate) fn pump_lsp_install(&mut self) {
         let Some(task) = self.lsp_install.as_ref() else {
             return;

@@ -14,6 +14,11 @@ use std::thread;
 use crate::config::LspServerConfig;
 
 const LUA_VERSION: &str = "3.19.2";
+const NPM_TYPESCRIPT: &str = "typescript@5.9.3";
+const NPM_TYPESCRIPT_LS: &str = "typescript-language-server@5.3.0";
+const NPM_YAML_LS: &str = "yaml-language-server@1.19.2";
+const NPM_DOCKER_LS: &str = "dockerfile-language-server-nodejs@0.15.0";
+const PIP_PYTHON_LS: &str = "python-lsp-server==1.15.0";
 
 #[derive(Clone, Copy, Debug)]
 pub struct Provider {
@@ -58,7 +63,14 @@ pub const PROVIDERS: &[Provider] = &[
         id: "dockerfile",
         label: "Dockerfile",
         extensions: &["dockerfile"],
-        filenames: &["Dockerfile", "Containerfile"],
+        filenames: &[
+            "Dockerfile",
+            "Containerfile",
+            "Dockerfile.*",
+            "Containerfile.*",
+            "*.Dockerfile",
+            "*.Containerfile",
+        ],
     },
 ];
 
@@ -69,7 +81,7 @@ pub fn provider_for_path(path: &Path) -> Option<&'static Provider> {
             provider
                 .filenames
                 .iter()
-                .any(|expected| expected.eq_ignore_ascii_case(filename))
+                .any(|expected| crate::config::filename_matches(expected, filename))
         }) {
             return Some(provider);
         }
@@ -128,21 +140,21 @@ fn install(
         "typescript" => install_npm(
             provider,
             directory,
-            &["typescript", "typescript-language-server"],
+            &[NPM_TYPESCRIPT, NPM_TYPESCRIPT_LS],
             "typescript-language-server",
             tx,
         ),
         "yaml" => install_npm(
             provider,
             directory,
-            &["yaml-language-server"],
+            &[NPM_YAML_LS],
             "yaml-language-server",
             tx,
         ),
         "dockerfile" => install_npm(
             provider,
             directory,
-            &["dockerfile-language-server-nodejs"],
+            &[NPM_DOCKER_LS],
             "docker-langserver",
             tx,
         ),
@@ -193,7 +205,7 @@ fn install_python(
                 "pip",
                 "install",
                 "--disable-pip-version-check",
-                "python-lsp-server",
+                PIP_PYTHON_LS,
             ],
             None,
         )?;
@@ -390,6 +402,14 @@ mod tests {
         );
         assert_eq!(
             provider_for_path(Path::new("Containerfile")).map(|p| p.id),
+            Some("dockerfile")
+        );
+        assert_eq!(
+            provider_for_path(Path::new("Dockerfile.dev")).map(|p| p.id),
+            Some("dockerfile")
+        );
+        assert_eq!(
+            provider_for_path(Path::new("app.Dockerfile")).map(|p| p.id),
             Some("dockerfile")
         );
         assert!(provider_for_path(Path::new("notes.txt")).is_none());

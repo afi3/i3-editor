@@ -751,8 +751,12 @@ targets; the aarch64 macOS asset passed its SHA-256 check, reported
   from the running session.
 - Added a merge regression test proving explicit `[lsp.<name>]` still wins over
   the managed entry.
+- Added `lsp_uninstall` for installer-managed providers; it removes the managed
+  entry and leaves local binaries for manual cleanup.
+- Pinned npm and pip package versions, and widened Dockerfile matching to
+  `Dockerfile.*`, `Containerfile.*`, and `*.Dockerfile`/`*.Containerfile`.
 
-Verification: `cargo test` (377 unit + 6 CLI process + 1 PTY smoke = 384),
+Verification: `cargo test` (378 unit + 6 CLI process + 1 PTY smoke = 385),
 `cargo fmt --check`, `cargo clippy --all-targets --all-features`, and
 `forgeguard gate --changed --output compact`.
 
@@ -766,4 +770,4 @@ cargo clippy --all-targets --all-features
 cargo run -- --dump-keymap
 ```
 
-Last recorded run: `cargo test` → 384 passed (377 unit + 6 CLI process + 1 PTY smoke), `cargo clippy` → 0 warnings.
+Last recorded run: `cargo test` → 385 passed (378 unit + 6 CLI process + 1 PTY smoke), `cargo clippy` → 0 warnings.

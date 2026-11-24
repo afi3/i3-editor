@@ -69,6 +69,20 @@ pub struct LspConfig {
     pub servers: BTreeMap<String, LspServerConfig>,
 }
 
+/// Match a configured filename against an exact name or a simple `*` prefix/suffix
+/// pattern (`Dockerfile.*`, `*.Dockerfile`).
+pub fn filename_matches(pattern: &str, name: &str) -> bool {
+    let pattern = pattern.to_ascii_lowercase();
+    let name = name.to_ascii_lowercase();
+    if let Some(prefix) = pattern.strip_suffix('*') {
+        return name.starts_with(prefix);
+    }
+    if let Some(suffix) = pattern.strip_prefix('*') {
+        return name.ends_with(suffix);
+    }
+    pattern == name
+}
+
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct LspServerConfig {
@@ -302,12 +316,26 @@ fn merge_lsp_config(config: &mut AppConfig, managed: LspConfig) {
 }
 
 pub fn persist_lsp_server(key: &str, server: &LspServerConfig) -> std::io::Result<()> {
+    let (mut managed, _) = load_managed_lsp();
+    managed.servers.insert(key.to_string(), server.clone());
+    write_managed_lsp(&managed)
+}
+
+/// Remove one installer-managed server and return its old command config.
+pub fn take_managed_lsp_server(key: &str) -> std::io::Result<Option<LspServerConfig>> {
+    let (mut managed, _) = load_managed_lsp();
+    let Some(server) = managed.servers.remove(key) else {
+        return Ok(None);
+    };
+    write_managed_lsp(&managed)?;
+    Ok(Some(server))
+}
+
+fn write_managed_lsp(managed: &LspConfig) -> std::io::Result<()> {
     let Some(path) = managed_lsp_path() else {
         return Err(std::io::Error::other("no config directory"));
     };
-    let (mut managed, _) = load_managed_lsp();
-    managed.servers.insert(key.to_string(), server.clone());
-    let text = toml::to_string(&managed).map_err(std::io::Error::other)?;
+    let text = toml::to_string(managed).map_err(std::io::Error::other)?;
     if let Some(parent) = path.parent()
         && !parent.as_os_str().is_empty()
     {
@@ -870,6 +898,15 @@ mod strict_tests {
         merge_lsp_config(&mut config, managed);
         assert_eq!(config.lsp.servers["rust"].command, "explicit-rust");
         assert_eq!(config.lsp.servers["python"].command, "managed-python");
+    }
+
+    #[test]
+    fn filenames_support_prefix_and_suffix_patterns() {
+        assert!(filename_matches("Dockerfile", "dockerfile"));
+        assert!(filename_matches("Dockerfile.*", "Dockerfile.dev"));
+        assert!(filename_matches("*.Dockerfile", "app.Dockerfile"));
+        assert!(filename_matches("Containerfile", "containerfile"));
+        assert!(!filename_matches("Dockerfile.*", "DockerfileX"));
     }
 
     #[test]

@@ -350,10 +350,12 @@ next pump.
 built-in provider. The installer first reuses a binary on `PATH`, otherwise it
 runs rustup, creates an isolated Python virtualenv, invokes npm into
 `<config>/i3-editor/lsp/<provider>`, or downloads a pinned Lua release with a
-checksum check. A worker thread sends status and completion events to
-`App::pump_lsp_install`; only the UI thread mutates config, writes
-`lsp.toml`, and restarts `LspManager`. Explicit `[lsp.<name>]` entries are never
-overwritten by the installer.
+checksum check. npm/pip versions are pinned. A worker thread sends status and
+completion events to `App::pump_lsp_install`; only the UI thread mutates config,
+writes `lsp.toml`, and restarts `LspManager`. Explicit `[lsp.<name>]` entries are
+never overwritten by the installer. `lsp_uninstall` removes only the managed
+entry; downloaded files stay under `lsp/` for explicit cleanup. Filename
+matching accepts exact names plus `*` prefix/suffix patterns.
 
 **File operations follow the focused surface.** `duplicate_file`, `copy_path`,
 and `reveal_in_terminal` take the explorer row when the explorer has focus;

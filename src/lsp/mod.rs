@@ -546,7 +546,7 @@ impl LspManager {
                 config
                     .filenames
                     .iter()
-                    .any(|expected| expected.eq_ignore_ascii_case(filename))
+                    .any(|expected| crate::config::filename_matches(expected, filename))
             }) {
                 return Some(key.clone());
             }
@@ -747,7 +747,16 @@ fn is_dockerfile(path: &Path) -> bool {
     path.file_name()
         .and_then(|name| name.to_str())
         .is_some_and(|name| {
-            name.eq_ignore_ascii_case("Dockerfile") || name.eq_ignore_ascii_case("Containerfile")
+            [
+                "Dockerfile",
+                "Containerfile",
+                "Dockerfile.*",
+                "Containerfile.*",
+                "*.Dockerfile",
+                "*.Containerfile",
+            ]
+            .iter()
+            .any(|pattern| crate::config::filename_matches(pattern, name))
         })
 }
 
@@ -1255,6 +1264,8 @@ mod tests {
             Some("dockerfile")
         );
         assert_eq!(language_id(Path::new("/tmp/Dockerfile")), "dockerfile");
+        assert_eq!(language_id(Path::new("/tmp/Dockerfile.dev")), "dockerfile");
+        assert_eq!(language_id(Path::new("/tmp/app.Dockerfile")), "dockerfile");
         assert_eq!(language_id(Path::new("/tmp/ci.yml")), "yaml");
     }
 

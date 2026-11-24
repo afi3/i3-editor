@@ -362,7 +362,11 @@ matching document opens; a missing or crashing server never blocks editing.
   downloads a pinned, checksum-verified GitHub release.
 - Local servers live under `<config>/i3-editor/lsp/`. The installer writes
   `<config>/i3-editor/lsp.toml`; an explicit `[lsp.<name>]` in `config.toml`
-  always wins. Delete the table or `lsp.toml` entry to opt out.
+  always wins. `lsp_uninstall` removes only the managed entry and keeps local
+  binaries for reuse or manual deletion. To update, uninstall and install again.
+- npm and pip package versions are pinned; a server already on `PATH` is never
+  modified. Dockerfile matching accepts `Dockerfile`, `Containerfile`,
+  `Dockerfile.*`, `Containerfile.*`, `*.Dockerfile`, and `*.Containerfile`.
 - Requirements when a system server is absent: `rustup` for Rust, Python 3 +
   `pip` for Python, and Node.js + `npm` for JavaScript/TypeScript, YAML, and
   Dockerfile. The installer reports the missing tool instead of running a
@@ -382,7 +386,7 @@ extensions = ["py", "pyi"]
 [lsp.dockerfile]
 command = "docker-langserver"
 args = ["--stdio"]
-filenames = ["Dockerfile", "Containerfile"]
+filenames = ["Dockerfile", "Containerfile", "Dockerfile.*", "*.Dockerfile"]
 ```
 
 - Diagnostics appear as `•` markers in the gutter (red error, yellow warning,
