@@ -242,7 +242,7 @@ impl App {
             quick_open_files: None,
             project_task: None,
             selecting: None,
-            enhanced: false,
+            enhanced,
             recoveries: Vec::new(),
             swap_dir: None,
             last_swap: std::time::Instant::now(),

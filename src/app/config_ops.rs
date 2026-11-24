@@ -7,7 +7,8 @@ impl App {
         let Some(path) = self.state.config_path.clone() else {
             return;
         };
-        let (config, mut warnings) = crate::config::load_from(&path);
+        let (mut config, mut warnings) = crate::config::load_from(&path);
+        warnings.extend(crate::config::merge_managed_lsp(&mut config));
         let (keymap, key_warnings) = crate::input::KeyMap::from_config(&config.keys, self.enhanced);
         let (theme, theme_warnings) =
             crate::theme::Theme::from_config(&config.appearance, &self.state.themes_dir);

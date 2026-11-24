@@ -291,10 +291,14 @@ pub fn load_managed_lsp() -> (LspConfig, Vec<String>) {
 /// command.
 pub fn merge_managed_lsp(config: &mut AppConfig) -> Vec<String> {
     let (managed, warnings) = load_managed_lsp();
+    merge_lsp_config(config, managed);
+    warnings
+}
+
+fn merge_lsp_config(config: &mut AppConfig, managed: LspConfig) {
     for (key, server) in managed.servers {
         config.lsp.servers.entry(key).or_insert(server);
     }
-    warnings
 }
 
 pub fn persist_lsp_server(key: &str, server: &LspServerConfig) -> std::io::Result<()> {
@@ -836,6 +840,36 @@ mod strict_tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn managed_lsp_entries_merge_without_overriding_explicit_config() {
+        let mut config = AppConfig::default();
+        config.lsp.servers.insert(
+            "rust".to_string(),
+            LspServerConfig {
+                command: "explicit-rust".to_string(),
+                ..LspServerConfig::default()
+            },
+        );
+        let mut managed = LspConfig::default();
+        managed.servers.insert(
+            "rust".to_string(),
+            LspServerConfig {
+                command: "managed-rust".to_string(),
+                ..LspServerConfig::default()
+            },
+        );
+        managed.servers.insert(
+            "python".to_string(),
+            LspServerConfig {
+                command: "managed-python".to_string(),
+                ..LspServerConfig::default()
+            },
+        );
+        merge_lsp_config(&mut config, managed);
+        assert_eq!(config.lsp.servers["rust"].command, "explicit-rust");
+        assert_eq!(config.lsp.servers["python"].command, "managed-python");
     }
 
     #[test]

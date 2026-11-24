@@ -741,6 +741,21 @@ milestone. Release workflow run `45332605999` built and published all four
 targets; the aarch64 macOS asset passed its SHA-256 check, reported
 `i3-editor 0.1.8`, and a v0.1.7 binary self-updated to v0.1.8 successfully.
 
+## Unreleased v0.1.9 — reload hardening
+
+- `App::new` now stores the real keyboard-enhancement probe result instead of
+  `false`; config reload keeps enhanced bindings and no longer reintroduces the
+  safe-preset warning.
+- Config reload merges installer-managed `lsp.toml` entries after re-reading
+  `config.toml`, so theme/config changes do not drop installed language servers
+  from the running session.
+- Added a merge regression test proving explicit `[lsp.<name>]` still wins over
+  the managed entry.
+
+Verification: `cargo test` (377 unit + 6 CLI process + 1 PTY smoke = 384),
+`cargo fmt --check`, `cargo clippy --all-targets --all-features`, and
+`forgeguard gate --changed --output compact`.
+
 ## Verification commands
 
 ```bash
@@ -751,4 +766,4 @@ cargo clippy --all-targets --all-features
 cargo run -- --dump-keymap
 ```
 
-Last recorded run: `cargo test` → 383 passed (376 unit + 6 CLI process + 1 PTY smoke), `cargo clippy` → 0 warnings.
+Last recorded run: `cargo test` → 384 passed (377 unit + 6 CLI process + 1 PTY smoke), `cargo clippy` → 0 warnings.
