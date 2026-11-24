@@ -950,6 +950,23 @@ fn scrollbar_click_and_drag_jump_through_the_document() {
 }
 
 #[test]
+fn qterminal_backspace_and_delete_sequences_edit_text() {
+    use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    let (mut app, dir) = fixture("abc");
+    app.dispatch(Command::MoveCursor(crate::command::Move::DocEnd))
+        .expect("end");
+    app.handle_key(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::CONTROL));
+    assert_eq!(text(&app), "ab");
+
+    app.dispatch(Command::MoveCursor(crate::command::Move::DocStart))
+        .expect("start");
+    app.handle_key(KeyEvent::new(KeyCode::Delete, KeyModifiers::SHIFT));
+    assert_eq!(text(&app), "b");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn horizontal_wheel_scrolls_cells() {
     use ratatui::crossterm::event::MouseEventKind;
 

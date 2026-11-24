@@ -721,8 +721,10 @@ binary self-updated to v0.1.7 successfully.
   `explorer`, `terminal`, `fullscreen`, `tabbed`, `move_mode`, `hidden_files`).
   `next_theme`/`prev_theme` are gone in favor of `select_theme`, and
   `select_workspace` replaces the per-workspace palette entries.
+- Backspace sent as `Ctrl+H` (`0x08`, as QTerminal does) is normalized to
+  Backspace; stray modifiers on Backspace/Delete are cleared before lookup.
 
-Verification: `cargo test` (375 unit + 6 CLI process + 1 PTY smoke = 382),
+Verification: `cargo test` (376 unit + 6 CLI process + 1 PTY smoke = 383),
 `cargo fmt --check`, `cargo clippy --all-targets --all-features`, and
 `forgeguard gate --changed --output compact`.
 
@@ -736,4 +738,4 @@ cargo clippy --all-targets --all-features
 cargo run -- --dump-keymap
 ```
 
-Last recorded run: `cargo test` → 382 passed (375 unit + 6 CLI process + 1 PTY smoke), `cargo clippy` → 0 warnings.
+Last recorded run: `cargo test` → 383 passed (376 unit + 6 CLI process + 1 PTY smoke), `cargo clippy` → 0 warnings.

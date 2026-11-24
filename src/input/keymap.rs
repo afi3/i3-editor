@@ -57,6 +57,20 @@ impl KeyCombo {
         }
         let mut mods = event.modifiers;
         let code = match event.code {
+            // QTerminal and other Unix terminals send Backspace as Ctrl+H
+            // (0x08); treat it as Backspace just like 0x7f.
+            KeyCode::Char(ch)
+                if mods.contains(KeyModifiers::CONTROL)
+                    && !mods.contains(KeyModifiers::ALT)
+                    && ch.eq_ignore_ascii_case(&'h') =>
+            {
+                mods.remove(KeyModifiers::CONTROL | KeyModifiers::SHIFT);
+                KeyCode::Backspace
+            }
+            KeyCode::Char('\u{7f}') => {
+                mods.remove(KeyModifiers::CONTROL | KeyModifiers::SHIFT);
+                KeyCode::Backspace
+            }
             KeyCode::Char(ch) => {
                 if ch.is_ascii_uppercase() {
                     mods |= KeyModifiers::SHIFT;
@@ -64,6 +78,12 @@ impl KeyCombo {
                 } else {
                     KeyCode::Char(ch)
                 }
+            }
+            KeyCode::Backspace | KeyCode::Delete => {
+                // Some terminals attach a spurious Shift/Ctrl to these keys;
+                // editing still means backward/forward deletion.
+                mods.remove(KeyModifiers::CONTROL | KeyModifiers::SHIFT | KeyModifiers::ALT);
+                event.code
             }
             KeyCode::BackTab => {
                 mods.remove(KeyModifiers::SHIFT);
@@ -279,6 +299,18 @@ mod tests {
             KeyEventKind::Release,
         );
         assert!(KeyCombo::from_event(release).is_none());
+
+        let ctrl_h = KeyEvent::new(KeyCode::Char('h'), KeyModifiers::CONTROL);
+        assert_eq!(
+            KeyCombo::from_event(ctrl_h).map(|combo| combo.code),
+            Some(KeyCode::Backspace)
+        );
+
+        let modified_delete = KeyEvent::new(KeyCode::Delete, KeyModifiers::SHIFT);
+        assert_eq!(
+            KeyCombo::from_event(modified_delete).map(|combo| (combo.code, combo.mods)),
+            Some((KeyCode::Delete, KeyModifiers::NONE))
+        );
     }
 
     #[test]
