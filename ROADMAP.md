@@ -8,10 +8,11 @@ verified before the next one started.
 - `v0.1.x` is the current hardening and feature-completion line: release
   engineering, correctness, daily-driver operations, performance, polish, and
   Git depth.
-- `v0.2.x` covers MCP and AI features. `v0.2.0` ships the stdio MCP client;
-  `v0.2.1` is the bounded agent harness with streaming; persistent history,
-  explicit context, and editing actions follow in later `v0.2.x` releases. Do
-  not tag `v0.3.0` until that work lands.
+- `v0.2.x` covers MCP and AI features. `v0.2.0` shipped the stdio MCP client;
+  `v0.2.1` ships the bounded agent harness, native tools, HTTP MCP, resources,
+  prompts, sampling, and approval-gated background agents. Richer planning and
+  persistent objectives remain for later `v0.2.x`. Do not tag `v0.3.0` until
+  that work lands.
 
 ## Phase 1 — Terminal foundation and pane skeleton: done
 
@@ -871,105 +872,61 @@ milestone. Release workflow run `45569634048` built and published all four
 targets; the aarch64 macOS asset passed its SHA-256 check, reported
 `i3-editor 0.2.0`, and a v0.1.9 binary self-updated to v0.2.0 successfully.
 
-## Unreleased v0.2.1 — agent harness (no auto-apply)
+## Release v0.2.1 — shipped
 
-The AI baseline is already on `main`: `[ai]` provider config, a worker thread
-using `curl`, `ai_chat`, HTTP error bodies, and a read-only response view. This
-release turns that request into a bounded multi-turn tool loop against
-configured MCP servers, rendered in the right-side `AI` panel.
+Shipped as `v0.2.1` on 2026-11-26. The release turns the AI panel into a bounded
+MCP/native tool harness while preserving explicit confirmation, trust, audit,
+and no-auto-apply boundaries.
 
-"Read-only" here means the harness never edits an editor buffer, opens a file,
-or applies a patch. Every MCP tool call still passes the trust gate and the
-per-call confirmation prompt; MCP tools with their own side effects remain the
-user's explicit choice.
+### Shipped scope
 
-### Scope
-
-- `ai_chat` opens a chat transcript panel instead of a single response overlay.
-- Send the configured MCP tools (`name`, `description`, `inputSchema`) with the
-  model request.
-- Parse OpenAI-compatible `tool_calls`, show the requested server/tool/arguments,
-  require confirmation, execute through `McpManager`, and append the tool result.
-- Continue the model turn with tool results until it returns text, the user
-  cancels, or the loop reaches the step limit.
-- Session-only chat history; no transcript persistence yet.
-- No auto-edit, diff apply, background agent, or context indexing.
-
-### Harness rules
-
-- A normal `ai_chat` panel starts a conversation; `Enter` sends the next user
-  message.
-- A tool call is shown before execution. Declining it ends the current turn with
-  a visible "tool call denied" result.
-- Maximum 8 model round trips per user turn; the limit is reported, not silently
-  truncated.
-- MCP trust and per-call confirmation remain mandatory. The harness cannot bypass
-  them.
-- Tool output is untrusted data appended to the transcript, never interpreted as
-  a new instruction or applied to a buffer.
-- Prompt context and tool output are bounded; tool definitions obey the `[ai]`
-  allow/deny policy, and decisions/results are written to a redacted audit log.
-- Retryable provider failures use bounded backoff, and the panel supports
-  resize, clear, copy, token display, wrapped multiline input, horizontal
-  transcript scrolling, and SSE streaming by default.
-- Native hashline tools provide snapshot/hash-validated reads, atomic edits,
-  and an `ignore`/`regex` search without subprocesses; Rust edits trigger a
-  bounded background `cargo check` whose diagnostics join the same tool turn.
-- API failures, 429 responses, malformed tool calls, MCP timeouts, and server
-  crashes stop the turn with a visible error.
-- `Esc` cancels the active turn; cancelling an active tool call terminates that
-  MCP server process, and its tools reload on the next question. `Esc` with no
-  active turn leaves the panel focused state.
+- AI panel with SSE streaming, non-streaming fallback, retry/backoff, wrapped
+  transcript, multiline input, token budget, token meter, copy/clear, and
+  horizontal scrolling.
+- MCP tool loop with capability labels, allow/deny policy, redacted audit log,
+  context/tool-output caps, cancellation, and 8-round limit.
+- Native `read_file`/`edit_file`/`write_file`/`search`: workspace boundary,
+  snapshot and six-hex line hashes, atomic writes, diff previews, dirty-buffer
+  refusal, snapshot-safe undo, and post-edit `cargo check`.
+- Explicit file/selection context, opt-in persistent transcript history, and
+  opt-in background agents that auto-run read-only tools and pause for approval
+  before writes.
+- MCP HTTP JSON-RPC transport with JSON/SSE response frames and session IDs,
+  resources, prompts, and consent-gated stdio sampling.
+- Default provider preset: OpenRouter (`openai/gpt-4o-mini`). Direct keys remain
+  local environment/config overrides and are not embedded in the repository.
 
 ### Delivery checklist
 
-- [x] One-shot OpenAI-compatible request and response overlay.
-- [x] MCP tools/list, schema form, trust, confirmation, and read-only results.
-- [x] Extend the provider request with MCP tool definitions.
-- [x] Parse tool calls and multi-turn assistant/tool messages.
-- [x] Add a transcript view with user, assistant, tool-call, and result entries.
-- [x] Wire tool confirmation and denial into the harness loop.
-- [x] Enforce the 8-step cap and cancellation.
-- [x] Exercise tool-call, final-response, and malformed-argument sequences against a local mock endpoint.
-- [x] Extend the mock MCP server or use the existing mock for harness tests.
-- [x] Test denial, cap, API failure, malformed arguments, and no-buffer-mutation paths; MCP timeout stays covered by the manager suite.
-- [x] Update README, ARCHITECTURE, and this roadmap.
-- [x] Bound prompt context and tool output; add tool policy and audit logging.
-- [x] Retry transient provider failures with bounded backoff; finish panel controls.
-- [x] Add native hashline `read_file`/`edit_file` tools with policy, confirmation, audit, and dirty-buffer protection.
-- [x] Add native `search` using `ignore` + `regex`, and wrap long AI panel text.
-- [x] Add post-edit `cargo check` verification with timeout and cancellation.
-- [x] Stream SSE deltas into the AI panel with a non-streaming fallback.
-- [x] Add opt-in persistent AI conversation history.
-- [x] Add explicit file/selection context attachments for one AI turn.
-- [x] Add native edit/write diff previews and snapshot-safe undo.
-- [x] Add HTTP MCP transport with JSON/SSE responses and session headers.
-- [x] Add MCP resources and prompts list/read menus.
-- [x] Add consent-gated MCP sampling over stdio.
-- [x] Add opt-in background agents with automatic read-only tools and approval-gated writes.
+- [x] AI panel, transcript, streaming, retry, cancellation, and bounded context.
+- [x] MCP tools, policy, capability, confirmation, audit, and background loop.
+- [x] Native hashline read/edit/write/search, diff preview, undo, cargo check.
+- [x] Explicit context, persistent history, MCP HTTP, resources, prompts, sampling.
+- [x] Opt-in background agents with read-only auto-run and write approval.
+- [x] README, ARCHITECTURE, and this roadmap updated.
+- [x] Full suite, fmt, clippy, MSRV 1.91, audit, and gate pass.
 
 ### Acceptance
 
-- [x] A mock model requests `echo`, the user confirms, the mock MCP result
-  returns to the model, and the final text appears in the transcript.
-- [x] Denying the tool call ends the turn without invoking MCP.
-- [x] The ninth model round trip is refused with a clear message.
-- [x] A 429/API error and a malformed tool call are shown without blocking input.
-- [x] No harness path mutates an editor buffer, opens a file, or applies a patch.
-- [x] Context, tool output, policy, capability labels, audit records, retries, and panel commands are tested.
-- [x] Full suite, fmt, clippy, and gate pass.
-- [ ] MSRV 1.91 and `cargo audit` pass.
+- [x] Tool call, denial, final response, malformed arguments, stale hashes, and
+  dirty-buffer refusal are covered by tests.
+- [x] MCP stdio and HTTP initialize/list/call, resources, prompts, and sampling
+  request handling are covered by mock tests.
+- [x] No harness path applies an unconfirmed write or edits a buffer implicitly.
+- [x] Background agents require approval before any destructive tool.
+- [x] Release version and tag are `0.2.1` / `v0.2.1`; four platform assets are
+  produced by the release workflow.
 
-### Deferred to v0.2.2 / v0.2.3
+### Deferred to later v0.2.x
 
-- v0.2.2: explicit file/selection context.
-- v0.2.3: diff previews, confirmed `native/edit_file`/`native/write_file`, and
-  snapshot-safe undo are implemented.
-- Later: richer autonomous planning and persistent agent objectives.
+- Rich persistent agent planning and objectives.
+- HTTP/server-initiated SSE sampling and MCP resource templates/pagination.
+- Actual provider cost accounting and full Markdown rendering.
+- API key/keyring management, context indexing, and autonomous write policies.
 
-Risk: model output can request a dangerous MCP tool or contain prompt injection.
-The loop must keep trust, per-call confirmation, step limits, sanitized env,
-read-only editor results, and no auto-apply as hard boundaries.
+Risk: MCP servers are arbitrary code and model output is untrusted. Trust hashes,
+explicit tool confirmation, capability gating, context/tool budgets, audits,
+snapshot validation, and no unconfirmed write remain hard boundaries.
 
 ## Verification commands
 
