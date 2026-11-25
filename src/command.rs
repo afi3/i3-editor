@@ -79,6 +79,12 @@ pub enum Command {
     McpAdd,
     AiChat,
     AiPanel,
+    AiClear,
+    AiCopy,
+    AiWider,
+    AiNarrower,
+    AiScrollLeft,
+    AiScrollRight,
     GitStatus,
     GitDiff,
     GitLog,
@@ -229,6 +235,20 @@ impl Command {
         })
     }
 
+    fn ai_spec(&self) -> Option<(&'static str, &'static str)> {
+        Some(match self {
+            Command::AiChat => ("ai_chat", "Open and focus the AI panel"),
+            Command::AiPanel => ("ai_panel", "Show or hide the AI panel"),
+            Command::AiClear => ("ai_clear", "Clear the AI conversation"),
+            Command::AiCopy => ("ai_copy", "Copy the AI transcript"),
+            Command::AiWider => ("ai_wider", "Widen the AI panel"),
+            Command::AiNarrower => ("ai_narrower", "Narrow the AI panel"),
+            Command::AiScrollLeft => ("ai_scroll_left", "Scroll the AI transcript left"),
+            Command::AiScrollRight => ("ai_scroll_right", "Scroll the AI transcript right"),
+            _ => return None,
+        })
+    }
+
     fn lsp_spec(&self) -> Option<(&'static str, &'static str)> {
         Some(match self {
             Command::LspCompletion => ("lsp_completion", "Ask the language server for completions"),
@@ -242,8 +262,14 @@ impl Command {
                 "Install the language server for the active file",
             ),
             Command::McpAdd => ("mcp_add", "Add a configured MCP server"),
-            Command::AiChat => ("ai_chat", "Open and focus the AI panel"),
-            Command::AiPanel => ("ai_panel", "Show or hide the AI panel"),
+            Command::AiChat
+            | Command::AiPanel
+            | Command::AiClear
+            | Command::AiCopy
+            | Command::AiWider
+            | Command::AiNarrower
+            | Command::AiScrollLeft
+            | Command::AiScrollRight => return self.ai_spec(),
             Command::LspUninstall => (
                 "lsp_uninstall",
                 "Remove the installed language server for the active file",
@@ -471,6 +497,12 @@ impl Command {
             Command::McpAdd,
             Command::AiChat,
             Command::AiPanel,
+            Command::AiClear,
+            Command::AiCopy,
+            Command::AiWider,
+            Command::AiNarrower,
+            Command::AiScrollLeft,
+            Command::AiScrollRight,
             Command::GitStatus,
             Command::GitDiff,
             Command::GitLog,
@@ -608,6 +640,12 @@ mod tests {
             Command::McpAdd,
             Command::AiChat,
             Command::AiPanel,
+            Command::AiClear,
+            Command::AiCopy,
+            Command::AiWider,
+            Command::AiNarrower,
+            Command::AiScrollLeft,
+            Command::AiScrollRight,
             Command::GitStatus,
             Command::GitDiff,
             Command::GitLog,

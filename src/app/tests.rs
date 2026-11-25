@@ -2478,6 +2478,23 @@ fn cancelling_an_ai_tool_call_stops_the_mcp_server() {
 }
 
 #[test]
+fn ai_panel_commands_copy_clear_resize_and_scroll() {
+    let (mut app, dir) = fixture("x\n");
+    app.dispatch(Command::AiChat).expect("ai panel");
+    app.state.ai.entries.push("hello".to_string());
+    app.dispatch(Command::AiCopy).expect("copy");
+    assert!(app.state.clipboard.contains("hello"));
+    app.dispatch(Command::AiWider).expect("wider");
+    assert!(app.state.config.ai.panel_width > 20);
+    app.dispatch(Command::AiScrollRight).expect("scroll");
+    assert_eq!(app.state.ai.scroll_x, 4);
+    app.dispatch(Command::AiClear).expect("clear");
+    assert_eq!(app.state.ai.entries.len(), 1);
+    assert!(app.state.ai.conversation.is_empty());
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn ai_tool_policy_filters_the_tool_definitions() {
     use std::collections::BTreeMap;
     use std::time::{Duration, Instant};

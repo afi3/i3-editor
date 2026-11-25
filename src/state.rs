@@ -306,6 +306,7 @@ pub struct AiPanel {
     pub input: String,
     pub cursor: usize,
     pub scroll: usize,
+    pub scroll_x: usize,
     pub busy: bool,
     pub conversation: Vec<serde_json::Value>,
     pub pending: std::collections::VecDeque<AiToolCall>,

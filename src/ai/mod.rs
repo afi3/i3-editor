@@ -9,6 +9,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
+use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 
@@ -113,6 +114,48 @@ fn chat_with_cancel(
     ));
     curl_config.push_str(&format!("max-time = {}\n", config.timeout_secs.max(1)));
 
+    let attempts = config.retry_attempts.saturating_add(1).max(1);
+    let mut last_error = "AI request failed".to_string();
+    for attempt in 0..attempts {
+        if cancel.load(Ordering::Relaxed) {
+            return Err("AI request cancelled".to_string());
+        }
+        match request_once(&curl_config, cancel) {
+            Ok(reply) => return Ok(reply),
+            Err(error) => {
+                last_error = error.message;
+                if !error.retryable || attempt + 1 >= attempts {
+                    break;
+                }
+                let factor = 1u64.checked_shl(attempt as u32).unwrap_or(u64::MAX);
+                let delay = config
+                    .retry_base_ms
+                    .saturating_mul(factor)
+                    .min(config.retry_max_ms);
+                if !sleep_cancellable(delay, cancel) {
+                    return Err("AI request cancelled".to_string());
+                }
+            }
+        }
+    }
+    Err(last_error)
+}
+
+struct AttemptError {
+    message: String,
+    retryable: bool,
+}
+
+impl AttemptError {
+    fn new(message: impl Into<String>, retryable: bool) -> Self {
+        Self {
+            message: message.into(),
+            retryable,
+        }
+    }
+}
+
+fn request_once(curl_config: &str, cancel: &AtomicBool) -> Result<Reply, AttemptError> {
     let mut child = Command::new("curl")
         .args([
             "--config",
@@ -126,34 +169,42 @@ fn chat_with_cancel(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|error| format!("curl: {error}"))?;
-    if let Some(mut stdin) = child.stdin.take() {
-        stdin
-            .write_all(curl_config.as_bytes())
-            .map_err(|error| format!("curl config: {error}"))?;
+        .map_err(|error| AttemptError::new(format!("curl: {error}"), false))?;
+    if let Some(mut stdin) = child.stdin.take()
+        && let Err(error) = stdin.write_all(curl_config.as_bytes())
+    {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(AttemptError::new(format!("curl config: {error}"), false));
     }
     loop {
         if cancel.load(Ordering::Relaxed) {
             let _ = child.kill();
             let _ = child.wait();
-            return Err("AI request cancelled".to_string());
+            return Err(AttemptError::new("AI request cancelled", false));
         }
         match child.try_wait() {
             Ok(Some(_)) => break,
-            Ok(None) => thread::sleep(std::time::Duration::from_millis(20)),
-            Err(error) => return Err(format!("curl: {error}")),
+            Ok(None) => thread::sleep(Duration::from_millis(20)),
+            Err(error) => {
+                return Err(AttemptError::new(format!("curl: {error}"), true));
+            }
         }
     }
     let output = child
         .wait_with_output()
-        .map_err(|error| format!("curl: {error}"))?;
+        .map_err(|error| AttemptError::new(format!("curl: {error}"), true))?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("AI request failed: {}", stderr.trim()));
+        let retryable = transient_curl_error(&stderr);
+        return Err(AttemptError::new(
+            format!("AI request failed: {}", stderr.trim()),
+            retryable,
+        ));
     }
     let stdout = String::from_utf8_lossy(&output.stdout);
     let Some((body, status)) = stdout.rsplit_once("__I3_AI_STATUS__") else {
-        return Err("AI response has no HTTP status".to_string());
+        return Err(AttemptError::new("AI response has no HTTP status", false));
     };
     let status = status.trim().parse::<u16>().unwrap_or(0);
     if !(200..300).contains(&status) {
@@ -166,14 +217,19 @@ fn chat_with_cancel(
                     .map(str::to_string)
             })
             .unwrap_or_else(|| body.trim().to_string());
-        return Err(format!("AI request failed ({status}): {message}"));
+        let retryable =
+            status == 408 || status == 425 || status == 429 || (500..600).contains(&status);
+        return Err(AttemptError::new(
+            format!("AI request failed ({status}): {message}"),
+            retryable,
+        ));
     }
-    let value: Value =
-        serde_json::from_str(body.trim()).map_err(|error| format!("AI response: {error}"))?;
+    let value: Value = serde_json::from_str(body.trim())
+        .map_err(|error| AttemptError::new(format!("AI response: {error}"), false))?;
     let message = value
         .pointer("/choices/0/message")
         .cloned()
-        .ok_or_else(|| "AI response has no message".to_string())?;
+        .ok_or_else(|| AttemptError::new("AI response has no message", false))?;
     let content = message
         .get("content")
         .and_then(Value::as_str)
@@ -186,7 +242,9 @@ fn chat_with_cancel(
                 .and_then(Value::as_str)
                 .unwrap_or_default()
                 .to_string();
-            let function = call.get("function").ok_or("tool call has no function")?;
+            let function = call
+                .get("function")
+                .ok_or_else(|| AttemptError::new("tool call has no function", false))?;
             let name = function
                 .get("name")
                 .and_then(Value::as_str)
@@ -197,8 +255,9 @@ fn chat_with_cancel(
                 .and_then(Value::as_str)
                 .unwrap_or("{}")
                 .to_string();
-            let arguments = serde_json::from_str::<Value>(&raw_arguments)
-                .map_err(|error| format!("tool arguments for {name}: {error}"))?;
+            let arguments = serde_json::from_str::<Value>(&raw_arguments).map_err(|error| {
+                AttemptError::new(format!("tool arguments for {name}: {error}"), false)
+            })?;
             tool_calls.push(ToolCall {
                 id,
                 name,
@@ -207,13 +266,43 @@ fn chat_with_cancel(
         }
     }
     if content.is_none() && tool_calls.is_empty() {
-        return Err("AI response has neither content nor tool calls".to_string());
+        return Err(AttemptError::new(
+            "AI response has neither content nor tool calls",
+            false,
+        ));
     }
     Ok(Reply {
         message,
         content,
         tool_calls,
     })
+}
+
+fn transient_curl_error(stderr: &str) -> bool {
+    let lower = stderr.to_ascii_lowercase();
+    [
+        "timed out",
+        "could not resolve",
+        "connection",
+        "tls",
+        "empty reply",
+        "recv failure",
+        "send failure",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle))
+}
+
+fn sleep_cancellable(ms: u64, cancel: &AtomicBool) -> bool {
+    let deadline = Instant::now() + Duration::from_millis(ms);
+    while Instant::now() < deadline {
+        if cancel.load(Ordering::Relaxed) {
+            return false;
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        thread::sleep(remaining.min(Duration::from_millis(20)));
+    }
+    !cancel.load(Ordering::Relaxed)
 }
 
 fn trim_messages(messages: &[Value], tools: &[Value], config: &AiConfig) -> Vec<Value> {
@@ -260,6 +349,10 @@ fn split_turns(messages: &[Value]) -> Vec<Vec<Value>> {
         groups.push(current);
     }
     groups
+}
+
+pub(crate) fn context_tokens(messages: &[Value]) -> usize {
+    estimate_messages(messages)
 }
 
 fn estimate_messages(messages: &[Value]) -> usize {
@@ -350,6 +443,7 @@ pub(crate) fn test_config(base_url: String) -> AiConfig {
         model: "mock-model".to_string(),
         api_key_env: "I3_EDITOR_TEST_AI_KEY".to_string(),
         timeout_secs: 5,
+        retry_attempts: 0,
         ..AiConfig::default()
     }
 }
@@ -436,6 +530,42 @@ mod tests {
             }
         };
         assert!(error.contains("tool arguments for bad"), "{error}");
+        server.join().expect("server");
+    }
+
+    #[test]
+    fn retries_a_rate_limited_request_with_backoff() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
+        let address = listener.local_addr().expect("address");
+        let server = std::thread::spawn(move || {
+            for count in 0..2 {
+                let (mut stream, _) = listener.accept().expect("accept");
+                let mut request = [0u8; 8192];
+                let _ = stream.read(&mut request).expect("read");
+                let (status, body) = if count == 0 {
+                    (
+                        "429 Too Many Requests",
+                        r#"{"error":{"message":"slow down"}}"#,
+                    )
+                } else {
+                    (
+                        "200 OK",
+                        r#"{"choices":[{"message":{"content":"after retry"}}]}"#,
+                    )
+                };
+                let response = format!(
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                stream.write_all(response.as_bytes()).expect("write");
+            }
+        });
+        let mut config = test_config(format!("http://{address}/v1"));
+        config.retry_attempts = 1;
+        config.retry_base_ms = 1;
+        config.retry_max_ms = 1;
+        let reply = ask(&config, "hello").expect("retry reply");
+        assert_eq!(reply, "after retry");
         server.join().expect("server");
     }
 

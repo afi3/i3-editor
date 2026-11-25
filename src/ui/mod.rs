@@ -187,7 +187,7 @@ pub fn compute_layout(state: &mut AppState, area: Rect) {
     };
     let explorer = Rect::new(main.x, main.y, explorer_width.min(main.width), main.height);
     let ai_width = if state.ai.visible {
-        let desired = (u32::from(main.width) * 20 / 100) as u16;
+        let desired = (u32::from(main.width) * u32::from(state.config.ai.panel_width) / 100) as u16;
         let available = main.width.saturating_sub(
             explorer
                 .width
@@ -608,11 +608,16 @@ mod tests {
         state.ai.entries.push("> hello".to_string());
         state.ai.entries.push("answer".to_string());
         state.ai.input = "next".to_string();
+        state
+            .ai
+            .conversation
+            .push(serde_json::json!({"role": "user", "content": "hello"}));
         let screen = draw(&mut state, 100, 24);
         assert!(state.ui.ai.width >= 24, "AI panel must reserve width");
         assert!(screen.contains("hello"), "{screen}");
         assert!(screen.contains("answer"), "{screen}");
         assert!(screen.contains("next"), "{screen}");
+        assert!(screen.contains("16.0k"), "{screen}");
         std::fs::remove_dir_all(&dir).ok();
     }
 

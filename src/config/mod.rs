@@ -126,6 +126,14 @@ pub struct AiConfig {
     pub allowed_tools: Vec<String>,
     /// `server/tool` entries that are never offered or called.
     pub denied_tools: Vec<String>,
+    /// Additional attempts after a retryable request failure.
+    pub retry_attempts: usize,
+    /// Base backoff delay; doubles per attempt.
+    pub retry_base_ms: u64,
+    /// Maximum backoff delay.
+    pub retry_max_ms: u64,
+    /// AI panel width as a percentage of the terminal width.
+    pub panel_width: u16,
 }
 
 impl Default for AiConfig {
@@ -140,6 +148,10 @@ impl Default for AiConfig {
             max_history_turns: 24,
             allowed_tools: Vec::new(),
             denied_tools: Vec::new(),
+            retry_attempts: 2,
+            retry_base_ms: 500,
+            retry_max_ms: 8_000,
+            panel_width: 20,
         }
     }
 }
@@ -696,6 +708,10 @@ pub fn load_from(path: &Path) -> (AppConfig, Vec<String>) {
     config.ai.max_context_tokens = config.ai.max_context_tokens.clamp(512, 1_000_000);
     config.ai.max_tool_output_chars = config.ai.max_tool_output_chars.clamp(500, 1_000_000);
     config.ai.max_history_turns = config.ai.max_history_turns.clamp(1, 500);
+    config.ai.retry_attempts = config.ai.retry_attempts.clamp(0, 5);
+    config.ai.retry_base_ms = config.ai.retry_base_ms.clamp(50, 60_000);
+    config.ai.retry_max_ms = config.ai.retry_max_ms.clamp(100, 120_000);
+    config.ai.panel_width = config.ai.panel_width.clamp(15, 40);
     (config, warnings)
 }
 
@@ -725,6 +741,10 @@ const AI_KEYS: &[&str] = &[
     "max_history_turns",
     "allowed_tools",
     "denied_tools",
+    "retry_attempts",
+    "retry_base_ms",
+    "retry_max_ms",
+    "panel_width",
 ];
 const LUA_KEYS: &[&str] = &["enabled", "allow_file", "allow_process", "time_budget_ms"];
 const KEYS_KEYS: &[&str] = &["preset", "global", "editing", "explorer"];
@@ -826,7 +846,7 @@ mod tests {
         let path = dir.join("config.toml");
         std::fs::write(
             &path,
-            "[ai]\nbase_url = \"http://localhost:11434/v1\"\nmodel = \"local\"\napi_key_env = \"LOCAL_KEY\"\ntimeout_secs = 9999\nmax_context_tokens = 4096\nmax_tool_output_chars = 1000\nmax_history_turns = 6\nallowed_tools = [\"mock/echo\"]\ndenied_tools = [\"mock/add\"]\n",
+            "[ai]\nbase_url = \"http://localhost:11434/v1\"\nmodel = \"local\"\napi_key_env = \"LOCAL_KEY\"\ntimeout_secs = 9999\nmax_context_tokens = 4096\nmax_tool_output_chars = 1000\nmax_history_turns = 6\nallowed_tools = [\"mock/echo\"]\ndenied_tools = [\"mock/add\"]\nretry_attempts = 4\nretry_base_ms = 100\nretry_max_ms = 2000\npanel_width = 35\n",
         )
         .expect("write");
         let (config, warnings) = load_from(&path);
@@ -840,6 +860,10 @@ mod tests {
         assert_eq!(config.ai.max_history_turns, 6);
         assert_eq!(config.ai.allowed_tools, ["mock/echo"]);
         assert_eq!(config.ai.denied_tools, ["mock/add"]);
+        assert_eq!(config.ai.retry_attempts, 4);
+        assert_eq!(config.ai.retry_base_ms, 100);
+        assert_eq!(config.ai.retry_max_ms, 2000);
+        assert_eq!(config.ai.panel_width, 35);
         std::fs::remove_dir_all(&dir).ok();
     }
 

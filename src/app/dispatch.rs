@@ -60,11 +60,34 @@ impl App {
             Command::Help => self.open_help(),
             Command::Mcp => self.open_mcp(),
             Command::McpAdd => self.open_mcp_add(),
-            Command::AiChat => self.open_ai(),
-            Command::AiPanel => self.toggle_ai_panel(),
+            Command::AiChat
+            | Command::AiPanel
+            | Command::AiClear
+            | Command::AiCopy
+            | Command::AiWider
+            | Command::AiNarrower
+            | Command::AiScrollLeft
+            | Command::AiScrollRight => {
+                self.dispatch_ai(command);
+                return Ok(None);
+            }
             other => return Ok(Some(other)),
         }
         Ok(None)
+    }
+
+    fn dispatch_ai(&mut self, command: Command) {
+        match command {
+            Command::AiChat => self.open_ai(),
+            Command::AiPanel => self.toggle_ai_panel(),
+            Command::AiClear => self.clear_ai(),
+            Command::AiCopy => self.copy_ai_transcript(),
+            Command::AiWider => self.resize_ai(5),
+            Command::AiNarrower => self.resize_ai(-5),
+            Command::AiScrollLeft => self.scroll_ai_horizontal(-4),
+            Command::AiScrollRight => self.scroll_ai_horizontal(4),
+            _ => {}
+        }
     }
 
     fn dispatch_prompt(&mut self, command: Command) -> Result<Option<Command>> {

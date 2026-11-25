@@ -377,8 +377,9 @@ TLS/network dependency. The worker returns through a channel; `App::pump_ai`
 appends text or tool calls to the right-side `AiPanel`. Tool calls are resolved
 against the configured MCP server/tool map, shown for per-call confirmation, and
 executed through `McpManager`; their untrusted output is appended as a `tool`
-message before the next request. The loop is capped at 8 model round trips and
-`Esc` cancels the worker by killing its `curl` child. Cancelling an active tool
+message before the next request. The loop is capped at 8 model round trips;
+retryable HTTP/curl failures use bounded exponential backoff, and `Esc` cancels
+the worker by killing its `curl` child or interrupting the backoff. Cancelling an active tool
 call removes that MCP server process, because MCP has no mandatory cancellation
 acknowledgement; the next question reloads its tools. The panel holds a question
 until every trusted server reports a loaded tool list or is marked failed, so
@@ -388,8 +389,10 @@ non-user content; one MCP result is capped before it enters the conversation.
 Tool definitions are filtered by the `[ai]` allow/deny policy, and tool
 annotations drive the read-only/write/destructive label in the confirmation.
 Each decision and result is appended to `<config>/i3-editor/audit.jsonl` with
-redacted arguments. MCP trust is still checked before a server starts, and no
-harness path can edit a buffer, open a file, or apply a patch.
+redacted arguments. The panel width comes from `[ai] panel_width`; palette
+commands copy/clear it, and the title reports an estimated token count. MCP
+trust is still checked before a server starts, and no harness path can edit a
+buffer, open a file, or apply a patch.
 
 **File operations follow the focused surface.** `duplicate_file`, `copy_path`,
 and `reveal_in_terminal` take the explorer row when the explorer has focus;

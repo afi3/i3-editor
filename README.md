@@ -472,16 +472,24 @@ max_tool_output_chars = 20000    # one MCP result kept in history
 max_history_turns = 24
 allowed_tools = []               # empty = every trusted tool; supports server/*
 denied_tools = ["filesystem/write_file"]
+retry_attempts = 2               # additional attempts for 429/5xx/transient curl
+retry_base_ms = 500              # exponential backoff base
+retry_max_ms = 8000
+panel_width = 20                 # percent of terminal width
 ```
 
 - `F1` → `ai_chat` opens and focuses the right-side `AI` panel; `ai_panel`
-  toggles it. The panel keeps session-only history.
+  toggles it. `ai_wider`/`ai_narrower` resize it, `ai_clear` clears a finished
+  conversation, and `ai_copy` copies the transcript to the internal and system
+  clipboards. The panel keeps session-only history.
 - Type a message and press `Enter`. If trusted MCP servers are still reading
   their tool lists, the question waits and is sent once the tools are loaded.
   The active turn shows `thinking...` until the reply arrives. `Esc` cancels a
   running request or tool call; cancelling a tool call terminates that MCP
   server process, and its tools are reloaded on the next question. `Esc` with
-  no active turn leaves the panel focused state.
+  no active turn leaves the panel focused state. Retryable HTTP failures
+  (408/425/429/5xx) and transient curl failures use bounded exponential
+  backoff; `Esc` also interrupts the backoff.
 - Configured MCP tools are sent with the request. When the model asks for one,
   the panel shows the server, tool, and JSON arguments and asks for
   confirmation: `y`/`Enter` runs it, `n`/`Esc` denies it. Trust must already be
@@ -500,6 +508,9 @@ denied_tools = ["filesystem/write_file"]
 - Every tool decision and result is appended to
   `<config>/i3-editor/audit.jsonl`. Arguments are truncated and keys containing
   token, secret, password, authorization, or api_key are redacted.
+- The panel title shows estimated conversation tokens against the configured
+  budget. Headings, fenced code, and user turns get basic Markdown styling;
+  `Ctrl+Left`/`Ctrl+Right` scrolls long transcript lines horizontally.
 - The API key is read from `api_key_env`; leave it empty for a local
   OpenAI-compatible server without authentication.
 - Requests are non-streaming and do not include the active file unless you paste
@@ -867,6 +878,10 @@ max_tool_output_chars = 20000
 max_history_turns = 24
 allowed_tools = []
 denied_tools = []
+retry_attempts = 2
+retry_base_ms = 500
+retry_max_ms = 8000
+panel_width = 20
 
 [git]
 binary = "git"             # executable used for every git command

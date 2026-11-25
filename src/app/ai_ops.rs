@@ -36,6 +36,62 @@ impl App {
         self.dirty = true;
     }
 
+    pub(crate) fn clear_ai(&mut self) {
+        if self.ai_task.is_some()
+            || self.state.ai.waiting.is_some()
+            || self.state.ai.queued_question.is_some()
+            || !self.state.ai.pending.is_empty()
+        {
+            self.notify("cancel the active AI turn before clearing");
+            return;
+        }
+        self.state.ai.entries.clear();
+        self.state
+            .ai
+            .entries
+            .push("AI conversation cleared.".to_string());
+        self.state.ai.conversation.clear();
+        self.state.ai.input.clear();
+        self.state.ai.cursor = 0;
+        self.state.ai.scroll = 0;
+        self.state.ai.scroll_x = 0;
+        self.state.ai.rounds = 0;
+        self.state.ai.tool_map.clear();
+        self.dirty = true;
+    }
+
+    pub(crate) fn copy_ai_transcript(&mut self) {
+        let text = self.state.ai.entries.join("\n");
+        if text.is_empty() {
+            self.notify("AI transcript is empty");
+            return;
+        }
+        self.state.clipboard = text.clone();
+        match crate::clipboard::copy_osc52(&text) {
+            Some(reason) => self.notify(format!("AI transcript copied internally ({reason})")),
+            None => self.notify("AI transcript copied"),
+        }
+    }
+
+    pub(crate) fn resize_ai(&mut self, delta: i16) {
+        let width = self.state.config.ai.panel_width as i16 + delta;
+        self.state.config.ai.panel_width = width.clamp(15, 40) as u16;
+        self.notify(format!(
+            "AI panel width: {}%",
+            self.state.config.ai.panel_width
+        ));
+        self.dirty = true;
+    }
+
+    pub(crate) fn scroll_ai_horizontal(&mut self, delta: i16) {
+        if delta < 0 {
+            self.state.ai.scroll_x = self.state.ai.scroll_x.saturating_sub((-delta) as usize);
+        } else {
+            self.state.ai.scroll_x = self.state.ai.scroll_x.saturating_add(delta as usize);
+        }
+        self.dirty = true;
+    }
+
     pub(crate) fn handle_ai_key(&mut self, combo: KeyCombo) -> bool {
         if !self.state.ai.visible || !self.state.ai.focused {
             return false;
@@ -88,6 +144,22 @@ impl App {
     }
 
     fn handle_ai_edit(&mut self, combo: KeyCombo) {
+        if combo
+            .mods
+            .contains(ratatui::crossterm::event::KeyModifiers::CONTROL)
+        {
+            match combo.code {
+                KeyCode::Left => {
+                    self.scroll_ai_horizontal(-4);
+                    return;
+                }
+                KeyCode::Right => {
+                    self.scroll_ai_horizontal(4);
+                    return;
+                }
+                _ => {}
+            }
+        }
         let last = self.state.ai.entries.len().saturating_sub(1);
         match combo.code {
             KeyCode::Up => self.state.ai.scroll = self.state.ai.scroll.saturating_sub(1),
@@ -192,6 +264,7 @@ impl App {
         self.state.ai.input.clear();
         self.state.ai.cursor = 0;
         self.state.ai.scroll = 0;
+        self.state.ai.scroll_x = 0;
         self.state.ai.entries.push(format!("> {question}"));
         self.prime_ai_tools();
         if self.ai_tools_pending() {
