@@ -28,7 +28,7 @@ pub const CHECK_TIMEOUT: Duration = Duration::from_secs(20);
 pub fn capability(tool: &str) -> &'static str {
     match tool {
         "read_file" | "search" => "read-only",
-        "edit_file" => "destructive",
+        "edit_file" | "write_file" => "destructive",
         _ => "unknown",
     }
 }
@@ -37,6 +37,7 @@ pub fn description(tool: &str) -> &'static str {
     match tool {
         "read_file" => "Read a file with a snapshot and per-line hashes",
         "edit_file" => "Replace lines validated by snapshot and line hashes",
+        "write_file" => "Create or replace a file with explicit content",
         "search" => "Search project files with ignore and regex",
         _ => "Native tool",
     }
@@ -46,6 +47,7 @@ pub fn tools() -> Vec<(&'static str, Value)> {
     vec![
         ("read_file", read_file_schema()),
         ("edit_file", edit_file_schema()),
+        ("write_file", write_file_schema()),
         ("search", search_schema()),
     ]
 }
@@ -82,6 +84,18 @@ fn edit_file_schema() -> Value {
             }
         },
         "required": ["path", "snapshot", "edits"]
+    })
+}
+
+fn write_file_schema() -> Value {
+    serde_json::json!({
+        "type": "object",
+        "properties": {
+            "path": {"type": "string", "description": "Path relative to the workspace root"},
+            "snapshot": {"type": "string", "description": "Required when replacing an existing file"},
+            "content": {"type": "string", "description": "Complete new file content"}
+        },
+        "required": ["path", "content"]
     })
 }
 
@@ -408,6 +422,14 @@ pub struct UndoState {
     pub raw: String,
     pub before: String,
     pub after: String,
+    pub created: bool,
+}
+
+pub struct WritePlan {
+    pub path: PathBuf,
+    pub raw: String,
+    pub before: Option<String>,
+    pub after: String,
 }
 
 #[cfg(test)]
@@ -431,6 +453,7 @@ pub fn edit_with_undo(root: &Path, arguments: &Value) -> Result<(String, UndoSta
             raw: plan.raw,
             before: plan.before,
             after: plan.after,
+            created: false,
         },
     ))
 }
@@ -441,8 +464,12 @@ pub fn undo_edit(root: &Path, undo: &UndoState) -> Result<PathBuf, String> {
     if snapshot(&current) != snapshot(&undo.after) {
         return Err("file changed after edit".to_string());
     }
-    crate::editor::document::write_atomic(&path, undo.before.as_bytes())
-        .map_err(|error| format!("undo {}: {error}", undo.raw))?;
+    if undo.created {
+        fs::remove_file(&path).map_err(|error| format!("undo {}: {error}", undo.raw))?;
+    } else {
+        crate::editor::document::write_atomic(&path, undo.before.as_bytes())
+            .map_err(|error| format!("undo {}: {error}", undo.raw))?;
+    }
     Ok(path)
 }
 
@@ -533,6 +560,102 @@ pub fn preview_edit(root: &Path, arguments: &Value) -> Result<String, String> {
         append_preview_change(&mut output, change);
     }
     Ok(output)
+}
+
+pub fn plan_write(root: &Path, arguments: &Value) -> Result<WritePlan, String> {
+    let raw = string_arg(arguments, "path")?;
+    let content = string_arg(arguments, "content")?;
+    if content.len() > MAX_FILE_BYTES as usize {
+        return Err(format!("content is larger than {} bytes", MAX_FILE_BYTES));
+    }
+    let candidate = Path::new(raw);
+    let candidate = if candidate.is_absolute() {
+        candidate.to_path_buf()
+    } else {
+        root.join(candidate)
+    };
+    let (path, before) = if candidate.exists() {
+        let path = resolve_path(root, raw)?;
+        let before = read_text(&path)?;
+        let expected = string_arg(arguments, "snapshot")?;
+        let actual = snapshot(&before);
+        if expected != actual {
+            return Err(format!(
+                "stale snapshot: expected {expected}, current {actual}; re-read the file"
+            ));
+        }
+        (path, Some(before))
+    } else {
+        (resolve_new_path(root, raw)?, None)
+    };
+    Ok(WritePlan {
+        path,
+        raw: raw.to_string(),
+        before,
+        after: content.to_string(),
+    })
+}
+
+pub fn preview_write(root: &Path, arguments: &Value) -> Result<String, String> {
+    let plan = plan_write(root, arguments)?;
+    let mut output = format!("diff -- {}\n", plan.raw);
+    if let Some(before) = &plan.before {
+        for line in before.lines() {
+            output.push_str(&format!("- {line}\n"));
+        }
+    } else {
+        output.push_str("(new file)\n");
+    }
+    for line in plan.after.lines() {
+        output.push_str(&format!("+ {line}\n"));
+    }
+    Ok(output)
+}
+
+pub fn write_with_undo(root: &Path, arguments: &Value) -> Result<(String, UndoState), String> {
+    let plan = plan_write(root, arguments)?;
+    crate::editor::document::write_atomic(&plan.path, plan.after.as_bytes())
+        .map_err(|error| format!("write {}: {error}", plan.raw))?;
+    let created = plan.before.is_none();
+    let text = format!(
+        "{} {}\nsnapshot: {}",
+        if created { "created" } else { "wrote" },
+        plan.raw,
+        snapshot(&plan.after)
+    );
+    Ok((
+        text,
+        UndoState {
+            raw: plan.raw,
+            before: plan.before.unwrap_or_default(),
+            after: plan.after,
+            created,
+        },
+    ))
+}
+
+pub(crate) fn resolve_new_path(root: &Path, raw: &str) -> Result<PathBuf, String> {
+    if raw.trim().is_empty() {
+        return Err("path is empty".to_string());
+    }
+    let root = fs::canonicalize(root).map_err(|error| format!("workspace root: {error}"))?;
+    let candidate = Path::new(raw);
+    let candidate = if candidate.is_absolute() {
+        candidate.to_path_buf()
+    } else {
+        root.join(candidate)
+    };
+    let parent = candidate
+        .parent()
+        .ok_or_else(|| format!("path has no parent: {raw}"))?;
+    let parent = fs::canonicalize(parent).map_err(|error| format!("resolve {raw}: {error}"))?;
+    if !parent.starts_with(&root) {
+        return Err(format!("path outside workspace: {raw}"));
+    }
+    let name = candidate
+        .file_name()
+        .ok_or_else(|| format!("path has no file name: {raw}"))?;
+    Ok(parent.join(name))
 }
 
 fn append_preview_change(output: &mut String, change: EditChange) {
@@ -683,6 +806,30 @@ mod tests {
             &root,
             &serde_json::json!({"path": "src/main.rs"})
         ));
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn write_file_creates_a_file_and_undo_removes_it() {
+        let root = std::env::temp_dir().join(format!(
+            "i3-native-write-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        fs::create_dir_all(&root).expect("root");
+        let arguments = serde_json::json!({
+            "path": "new.txt",
+            "content": "hello\nworld\n"
+        });
+        let preview = preview_write(&root, &arguments).expect("preview");
+        assert!(preview.contains("(new file)"), "{preview}");
+        let (_, undo) = write_with_undo(&root, &arguments).expect("write");
+        assert_eq!(
+            fs::read_to_string(root.join("new.txt")).expect("written"),
+            "hello\nworld\n"
+        );
+        undo_edit(&root, &undo).expect("undo");
+        assert!(!root.join("new.txt").exists());
         std::fs::remove_dir_all(root).ok();
     }
 

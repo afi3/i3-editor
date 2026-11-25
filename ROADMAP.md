@@ -942,7 +942,8 @@ user's explicit choice.
 - [x] Stream SSE deltas into the AI panel with a non-streaming fallback.
 - [x] Add opt-in persistent AI conversation history.
 - [x] Add explicit file/selection context attachments for one AI turn.
-- [x] Add native edit diff previews and snapshot-safe undo.
+- [x] Add native edit/write diff previews and snapshot-safe undo.
+- [x] Add HTTP MCP transport with JSON/SSE responses and session headers.
 
 ### Acceptance
 
@@ -959,9 +960,9 @@ user's explicit choice.
 ### Deferred to v0.2.2 / v0.2.3
 
 - v0.2.2: explicit file/selection context.
-- v0.2.3: diff preview and apply/undo are implemented; explicit write-tool
-  workflows remain limited to confirmed `native/edit_file`.
-- Later: MCP HTTP/SSE, resources/prompts/sampling, autonomous background agents.
+- v0.2.3: diff previews, confirmed `native/edit_file`/`native/write_file`, and
+  snapshot-safe undo are implemented.
+- Later: MCP resources/prompts/sampling and autonomous background agents.
 
 Risk: model output can request a dangerous MCP tool or contain prompt injection.
 The loop must keep trust, per-call confirmation, step limits, sanitized env,
@@ -977,4 +978,4 @@ cargo clippy --all-targets --all-features
 cargo run -- --dump-keymap
 ```
 
-Last recorded run: `cargo test` → 434 passed (427 unit + 6 CLI process + 1 PTY smoke), `cargo clippy` → 0 warnings.
+Last recorded run: `cargo test` → 437 passed (430 unit + 6 CLI process + 1 PTY smoke), `cargo clippy` → 0 warnings.

@@ -660,8 +660,13 @@ impl App {
                 "[tool] {server}/{tool} [{capability}] {}",
                 serde_json::to_string(&call.arguments).unwrap_or_default()
             ));
-            if server == crate::native::SERVER && tool == "edit_file" {
-                match crate::native::preview_edit(&self.state.explorer.root, &call.arguments) {
+            if server == crate::native::SERVER && (tool == "edit_file" || tool == "write_file") {
+                let preview = if tool == "edit_file" {
+                    crate::native::preview_edit(&self.state.explorer.root, &call.arguments)
+                } else {
+                    crate::native::preview_write(&self.state.explorer.root, &call.arguments)
+                };
+                match preview {
                     Ok(diff) => {
                         let diff = crate::ai::truncate_text(
                             &diff,
@@ -834,11 +839,12 @@ impl App {
         let Some(waiting) = self.state.ai.waiting.take() else {
             return;
         };
+        let tool = waiting.tool.clone();
         let text = format!("{prefix}\n\ncargo check:\n{}", result.output);
         self.state.ai.waiting = Some(waiting);
         self.finish_ai_tool(
             crate::native::SERVER,
-            "edit_file",
+            &tool,
             &[ToolContent::Text(text)],
             !result.success,
         );
@@ -855,15 +861,22 @@ impl App {
             .get("path")
             .and_then(Value::as_str)
             .ok_or_else(|| "path must be a non-empty string".to_string())?;
+        if call.tool == "write_file" {
+            return self.run_native_write(root, call, raw);
+        }
         let path = crate::native::resolve_path(root, raw)?;
-        let open = self.state.documents.values().find(|document| {
-            document
-                .path
-                .as_deref()
-                .is_some_and(|open| super::same_path(open, &path))
-        });
-        let document_id = open.map(|document| (document.id, document.dirty));
-        if let Some((_, true)) = document_id {
+        let document = self
+            .state
+            .documents
+            .values()
+            .find(|document| {
+                document
+                    .path
+                    .as_deref()
+                    .is_some_and(|open| super::same_path(open, &path))
+            })
+            .map(|document| (document.id, document.dirty));
+        if let Some((_, true)) = document {
             return Err("file has unsaved changes; save or reload it first".to_string());
         }
         if call.tool == "read_file" {
@@ -878,9 +891,51 @@ impl App {
         match crate::native::edit_with_undo(root, &call.arguments) {
             Ok((text, undo)) => {
                 self.native_undo.push(undo);
-                if let Some((id, _)) = document_id {
+                if let Some((id, _)) = document {
                     self.reload_document(id)
                         .map_err(|error| format!("reload after edit: {error}"))?;
+                }
+                Ok(text)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    fn run_native_write(
+        &mut self,
+        root: &std::path::Path,
+        call: &AiToolCall,
+        raw: &str,
+    ) -> Result<String, String> {
+        let existing = if std::path::Path::new(raw).is_absolute() {
+            std::path::Path::new(raw).exists()
+        } else {
+            root.join(raw).exists()
+        };
+        let document = if existing {
+            let path = crate::native::resolve_path(root, raw)?;
+            self.state
+                .documents
+                .values()
+                .find(|document| {
+                    document
+                        .path
+                        .as_deref()
+                        .is_some_and(|open| super::same_path(open, &path))
+                })
+                .map(|document| (document.id, document.dirty))
+        } else {
+            None
+        };
+        if let Some((_, true)) = document {
+            return Err("file has unsaved changes; save or reload it first".to_string());
+        }
+        match crate::native::write_with_undo(root, &call.arguments) {
+            Ok((text, undo)) => {
+                self.native_undo.push(undo);
+                if let Some((id, _)) = document {
+                    self.reload_document(id)
+                        .map_err(|error| format!("reload after write: {error}"))?;
                 }
                 Ok(text)
             }

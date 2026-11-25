@@ -9,7 +9,8 @@ use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
-use std::sync::mpsc::{self, Receiver};
+use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
@@ -30,6 +31,8 @@ pub struct McpServerConfig {
     pub args: Vec<String>,
     pub cwd: Option<PathBuf>,
     pub env: BTreeMap<String, String>,
+    /// HTTP MCP endpoint. When set, command/args are not spawned.
+    pub url: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -172,9 +175,20 @@ enum Incoming {
     Closed,
 }
 
+enum Transport {
+    Stdio {
+        child: Child,
+        writer: ChildStdin,
+    },
+    Http {
+        url: String,
+        session: Arc<Mutex<Option<String>>>,
+    },
+}
+
 struct Server {
-    child: Child,
-    writer: ChildStdin,
+    transport: Transport,
+    sender: Sender<Incoming>,
     incoming: Receiver<Incoming>,
     initialized: bool,
     pending: HashMap<i64, Pending>,
@@ -186,8 +200,10 @@ struct Server {
 
 impl Drop for Server {
     fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        if let Transport::Stdio { child, .. } = &mut self.transport {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
     }
 }
 
@@ -333,7 +349,7 @@ impl McpManager {
             let Some(server) = self.servers.get_mut(name) else {
                 return Err(format!("MCP {name}: server disappeared"));
             };
-            let write = write_request(&mut server.writer, id, method, params);
+            let write = send_request(server, id, method, params);
             if write.is_ok() {
                 server.pending.insert(
                     id,
@@ -366,7 +382,7 @@ impl McpManager {
             .get(name)
             .cloned()
             .ok_or_else(|| format!("MCP {name}: no configuration"))?;
-        let mut server = match spawn_server(name, &config, &self.root) {
+        let mut server = match start_transport(name, &config, &self.root) {
             Ok(server) => server,
             Err(error) => {
                 self.failed.insert(name.to_string());
@@ -374,10 +390,7 @@ impl McpManager {
             }
         };
         let id = self.next_id();
-        if let Err(error) = write_request(&mut server.writer, id, "initialize", initialize_params())
-        {
-            let _ = server.child.kill();
-            let _ = server.child.wait();
+        if let Err(error) = send_request(&mut server, id, "initialize", initialize_params()) {
             self.failed.insert(name.to_string());
             return Err(error);
         }
@@ -526,8 +539,7 @@ impl McpManager {
                 return;
             };
             server.initialized = true;
-            if let Err(error) = write_notification(&mut server.writer, "notifications/initialized")
-            {
+            if let Err(error) = send_notification(server, "notifications/initialized") {
                 events.push(Event::Warning(format!("MCP {name}: {error}")));
             }
             std::mem::take(&mut server.queued)
@@ -544,6 +556,209 @@ impl McpManager {
             }
         }
     }
+}
+
+fn start_transport(name: &str, config: &McpServerConfig, root: &Path) -> Result<Server, String> {
+    if let Some(url) = config.url.as_deref().filter(|url| !url.trim().is_empty()) {
+        return Ok(spawn_http_server(url));
+    }
+    spawn_server(name, config, root)
+}
+
+fn spawn_http_server(url: &str) -> Server {
+    let (sender, incoming) = mpsc::channel();
+    Server {
+        transport: Transport::Http {
+            url: url.to_string(),
+            session: Arc::new(Mutex::new(None)),
+        },
+        sender,
+        incoming,
+        initialized: false,
+        pending: HashMap::new(),
+        queued: VecDeque::new(),
+        tools: Vec::new(),
+        tools_loaded: false,
+        logs: VecDeque::new(),
+    }
+}
+
+fn send_request(
+    server: &mut Server,
+    id: i64,
+    method: &'static str,
+    params: Value,
+) -> Result<(), String> {
+    let sender = server.sender.clone();
+    match &mut server.transport {
+        Transport::Stdio { writer, .. } => write_request(writer, id, method, params),
+        Transport::Http { url, session } => {
+            spawn_http_request(
+                url.clone(),
+                Arc::clone(session),
+                sender,
+                Some(id),
+                method,
+                params,
+            );
+            Ok(())
+        }
+    }
+}
+
+fn send_notification(server: &mut Server, method: &'static str) -> Result<(), String> {
+    let sender = server.sender.clone();
+    match &mut server.transport {
+        Transport::Stdio { writer, .. } => write_notification(writer, method),
+        Transport::Http { url, session } => {
+            spawn_http_request(
+                url.clone(),
+                Arc::clone(session),
+                sender,
+                None,
+                method,
+                json!({}),
+            );
+            Ok(())
+        }
+    }
+}
+
+fn spawn_http_request(
+    url: String,
+    session: Arc<Mutex<Option<String>>>,
+    sender: Sender<Incoming>,
+    id: Option<i64>,
+    method: &'static str,
+    params: Value,
+) {
+    std::thread::spawn(move || {
+        let body = if let Some(id) = id {
+            json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params})
+        } else {
+            json!({"jsonrpc": "2.0", "method": method, "params": params})
+        };
+        let body_file = match tempfile::NamedTempFile::new().and_then(|mut file| {
+            file.write_all(body.to_string().as_bytes())?;
+            Ok(file)
+        }) {
+            Ok(file) => file,
+            Err(error) => {
+                let _ = sender.send(Incoming::ProtocolError(format!("HTTP request: {error}")));
+                return;
+            }
+        };
+        let mut config = format!("url = {}\nrequest = \"POST\"\n", quote_curl(&url));
+        config.push_str("header = \"Content-Type: application/json\"\n");
+        config.push_str("header = \"Accept: application/json, text/event-stream\"\n");
+        if let Ok(session) = session.lock()
+            && let Some(session) = session.as_deref()
+        {
+            config.push_str(&format!(
+                "header = {}\n",
+                quote_curl(&format!("Mcp-Session-Id: {session}"))
+            ));
+        }
+        config.push_str(&format!(
+            "data-binary = {}\n",
+            quote_curl(&format!("@{}", body_file.path().to_string_lossy()))
+        ));
+        config.push_str("max-time = 60\n");
+        let mut child = match Command::new("curl")
+            .args(["--config", "-", "--silent", "--show-error", "--include"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+        {
+            Ok(child) => child,
+            Err(error) => {
+                let _ = sender.send(Incoming::ProtocolError(format!("HTTP curl: {error}")));
+                return;
+            }
+        };
+        if let Some(mut stdin) = child.stdin.take()
+            && let Err(error) = stdin.write_all(config.as_bytes())
+        {
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = sender.send(Incoming::ProtocolError(format!("HTTP config: {error}")));
+            return;
+        }
+        let output = match child.wait_with_output() {
+            Ok(output) => output,
+            Err(error) => {
+                let _ = sender.send(Incoming::ProtocolError(format!("HTTP curl: {error}")));
+                return;
+            }
+        };
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let _ = sender.send(Incoming::ProtocolError(format!(
+                "HTTP request: {}",
+                stderr.trim()
+            )));
+            return;
+        }
+        let raw = String::from_utf8_lossy(&output.stdout);
+        if let Err(error) = handle_http_response(&raw, id, &session, &sender) {
+            let _ = sender.send(Incoming::ProtocolError(error));
+        }
+    });
+}
+
+fn handle_http_response(
+    raw: &str,
+    id: Option<i64>,
+    session: &Mutex<Option<String>>,
+    sender: &Sender<Incoming>,
+) -> Result<(), String> {
+    let (headers, body) = raw.split_once("\r\n\r\n").unwrap_or(("", raw));
+    let status = headers
+        .lines()
+        .next()
+        .and_then(|line| line.split_whitespace().nth(1))
+        .and_then(|code| code.parse::<u16>().ok())
+        .unwrap_or(0);
+    if !(200..300).contains(&status) {
+        if let Some(id) = id {
+            let _ = sender.send(Incoming::Line(
+                json!({"jsonrpc": "2.0", "id": id, "error": {"message": body.trim()}}).to_string(),
+            ));
+        }
+        return Ok(());
+    }
+    for line in headers.lines() {
+        if let Some(value) = line.strip_prefix("Mcp-Session-Id:")
+            && let Ok(mut session) = session.lock()
+        {
+            *session = Some(value.trim().to_string());
+        }
+    }
+    if id.is_none() {
+        return Ok(());
+    }
+    let mut saw_json = false;
+    for line in body.lines() {
+        let line = line.trim();
+        if let Some(data) = line.strip_prefix("data:") {
+            let data = data.trim();
+            if data.starts_with('{') {
+                let _ = sender.send(Incoming::Line(data.to_string()));
+            }
+        } else if line.starts_with('{') {
+            saw_json = true;
+            let _ = sender.send(Incoming::Line(line.to_string()));
+        }
+    }
+    if !saw_json && body.trim().starts_with('{') {
+        let _ = sender.send(Incoming::Line(body.trim().to_string()));
+    }
+    Ok(())
+}
+
+fn quote_curl(value: &str) -> String {
+    format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
 fn spawn_server(name: &str, config: &McpServerConfig, root: &Path) -> Result<Server, String> {
@@ -602,16 +817,17 @@ fn spawn_server(name: &str, config: &McpServerConfig, root: &Path) -> Result<Ser
         }
         let _ = stdout_tx.send(Incoming::Closed);
     });
+    let stderr_tx = tx.clone();
     std::thread::spawn(move || {
         for line in BufReader::new(stderr).lines().map_while(Result::ok) {
-            if tx.send(Incoming::Stderr(line)).is_err() {
+            if stderr_tx.send(Incoming::Stderr(line)).is_err() {
                 break;
             }
         }
     });
     Ok(Server {
-        child,
-        writer,
+        transport: Transport::Stdio { child, writer },
+        sender: tx,
         incoming,
         initialized: false,
         pending: HashMap::new(),
@@ -741,6 +957,7 @@ mod tests {
             args: vec![script.to_string_lossy().into_owned()],
             cwd: None,
             env,
+            url: None,
         };
         McpManager::new(
             BTreeMap::from([("mock".to_string(), config)]),
@@ -779,6 +996,92 @@ mod tests {
             }
         }
         panic!("timed out waiting for MCP event; seen {seen:?}");
+    }
+
+    #[test]
+    fn http_transport_initializes_lists_and_calls() {
+        if !python_available() {
+            return;
+        }
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
+        let address = listener.local_addr().expect("address");
+        let server = std::thread::spawn(move || {
+            for _ in 0..4 {
+                let (mut stream, _) = listener.accept().expect("accept");
+                let mut request = [0u8; 8192];
+                let read = stream.read(&mut request).expect("read");
+                let text = String::from_utf8_lossy(&request[..read]);
+                let body = text
+                    .split_once("\r\n\r\n")
+                    .map(|(_, body)| body)
+                    .unwrap_or("");
+                let value: Value = serde_json::from_str(body).unwrap_or(Value::Null);
+                let id = value.get("id").cloned().unwrap_or(Value::Null);
+                let method = value.get("method").and_then(Value::as_str).unwrap_or("");
+                let (status, session, payload) = match method {
+                    "initialize" => (
+                        "200 OK",
+                        Some("Mcp-Session-Id: test-session\r\n"),
+                        json!({"jsonrpc":"2.0","id":id,"result":{"protocolVersion":PROTOCOL_VERSION,"capabilities":{"tools":{}},"serverInfo":{"name":"http","version":"1"}}}),
+                    ),
+                    "tools/list" => (
+                        "200 OK",
+                        None,
+                        json!({"jsonrpc":"2.0","id":id,"result":{"tools":[{"name":"echo","description":"Echo","inputSchema":{"type":"object"}}]}}),
+                    ),
+                    "tools/call" => (
+                        "200 OK",
+                        None,
+                        json!({"jsonrpc":"2.0","id":id,"result":{"content":[{"type":"text","text":"pong"}],"isError":false}}),
+                    ),
+                    _ => ("202 Accepted", None, Value::Null),
+                };
+                let body = if payload.is_null() {
+                    String::new()
+                } else {
+                    payload.to_string()
+                };
+                let response = format!(
+                    "HTTP/1.1 {status}\r\n{}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    session.unwrap_or(""),
+                    body.len()
+                );
+                stream.write_all(response.as_bytes()).expect("write");
+            }
+        });
+        let mut manager = McpManager::new(
+            BTreeMap::from([(
+                "http".to_string(),
+                McpServerConfig {
+                    command: String::new(),
+                    args: Vec::new(),
+                    cwd: None,
+                    env: BTreeMap::new(),
+                    url: Some(format!("http://{address}/mcp")),
+                },
+            )]),
+            std::env::temp_dir(),
+        );
+        manager.list_tools("http").expect("list tools");
+        let events = wait_for(&mut manager, |event| matches!(event, Event::Tools { .. }));
+        let tools = events
+            .iter()
+            .find_map(|event| match event {
+                Event::Tools { tools, .. } => Some(tools.clone()),
+                _ => None,
+            })
+            .expect("tools");
+        assert_eq!(tools[0].name, "echo");
+        manager
+            .call_tool("http", "echo", json!({"text":"ping"}))
+            .expect("call");
+        let events = wait_for(&mut manager, |event| {
+            matches!(event, Event::ToolResult { .. })
+        });
+        assert!(events.iter().any(|event| matches!(event, Event::ToolResult { content, .. } if content.iter().any(|item| matches!(item, ToolContent::Text(text) if text == "pong")))));
+        server.join().expect("server");
     }
 
     #[test]
@@ -977,6 +1280,7 @@ mod tests {
             ],
             cwd: None,
             env: BTreeMap::new(),
+            url: None,
         };
         let mut manager = McpManager::new(
             BTreeMap::from([("filesystem".to_string(), config)]),

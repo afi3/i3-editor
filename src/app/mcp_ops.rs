@@ -94,6 +94,7 @@ impl App {
             args,
             cwd: None,
             env: Default::default(),
+            url: None,
         };
         self.state
             .config

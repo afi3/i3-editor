@@ -2234,6 +2234,7 @@ fn ai_harness_confirms_a_tool_and_returns_the_final_answer() {
         args: vec![script.to_string_lossy().into_owned()],
         cwd: None,
         env: BTreeMap::from([("MOCK_MCP_MODE".to_string(), "normal".to_string())]),
+        url: None,
     };
     app.state
         .config
@@ -2340,6 +2341,7 @@ fn ai_waits_for_mcp_tools_before_the_first_request() {
         args: vec![script.to_string_lossy().into_owned()],
         cwd: None,
         env: BTreeMap::from([("MOCK_MCP_MODE".to_string(), "normal".to_string())]),
+        url: None,
     };
     app.state
         .config
@@ -2424,6 +2426,7 @@ fn cancelling_an_ai_tool_call_stops_the_mcp_server() {
         args: vec![script.to_string_lossy().into_owned()],
         cwd: None,
         env: BTreeMap::from([("MOCK_MCP_MODE".to_string(), "normal".to_string())]),
+        url: None,
     };
     app.state
         .config
@@ -2542,6 +2545,34 @@ fn native_ai_tools_read_and_edit_the_open_document() {
             && document.rope.char(0) == 'y'
             && document.rope.char(1) == '\n'
     }));
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn native_ai_write_file_creates_and_undoes_a_file() {
+    use crate::state::AiToolCall;
+
+    let (mut app, dir) = fixture("x\n");
+    app.state.config.ai.base_url.clear();
+    app.state.config.ai.stream = false;
+    app.dispatch(Command::AiChat).expect("ai panel");
+    app.state.ai.pending.push_back(AiToolCall {
+        id: "native-write".to_string(),
+        server: "native".to_string(),
+        tool: "write_file".to_string(),
+        capability: "destructive".to_string(),
+        arguments: serde_json::json!({"path": "new.txt", "content": "new\n"}),
+    });
+    app.handle_key(ratatui::crossterm::event::KeyEvent::new(
+        ratatui::crossterm::event::KeyCode::Char('y'),
+        ratatui::crossterm::event::KeyModifiers::NONE,
+    ));
+    assert_eq!(
+        std::fs::read_to_string(dir.join("new.txt")).expect("created file"),
+        "new\n"
+    );
+    app.dispatch(Command::AiUndoEdit).expect("undo write");
+    assert!(!dir.join("new.txt").exists());
     std::fs::remove_dir_all(&dir).ok();
 }
 
@@ -2749,6 +2780,7 @@ fn ai_tool_policy_filters_the_tool_definitions() {
         args: vec![script.to_string_lossy().into_owned()],
         cwd: None,
         env: BTreeMap::from([("MOCK_MCP_MODE".to_string(), "normal".to_string())]),
+        url: None,
     };
     app.state
         .config
@@ -3054,6 +3086,7 @@ fn mcp_trust_tools_call_and_result_flow() {
         args: vec![script.to_string_lossy().into_owned()],
         cwd: None,
         env: BTreeMap::from([("MOCK_MCP_MODE".to_string(), "normal".to_string())]),
+        url: None,
     };
     app.state
         .config

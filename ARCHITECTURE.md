@@ -357,9 +357,12 @@ never overwritten by the installer. `lsp_uninstall` removes only the managed
 entry; downloaded files stay under `lsp/` for explicit cleanup. Filename
 matching accepts exact names plus `*` prefix/suffix patterns.
 
-**MCP is a separate stdio JSON-RPC client.** `mcp::McpManager` owns one child
-per configured `[mcp.<name>]` server. A reader thread frames newline-delimited
-JSON-RPC messages; `App::pump_mcp` drains them on the UI thread. `initialize`
+**MCP is a separate JSON-RPC client.** `mcp::McpManager` owns one stdio child
+or HTTP endpoint per configured `[mcp.<name>]` server. A reader thread frames
+newline-delimited JSON-RPC messages for stdio; HTTP requests run in short-lived
+curl workers and accept JSON or SSE response frames, carrying an
+`Mcp-Session-Id` when the server returns one. `App::pump_mcp` drains events on
+the UI thread. `initialize`
 precedes `tools/list` and `tools/call`; pending requests carry timeouts, stderr
 is kept in a bounded per-server log, and a crashed server is removed once.
 Servers start only after the palette trust flow records the hash of command,
@@ -395,9 +398,10 @@ trust is still checked before a server starts. Built-in `native/read_file` and
 `native/edit_file` tools add a workspace-root boundary, a file snapshot,
 six-hex line hashes, and atomic writes; dirty open buffers are rejected and
 clean buffers reload after an edit. `native/search` walks with `ignore` and
-matches per-line regexes without spawning `grep`. Native edit plans render a
-compact diff before confirmation, and successful edits push an undo record;
-`ai_undo_edit` restores it only while the post-edit snapshot still matches.
+matches per-line regexes without spawning `grep`. Native edit and write plans render a
+compact diff before confirmation, and successful operations push an undo record;
+`ai_undo_edit` restores or removes the file only while the post-edit snapshot
+still matches.
 Rust edits in a Cargo workspace start a background `cargo check
 --message-format=short` (20-second timeout); its output is appended to the edit
 result before the next model turn.

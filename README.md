@@ -416,8 +416,8 @@ can be overridden. `lsp_definition` has no default key; bind it under
 
 ### MCP servers
 
-MCP support is a stdio JSON-RPC client. It does not auto-start servers and never
-applies a tool result to a buffer.
+MCP support is a JSON-RPC client over stdio or HTTP POST. It does not
+auto-start servers and never applies a tool result to a buffer.
 
 ```toml
 [mcp.filesystem]
@@ -425,6 +425,10 @@ command = "npx"
 args = ["-y", "@modelcontextprotocol/server-filesystem", "/home/arif/project"]
 cwd = "/home/arif/project"
 env = { TOKEN = "..." }
+
+# HTTP endpoint instead of command/args:
+[mcp.remote]
+url = "https://example.test/mcp"
 ```
 
 - `F1` → `mcp_add` starts the wizard. Choose `filesystem`, enter a directory
@@ -444,8 +448,9 @@ env = { TOKEN = "..." }
   `logs` row for the server's stderr ring.
 - A tool result opens in a read-only overlay. It cannot edit a buffer or run a
   shell command automatically. `Esc` or `q` closes the overlay.
-- Only stdio transport is supported. HTTP/SSE, resources, prompts, and automatic
-  tool loops are deferred.
+- HTTP transport posts JSON-RPC requests to `url`, accepts JSON or SSE
+  responses, and forwards an `Mcp-Session-Id` returned by the server. Resources,
+  prompts, sampling, and server-initiated SSE streams remain deferred.
 
 Manual real-server check:
 
@@ -543,6 +548,10 @@ The harness also exposes two built-in tools, independent of MCP:
   one atomic write; edits apply from bottom to top. Empty `text` deletes the
   line. The confirmation transcript includes a compact `- line | old` /
   `+ line | new` diff before the user presses `y`.
+- `native/write_file` takes `path` and `content`; replacing an existing file
+  requires its `snapshot`. It shows the diff before confirmation, creates new
+  files atomically, and records undo state. `ai_undo_edit` removes a created
+  file or restores an overwritten one.
 - Reads and edits are limited to regular UTF-8 files inside the workspace root,
   at most 16 MiB. Symlinks escaping the root, stale hashes, stale snapshots,
   and dirty open buffers are rejected. A clean open buffer is reloaded after a
