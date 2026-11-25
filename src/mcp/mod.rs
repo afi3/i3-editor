@@ -762,4 +762,62 @@ mod tests {
             |event| matches!(event, Event::Warning(message) if message.contains("too large"))
         ));
     }
+    #[test]
+    #[ignore = "requires npx, network, and the filesystem MCP package"]
+    fn real_filesystem_mcp_server() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("hello.txt"), "hello").expect("write");
+        let config = McpServerConfig {
+            command: "npx".to_string(),
+            args: vec![
+                "-y".to_string(),
+                "@modelcontextprotocol/server-filesystem".to_string(),
+                dir.path().to_string_lossy().into_owned(),
+            ],
+            cwd: None,
+            env: BTreeMap::new(),
+        };
+        let mut manager = McpManager::new(
+            BTreeMap::from([("filesystem".to_string(), config)]),
+            dir.path().to_path_buf(),
+        );
+        manager.list_tools("filesystem").expect("start server");
+        let events = wait_for(&mut manager, |event| matches!(event, Event::Tools { .. }));
+        let tools = events
+            .iter()
+            .find_map(|event| match event {
+                Event::Tools { tools, .. } => Some(tools.clone()),
+                _ => None,
+            })
+            .expect("tools");
+        println!(
+            "tools: {:?}",
+            tools.iter().map(|tool| &tool.name).collect::<Vec<_>>()
+        );
+        assert!(tools.iter().any(|tool| tool.name == "list_directory"));
+
+        manager
+            .call_tool(
+                "filesystem",
+                "list_directory",
+                json!({"path": dir.path().to_string_lossy()}),
+            )
+            .expect("call");
+        let events = wait_for(&mut manager, |event| {
+            matches!(event, Event::ToolResult { .. })
+        });
+        let result = events
+            .iter()
+            .find_map(|event| match event {
+                Event::ToolResult { content, .. } => Some(content.clone()),
+                _ => None,
+            })
+            .expect("result");
+        println!("result: {result:?}");
+        assert!(
+            result
+                .iter()
+                .any(|item| matches!(item, ToolContent::Text(text) if text.contains("hello.txt")))
+        );
+    }
 }

@@ -826,7 +826,9 @@ request timeouts, stderr/log ring, crash reporting, and `tests/fixtures/mock_mcp
 with normal, malformed, crash, silent-timeout, and oversized modes. Config
 loading, the `mcp` palette menu, persistent trust hashes, the JSON argument
 editor, per-call confirmation, server logs, and the read-only result overlay
-now work. The suite is 394 (387 unit + 6 CLI + 1 PTY).
+now work. The suite is 394 (387 unit + 6 CLI + 1 PTY). A manual ignored test
+also passed against `@modelcontextprotocol/server-filesystem`: 14 tools listed,
+`list_directory` returned `hello.txt`, and the server shut down cleanly.
 
 ### Acceptance
 

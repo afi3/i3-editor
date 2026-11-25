@@ -438,6 +438,15 @@ env = { TOKEN = "..." }
 - Only stdio transport is supported. HTTP/SSE, resources, prompts, and automatic
   tool loops are deferred.
 
+Manual real-server check:
+
+```bash
+cargo test real_filesystem_mcp_server -- --ignored
+```
+
+It requires Node/npm and downloads `@modelcontextprotocol/server-filesystem`;
+CI uses the local mock server instead.
+
 ### Git
 
 Git runs through the configured binary (`[git] binary`, default `git`); there is
