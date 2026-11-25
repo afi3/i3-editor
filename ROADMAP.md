@@ -918,13 +918,14 @@ and no-auto-apply boundaries.
   published four platform assets plus checksums (run `45714031032`).
 - [x] Actual provider usage and optional session cost metering in the panel title.
 - [x] Rich Markdown blocks and inline styling in the AI transcript.
+- [x] Follow MCP resource and prompt pagination cursors.
 - [x] Published aarch64 macOS asset passed its SHA-256 check and reports
   `i3-editor 0.2.1`.
 
 ### Deferred to later v0.2.x
 
 - Rich persistent agent planning and objectives.
-- HTTP/server-initiated SSE sampling and MCP resource templates/pagination.
+- HTTP/server-initiated SSE sampling and MCP resource templates.
 - Table column alignment and richer Markdown extensions.
 - API key/keyring management, context indexing, and autonomous write policies.
 
@@ -942,4 +943,4 @@ cargo clippy --all-targets --all-features
 cargo run -- --dump-keymap
 ```
 
-Last recorded run: `cargo test` → 442 passed (435 unit + 6 CLI process + 1 PTY smoke), `cargo clippy` → 0 warnings.
+Last recorded run: `cargo test` → 443 passed (436 unit + 6 CLI process + 1 PTY smoke), `cargo clippy` → 0 warnings.

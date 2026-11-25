@@ -449,7 +449,8 @@ url = "https://example.test/mcp"
   `logs` row for the server's stderr ring.
 - `mcp_resources` lists resources from a trusted server; selecting one opens its
   text in a read-only overlay. `mcp_prompts` lists prompts and opens the returned
-  messages in the same overlay. Prompt arguments are not prompted for yet.
+  messages in the same overlay. Resource and prompt lists follow `nextCursor`
+  pages. Prompt arguments are not prompted for yet.
 - A tool result opens in a read-only overlay. It cannot edit a buffer or run a
   shell command automatically. `Esc` or `q` closes the overlay.
 - HTTP transport posts JSON-RPC requests to `url`, accepts JSON or SSE

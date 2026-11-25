@@ -25,6 +25,9 @@ if MODE == "crash":
 
 print("mock mcp ready", file=sys.stderr, flush=True)
 
+resource_page = 0
+prompt_page = 0
+
 for raw in sys.stdin:
     raw = raw.strip()
     if not raw:
@@ -125,22 +128,30 @@ for raw in sys.stdin:
             }
         )
     elif method == "resources/list":
-        send(
-            {
-                "jsonrpc": "2.0",
-                "id": request_id,
-                "result": {
-                    "resources": [
-                        {
-                            "uri": "mock://readme",
-                            "name": "README",
-                            "description": "Mock resource",
-                            "mimeType": "text/plain",
-                        }
-                    ]
-                },
-            }
-        )
+        params = request.get("params") or {}
+        if MODE == "paginated" and not params.get("cursor"):
+            resources = [
+                {"uri": "mock://one", "name": "One", "description": "First page", "mimeType": "text/plain"}
+            ]
+            next_cursor = "page-2"
+        else:
+            resources = [
+                {
+                    "uri": "mock://readme",
+                    "name": "README",
+                    "description": "Mock resource",
+                    "mimeType": "text/plain",
+                }
+            ]
+            next_cursor = None
+            if MODE == "paginated":
+                resources = [
+                    {"uri": "mock://two", "name": "Two", "description": "Second page", "mimeType": "text/plain"}
+                ]
+        result = {"resources": resources}
+        if next_cursor:
+            result["nextCursor"] = next_cursor
+        send({"jsonrpc": "2.0", "id": request_id, "result": result})
     elif method == "resources/read":
         send(
             {
@@ -158,21 +169,25 @@ for raw in sys.stdin:
             }
         )
     elif method == "prompts/list":
-        send(
-            {
-                "jsonrpc": "2.0",
-                "id": request_id,
-                "result": {
-                    "prompts": [
-                        {
-                            "name": "review",
-                            "description": "Review the change",
-                            "arguments": [{"name": "path", "required": True}],
-                        }
-                    ]
-                },
-            }
-        )
+        params = request.get("params") or {}
+        if MODE == "paginated" and not params.get("cursor"):
+            prompts = [{"name": "first", "description": "First page"}]
+            next_cursor = "page-2"
+        else:
+            prompts = [
+                {
+                    "name": "review",
+                    "description": "Review the change",
+                    "arguments": [{"name": "path", "required": True}],
+                }
+            ]
+            next_cursor = None
+            if MODE == "paginated":
+                prompts = [{"name": "second", "description": "Second page"}]
+        result = {"prompts": prompts}
+        if next_cursor:
+            result["nextCursor"] = next_cursor
+        send({"jsonrpc": "2.0", "id": request_id, "result": result})
     elif method == "prompts/get":
         send(
             {

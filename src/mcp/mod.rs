@@ -241,6 +241,8 @@ struct Server {
     tools: Vec<Tool>,
     resources: Vec<Resource>,
     prompts: Vec<Prompt>,
+    resource_pages: usize,
+    prompt_pages: usize,
     tools_loaded: bool,
     logs: VecDeque<String>,
 }
@@ -334,10 +336,24 @@ impl McpManager {
     }
 
     pub fn list_resources(&mut self, server: &str) -> Result<(), String> {
+        if let Some(state) = self.servers.get_mut(server) {
+            state.resources.clear();
+            state.resource_pages = 0;
+        }
         self.request(
             server,
             "resources/list",
             json!({}),
+            ReplyKind::ResourcesList,
+            None,
+        )
+    }
+
+    fn list_resources_page(&mut self, server: &str, cursor: &str) -> Result<(), String> {
+        self.request(
+            server,
+            "resources/list",
+            json!({"cursor": cursor}),
             ReplyKind::ResourcesList,
             None,
         )
@@ -354,10 +370,24 @@ impl McpManager {
     }
 
     pub fn list_prompts(&mut self, server: &str) -> Result<(), String> {
+        if let Some(state) = self.servers.get_mut(server) {
+            state.prompts.clear();
+            state.prompt_pages = 0;
+        }
         self.request(
             server,
             "prompts/list",
             json!({}),
+            ReplyKind::PromptsList,
+            None,
+        )
+    }
+
+    fn list_prompts_page(&mut self, server: &str, cursor: &str) -> Result<(), String> {
+        self.request(
+            server,
+            "prompts/list",
+            json!({"cursor": cursor}),
             ReplyKind::PromptsList,
             None,
         )
@@ -646,9 +676,26 @@ impl McpManager {
             });
         } else {
             let resources = parse_resources(result);
-            if let Some(server) = self.servers.get_mut(name) {
-                server.resources = resources.clone();
+            let next = next_cursor(result);
+            let complete = {
+                let Some(server) = self.servers.get_mut(name) else {
+                    return;
+                };
+                server.resources.extend(resources);
+                server.resource_pages += 1;
+                next.is_none() || server.resource_pages >= 100
+            };
+            if !complete {
+                if let Some(cursor) = next {
+                    let _ = self.list_resources_page(name, &cursor);
+                }
+                return;
             }
+            let resources = self
+                .servers
+                .get(name)
+                .map(|server| server.resources.clone())
+                .unwrap_or_default();
             events.push(Event::Resources {
                 server: name.to_string(),
                 resources,
@@ -671,9 +718,26 @@ impl McpManager {
             });
         } else {
             let prompts = parse_prompts(result);
-            if let Some(server) = self.servers.get_mut(name) {
-                server.prompts = prompts.clone();
+            let next = next_cursor(result);
+            let complete = {
+                let Some(server) = self.servers.get_mut(name) else {
+                    return;
+                };
+                server.prompts.extend(prompts);
+                server.prompt_pages += 1;
+                next.is_none() || server.prompt_pages >= 100
+            };
+            if !complete {
+                if let Some(cursor) = next {
+                    let _ = self.list_prompts_page(name, &cursor);
+                }
+                return;
             }
+            let prompts = self
+                .servers
+                .get(name)
+                .map(|server| server.prompts.clone())
+                .unwrap_or_default();
             events.push(Event::Prompts {
                 server: name.to_string(),
                 prompts,
@@ -798,6 +862,8 @@ fn spawn_http_server(url: &str) -> Server {
         tools: Vec::new(),
         resources: Vec::new(),
         prompts: Vec::new(),
+        resource_pages: 0,
+        prompt_pages: 0,
         tools_loaded: false,
         logs: VecDeque::new(),
     }
@@ -1055,6 +1121,8 @@ fn spawn_server(name: &str, config: &McpServerConfig, root: &Path) -> Result<Ser
         tools: Vec::new(),
         resources: Vec::new(),
         prompts: Vec::new(),
+        resource_pages: 0,
+        prompt_pages: 0,
         tools_loaded: false,
         logs: VecDeque::new(),
     })
@@ -1099,6 +1167,14 @@ fn write_message(writer: &mut ChildStdin, message: &Value) -> Result<(), String>
         .write_all(text.as_bytes())
         .and_then(|_| writer.flush())
         .map_err(|error| error.to_string())
+}
+
+fn next_cursor(result: &Value) -> Option<String> {
+    result
+        .get("nextCursor")
+        .and_then(Value::as_str)
+        .filter(|cursor| !cursor.is_empty())
+        .map(str::to_string)
 }
 
 fn parse_resources(result: &Value) -> Vec<Resource> {
@@ -1394,6 +1470,36 @@ mod tests {
             |event| matches!(event, Event::Log { line, .. } if line.contains("sampling response")),
         );
         assert!(!events.is_empty());
+    }
+
+    #[test]
+    fn paginated_resources_and_prompts_are_aggregated() {
+        if !python_available() {
+            return;
+        }
+        let mut manager = mock("paginated");
+        manager.list_resources("mock").expect("list resources");
+        let events = wait_for(&mut manager, |event| {
+            matches!(event, Event::Resources { .. })
+        });
+        let resources = events
+            .iter()
+            .find_map(|event| match event {
+                Event::Resources { resources, .. } => Some(resources.clone()),
+                _ => None,
+            })
+            .expect("resources");
+        assert_eq!(resources.len(), 2);
+        manager.list_prompts("mock").expect("list prompts");
+        let events = wait_for(&mut manager, |event| matches!(event, Event::Prompts { .. }));
+        let prompts = events
+            .iter()
+            .find_map(|event| match event {
+                Event::Prompts { prompts, .. } => Some(prompts.clone()),
+                _ => None,
+            })
+            .expect("prompts");
+        assert_eq!(prompts.len(), 2);
     }
 
     #[test]
