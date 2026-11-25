@@ -44,6 +44,8 @@ pub enum PromptKind {
     McpTools,
     McpArgs,
     McpConfirm,
+    McpAdd,
+    McpAddPath,
 }
 
 /// Grouping used by the prompt setup and submit code, so neither needs one
@@ -86,6 +88,8 @@ impl PromptKind {
                 | PromptKind::McpTools
                 | PromptKind::McpArgs
                 | PromptKind::McpConfirm
+                | PromptKind::McpAdd
+                | PromptKind::McpAddPath
         )
     }
 
@@ -145,6 +149,8 @@ impl PromptKind {
             PromptKind::McpTools => "MCP Tools",
             PromptKind::McpArgs => "MCP Tool Arguments",
             PromptKind::McpConfirm => "Call MCP Tool",
+            PromptKind::McpAdd => "Add MCP Server",
+            PromptKind::McpAddPath => "MCP Server Directory",
             _ => return None,
         })
     }
@@ -218,6 +224,7 @@ impl PromptKind {
                 | PromptKind::McpTrust
                 | PromptKind::McpTools
                 | PromptKind::McpConfirm
+                | PromptKind::McpAdd
         )
     }
 }
@@ -263,6 +270,7 @@ pub struct PromptState {
     pub mcp_tool: Option<String>,
     pub mcp_arguments: Option<String>,
     pub mcp_fields: Vec<crate::mcp::ToolArg>,
+    pub mcp_template: Option<String>,
 }
 
 impl PromptState {
@@ -284,6 +292,7 @@ impl PromptState {
             mcp_tool: None,
             mcp_arguments: None,
             mcp_fields: Vec::new(),
+            mcp_template: None,
         }
     }
 

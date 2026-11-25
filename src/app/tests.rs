@@ -2195,6 +2195,49 @@ fn mcp_command_opens_a_server_menu() {
 }
 
 #[test]
+fn mcp_add_wizard_prefills_the_workspace_directory() {
+    use crate::input::PromptKind;
+
+    let (mut app, dir) = fixture("x\n");
+    app.mcp = Some(crate::mcp::McpManager::new(
+        std::collections::BTreeMap::new(),
+        dir.clone(),
+    ));
+    app.dispatch(Command::McpAdd).expect("mcp_add");
+    let InputMode::Prompt(prompt) = &mut app.state.mode else {
+        panic!("template prompt missing")
+    };
+    assert_eq!(prompt.kind, PromptKind::McpAdd);
+    let filesystem = prompt
+        .candidates
+        .iter()
+        .find(|candidate| candidate.starts_with("filesystem — "))
+        .cloned()
+        .expect("filesystem template");
+    prompt.select_candidate(&filesystem);
+    app.submit_prompt().expect("template");
+    let InputMode::Prompt(prompt) = &mut app.state.mode else {
+        panic!("path prompt missing")
+    };
+    assert_eq!(prompt.kind, PromptKind::McpAddPath);
+    assert_eq!(
+        std::fs::canonicalize(&prompt.fields[0]).expect("prefilled dir"),
+        std::fs::canonicalize(&dir).expect("canonical root")
+    );
+    app.submit_prompt().expect("add server");
+    assert!(app.state.config.mcp.servers.contains_key("filesystem"));
+    let InputMode::Prompt(prompt) = &mut app.state.mode else {
+        panic!("trust prompt missing after add")
+    };
+    assert_eq!(prompt.kind, PromptKind::McpTrust);
+    app.handle_key(ratatui::crossterm::event::KeyEvent::new(
+        ratatui::crossterm::event::KeyCode::Esc,
+        ratatui::crossterm::event::KeyModifiers::NONE,
+    ));
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn mcp_path_prefill_uses_active_file_for_reads_and_root_for_listing() {
     use crate::mcp::{ArgKind, ToolArg};
 

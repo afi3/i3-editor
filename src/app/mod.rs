@@ -60,6 +60,8 @@ impl App {
             lsp: None,
             mcp: None,
             mcp_trusted: std::collections::HashSet::new(),
+            mcp_recent: std::collections::BTreeMap::new(),
+            persist_mcp_state: false,
             plugins: None,
             block_anchor: None,
             git_status_entries: Vec::new(),
@@ -138,6 +140,10 @@ pub struct App {
     pub(crate) mcp: Option<crate::mcp::McpManager>,
     /// Trusted MCP server config hashes for this session.
     pub(crate) mcp_trusted: std::collections::HashSet<String>,
+    /// Recent MCP tool names per server.
+    pub(crate) mcp_recent: std::collections::BTreeMap<String, Vec<String>>,
+    /// Persist MCP trust/recent state; disabled in headless tests.
+    pub(crate) persist_mcp_state: bool,
     /// Alt-drag block selection: pane, anchor line, anchor char column.
     pub(crate) block_anchor: Option<(crate::state::PaneId, usize, usize)>,
     /// Lua plugins; `None` when disabled or unavailable.
@@ -232,6 +238,8 @@ impl App {
         state.warnings.extend(theme_warnings);
         let (mcp_trusted, trust_warnings) = crate::config::load_mcp_trust();
         state.warnings.extend(trust_warnings);
+        let (mcp_recent, recent_warnings) = crate::config::load_mcp_recent();
+        state.warnings.extend(recent_warnings);
         if let Some(message) = capability_warning(enhanced) {
             state.warnings.insert(0, message);
         }
@@ -259,6 +267,8 @@ impl App {
             lsp: None,
             mcp: None,
             mcp_trusted,
+            mcp_recent,
+            persist_mcp_state: true,
             plugins: None,
             block_anchor: None,
             git_status_entries: Vec::new(),

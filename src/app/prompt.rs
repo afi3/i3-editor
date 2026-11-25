@@ -260,6 +260,8 @@ impl App {
                 | PromptKind::McpTools
                 | PromptKind::McpArgs
                 | PromptKind::McpConfirm
+                | PromptKind::McpAdd
+                | PromptKind::McpAddPath
         ) {
             self.submit_mcp_prompt(prompt);
             return Ok(());

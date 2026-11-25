@@ -367,7 +367,8 @@ args, cwd, and env in `mcp_trust.toml`; a changed config prompts again. Tool
 arguments are rendered as typed fields from the tool's JSON schema (with a JSON
 fallback for nested values), every call has a confirmation prompt, and results
 and stderr logs render in read-only overlays with no automatic buffer or shell
-mutation.
+mutation. `mcp_add` writes managed server entries to `mcp.toml`; recent tool
+choices are kept in `mcp_recent.toml` and sorted first.
 
 **File operations follow the focused surface.** `duplicate_file`, `copy_path`,
 and `reveal_in_terminal` take the explorer row when the explorer has focus;

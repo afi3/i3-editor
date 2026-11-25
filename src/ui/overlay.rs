@@ -644,6 +644,7 @@ fn field_label(prompt: &PromptState, index: usize) -> String {
         (PromptKind::Find | PromptKind::FindInFiles, _) => "Find: ".to_string(),
         (PromptKind::GoToLine, _) => "Line: ".to_string(),
         (PromptKind::WorkspaceRoot, _) => "Root: ".to_string(),
+        (PromptKind::McpAddPath, _) => "Directory: ".to_string(),
         (PromptKind::CommandPalette, _) => "> ".to_string(),
         _ => String::new(),
     }

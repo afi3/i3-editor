@@ -19,6 +19,102 @@ impl App {
         self.dirty = true;
     }
 
+    pub(crate) fn open_mcp_add(&mut self) {
+        let mut prompt = PromptState::new(PromptKind::McpAdd);
+        prompt.set_candidates(
+            MCP_TEMPLATES
+                .iter()
+                .map(|template| format!("{} — {}", template.id, template.description))
+                .collect(),
+        );
+        self.state.mode = InputMode::Prompt(prompt);
+        self.dirty = true;
+    }
+
+    pub(crate) fn submit_mcp_add(&mut self, prompt: PromptState) {
+        let Some(candidate) = prompt.selected_candidate() else {
+            return;
+        };
+        let Some(id) = candidate.split(" — ").next() else {
+            return;
+        };
+        let Some(template) = MCP_TEMPLATES.iter().find(|template| template.id == id) else {
+            return;
+        };
+        if template.needs_path {
+            let mut path = PromptState::new(PromptKind::McpAddPath);
+            path.mcp_template = Some(template.id.to_string());
+            path.set_input(self.state.explorer.root.to_string_lossy());
+            self.state.mode = InputMode::Prompt(path);
+        } else {
+            self.add_mcp_template(template, None);
+        }
+    }
+
+    pub(crate) fn submit_mcp_add_path(&mut self, prompt: PromptState) {
+        let Some(template_id) = prompt.mcp_template.clone() else {
+            return;
+        };
+        let Some(template) = MCP_TEMPLATES
+            .iter()
+            .find(|template| template.id == template_id)
+        else {
+            return;
+        };
+        let raw = prompt.fields.first().cloned().unwrap_or_default();
+        let path = if std::path::Path::new(&raw).is_absolute() {
+            std::path::PathBuf::from(raw)
+        } else {
+            self.state.explorer.root.join(raw)
+        };
+        if !path.is_dir() {
+            let mut retry = PromptState::new(PromptKind::McpAddPath);
+            retry.mcp_template = Some(template_id);
+            retry.set_input(path.to_string_lossy());
+            self.state.mode = InputMode::Prompt(retry);
+            self.notify(format!("not a directory: {}", path.display()));
+            return;
+        }
+        self.add_mcp_template(template, Some(path));
+    }
+
+    fn add_mcp_template(&mut self, template: &McpTemplate, path: Option<std::path::PathBuf>) {
+        let mut name = template.id.to_string();
+        let mut suffix = 2;
+        while self.state.config.mcp.servers.contains_key(&name) {
+            name = format!("{}-{suffix}", template.id);
+            suffix += 1;
+        }
+        let mut args: Vec<String> = template.args.iter().map(|arg| (*arg).to_string()).collect();
+        if let Some(path) = path {
+            args.push(path.to_string_lossy().into_owned());
+        }
+        let config = crate::mcp::McpServerConfig {
+            command: template.command.to_string(),
+            args,
+            cwd: None,
+            env: Default::default(),
+        };
+        self.state
+            .config
+            .mcp
+            .servers
+            .insert(name.clone(), config.clone());
+        if self.persist_mcp_state
+            && let Err(error) = crate::config::persist_mcp_server(&name, &config)
+        {
+            self.notify(format!("MCP {name} added for this session only: {error}"));
+        }
+        if let Some(manager) = self.mcp.as_mut() {
+            manager.restart(
+                self.state.config.mcp.servers.clone(),
+                self.state.explorer.root.clone(),
+            );
+        }
+        self.state.mode = InputMode::Normal;
+        self.start_mcp_flow(&name);
+    }
+
     pub(crate) fn handle_mcp_key(&mut self, combo: KeyCombo) -> bool {
         let Some(view) = self.state.mcp_view.as_mut() else {
             return false;
@@ -114,6 +210,8 @@ impl App {
             PromptKind::McpTools => self.submit_mcp_tools(prompt),
             PromptKind::McpArgs => self.submit_mcp_args(prompt),
             PromptKind::McpConfirm => self.submit_mcp_confirm(prompt),
+            PromptKind::McpAdd => self.submit_mcp_add(prompt),
+            PromptKind::McpAddPath => self.submit_mcp_add_path(prompt),
             _ => {}
         }
     }
@@ -175,6 +273,7 @@ impl App {
             self.show_mcp_logs(&server);
             return;
         }
+        self.record_mcp_recent(&server, &tool);
         let Some(tool_def) = self
             .mcp
             .as_ref()
@@ -253,6 +352,19 @@ impl App {
         } else {
             self.notify(format!("calling {server}/{tool}"));
         }
+    }
+
+    fn record_mcp_recent(&mut self, server: &str, tool: &str) {
+        let entry = self.mcp_recent.entry(server.to_string()).or_default();
+        entry.retain(|name| name != tool);
+        entry.insert(0, tool.to_string());
+        entry.truncate(6);
+        if self.persist_mcp_state
+            && let Err(error) = crate::config::save_mcp_recent(&self.mcp_recent)
+        {
+            self.notify(format!("MCP recent tools not saved: {error}"));
+        }
+        self.dirty = true;
     }
 
     pub(crate) fn prefill_mcp_arg(&self, tool: &str, arg: &crate::mcp::ToolArg) -> String {
@@ -452,3 +564,29 @@ mod tests {
         );
     }
 }
+
+#[derive(Clone, Copy)]
+struct McpTemplate {
+    id: &'static str,
+    description: &'static str,
+    command: &'static str,
+    args: &'static [&'static str],
+    needs_path: bool,
+}
+
+const MCP_TEMPLATES: &[McpTemplate] = &[
+    McpTemplate {
+        id: "filesystem",
+        description: "read and list files under one directory",
+        command: "npx",
+        args: &["-y", "@modelcontextprotocol/server-filesystem"],
+        needs_path: true,
+    },
+    McpTemplate {
+        id: "everything",
+        description: "protocol demo server",
+        command: "npx",
+        args: &["-y", "@modelcontextprotocol/server-everything"],
+        needs_path: false,
+    },
+];

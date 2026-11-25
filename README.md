@@ -425,6 +425,9 @@ cwd = "/home/arif/project"
 env = { TOKEN = "..." }
 ```
 
+- `F1` → `mcp_add` starts the wizard. Choose `filesystem`, enter a directory
+  (prefilled with the workspace root), or choose `everything` for a protocol
+  demo; the wizard writes `<config>/i3-editor/mcp.toml`.
 - `F1` → `mcp` opens the server menu. The first start shows a trust prompt with
   the command to run; changing command, args, cwd, or env changes the trust
   hash and prompts again. Trusted hashes persist in

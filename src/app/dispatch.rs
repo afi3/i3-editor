@@ -59,6 +59,7 @@ impl App {
             Command::ToggleExplorer => self.toggle_explorer(),
             Command::Help => self.open_help(),
             Command::Mcp => self.open_mcp(),
+            Command::McpAdd => self.open_mcp_add(),
             other => return Ok(Some(other)),
         }
         Ok(None)

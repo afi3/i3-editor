@@ -414,6 +414,128 @@ pub fn save_mcp_trust(trusted: &HashSet<String>) -> std::io::Result<()> {
     std::fs::rename(&temporary, path)
 }
 
+pub fn managed_mcp_path() -> Option<PathBuf> {
+    config_dir().map(|dir| dir.join("mcp.toml"))
+}
+
+pub fn load_managed_mcp() -> (McpConfig, Vec<String>) {
+    let Some(path) = managed_mcp_path() else {
+        return (McpConfig::default(), Vec::new());
+    };
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return (McpConfig::default(), Vec::new());
+        }
+        Err(error) => {
+            return (
+                McpConfig::default(),
+                vec![format!("cannot read {}: {error}", path.display())],
+            );
+        }
+    };
+    match toml::from_str::<McpConfig>(&text) {
+        Ok(config) => (config, Vec::new()),
+        Err(error) => (
+            McpConfig::default(),
+            vec![format!("{} is not valid MCP TOML: {error}", path.display())],
+        ),
+    }
+}
+
+pub fn merge_managed_mcp(config: &mut AppConfig) -> Vec<String> {
+    let (managed, warnings) = load_managed_mcp();
+    merge_mcp_config(config, managed);
+    warnings
+}
+
+fn merge_mcp_config(config: &mut AppConfig, managed: McpConfig) {
+    for (key, server) in managed.servers {
+        config.mcp.servers.entry(key).or_insert(server);
+    }
+}
+
+fn write_managed_mcp(managed: &McpConfig) -> std::io::Result<()> {
+    let Some(path) = managed_mcp_path() else {
+        return Err(std::io::Error::other("no config directory"));
+    };
+    let text = toml::to_string(managed).map_err(std::io::Error::other)?;
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent)?;
+    }
+    let temporary = path.with_extension("toml.tmp");
+    std::fs::write(&temporary, text)?;
+    std::fs::rename(&temporary, path)
+}
+
+pub fn persist_mcp_server(key: &str, server: &crate::mcp::McpServerConfig) -> std::io::Result<()> {
+    let (mut managed, _) = load_managed_mcp();
+    managed.servers.insert(key.to_string(), server.clone());
+    write_managed_mcp(&managed)
+}
+
+#[derive(Default, Deserialize, Serialize)]
+struct McpRecentFile {
+    #[serde(flatten)]
+    servers: BTreeMap<String, Vec<String>>,
+}
+
+pub fn mcp_recent_path() -> Option<PathBuf> {
+    config_dir().map(|dir| dir.join("mcp_recent.toml"))
+}
+
+pub fn load_mcp_recent() -> (BTreeMap<String, Vec<String>>, Vec<String>) {
+    let Some(path) = mcp_recent_path() else {
+        return (BTreeMap::new(), Vec::new());
+    };
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return (BTreeMap::new(), Vec::new());
+        }
+        Err(error) => {
+            return (
+                BTreeMap::new(),
+                vec![format!("cannot read {}: {error}", path.display())],
+            );
+        }
+    };
+    match toml::from_str::<McpRecentFile>(&text) {
+        Ok(file) => (file.servers, Vec::new()),
+        Err(error) => (
+            BTreeMap::new(),
+            vec![format!(
+                "{} is not valid MCP recent TOML: {error}",
+                path.display()
+            )],
+        ),
+    }
+}
+
+fn render_mcp_recent(recent: &BTreeMap<String, Vec<String>>) -> String {
+    toml::to_string(&McpRecentFile {
+        servers: recent.clone(),
+    })
+    .unwrap_or_default()
+}
+
+pub fn save_mcp_recent(recent: &BTreeMap<String, Vec<String>>) -> std::io::Result<()> {
+    let Some(path) = mcp_recent_path() else {
+        return Err(std::io::Error::other("no config directory"));
+    };
+    let text = render_mcp_recent(recent);
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent)?;
+    }
+    let temporary = path.with_extension("toml.tmp");
+    std::fs::write(&temporary, text)?;
+    std::fs::rename(&temporary, path)
+}
+
 pub fn default_path() -> Option<PathBuf> {
     config_dir().map(|dir| dir.join("config.toml"))
 }
@@ -427,6 +549,7 @@ pub fn load() -> (AppConfig, Vec<String>) {
         Some(path) => {
             let (mut config, mut warnings) = load_from(&path);
             warnings.extend(merge_managed_lsp(&mut config));
+            warnings.extend(merge_managed_mcp(&mut config));
             (config, warnings)
         }
         None => (AppConfig::default(), Vec::new()),
@@ -997,6 +1120,20 @@ mod strict_tests {
         assert!(filename_matches("*.Dockerfile", "app.Dockerfile"));
         assert!(filename_matches("Containerfile", "containerfile"));
         assert!(!filename_matches("Dockerfile.*", "DockerfileX"));
+    }
+
+    #[test]
+    fn mcp_recent_config_round_trips() {
+        let recent = BTreeMap::from([
+            (
+                "filesystem".to_string(),
+                vec!["read_text_file".to_string(), "list_directory".to_string()],
+            ),
+            ("git".to_string(), vec!["git_status".to_string()]),
+        ]);
+        let text = render_mcp_recent(&recent);
+        let file: McpRecentFile = toml::from_str(&text).expect("parse");
+        assert_eq!(file.servers, recent);
     }
 
     #[test]
