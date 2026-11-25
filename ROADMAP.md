@@ -922,14 +922,16 @@ and no-auto-apply boundaries.
 - [x] Follow MCP resource and prompt pagination cursors.
 - [x] Add persistent objectives, OS keyring lookup, metadata context index, and write allowlists.
 - [x] Add MCP resource templates and pagination.
+- [x] Add an opt-in sequential objective queue.
+- [x] Add aligned Markdown tables, MCP prompt argument forms, and objective dependencies.
 - [x] Published aarch64 macOS asset passed its SHA-256 check and reports
   `i3-editor 0.2.1`.
 
 ### Deferred to later v0.2.x
 
 - HTTP/server-initiated SSE sampling.
-- Table column alignment and richer Markdown extensions.
-- Richer objective dependency planning and automatic work queues.
+- Richer Markdown extensions.
+- Cross-session objective work queues.
 
 Risk: MCP servers are arbitrary code and model output is untrusted. Trust hashes,
 explicit tool confirmation, capability gating, context/tool budgets, audits,

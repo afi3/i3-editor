@@ -10,6 +10,8 @@ pub struct Objective {
     pub id: u64,
     pub text: String,
     pub status: String,
+    #[serde(default)]
+    pub depends_on: Vec<u64>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -45,6 +47,7 @@ impl Store {
             id,
             text,
             status: "pending".to_string(),
+            depends_on: Vec::new(),
         });
         id
     }

@@ -645,6 +645,14 @@ fn field_label(prompt: &PromptState, index: usize) -> String {
         (PromptKind::GoToLine, _) => "Line: ".to_string(),
         (PromptKind::WorkspaceRoot, _) => "Root: ".to_string(),
         (PromptKind::McpAddPath, _) => "Directory: ".to_string(),
+        (PromptKind::McpPromptArgs, index) => format!(
+            "{}: ",
+            prompt
+                .mcp_prompt_args
+                .get(index)
+                .map(String::as_str)
+                .unwrap_or("argument")
+        ),
         (PromptKind::CommandPalette, _) => "> ".to_string(),
         _ => String::new(),
     }

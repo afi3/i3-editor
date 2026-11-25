@@ -183,10 +183,123 @@ fn build_rows(state: &AppState) -> Vec<Line<'static>> {
     }
     let mut rows = Vec::new();
     let mut in_code = false;
-    for entry in &state.ai.entries {
-        push_entry_rows(&mut rows, state, entry, width, &mut in_code);
+    let mut index = 0;
+    while index < state.ai.entries.len() {
+        if !in_code && is_table_line(&state.ai.entries[index]) {
+            let start = index;
+            index = table_end(&state.ai.entries, start);
+            push_table_rows(&mut rows, state, &state.ai.entries[start..index], width);
+        } else {
+            push_entry_rows(
+                &mut rows,
+                state,
+                &state.ai.entries[index],
+                width,
+                &mut in_code,
+            );
+            index += 1;
+        }
     }
     rows
+}
+
+fn is_table_line(line: &str) -> bool {
+    let line = line.trim();
+    line.len() > 2 && line.starts_with('|') && line.ends_with('|')
+}
+
+fn table_end(entries: &[String], start: usize) -> usize {
+    entries[start..]
+        .iter()
+        .take_while(|line| is_table_line(line))
+        .count()
+        + start
+}
+
+fn update_widths(widths: &mut [usize], cells: &[String]) {
+    for (column, cell) in cells.iter().enumerate() {
+        widths[column] = widths[column].max(cell.chars().count());
+    }
+}
+
+fn table_row_spans(
+    state: &AppState,
+    cells: &[String],
+    widths: &[usize],
+    separator: bool,
+) -> Vec<Span<'static>> {
+    let mut spans = vec![Span::styled("│", code_style(state))];
+    for (column, width) in widths.iter().enumerate() {
+        let (cell, style) = table_cell(state, cells, column, *width, separator);
+        spans.push(Span::styled(cell, style));
+        spans.push(Span::styled("│", code_style(state)));
+    }
+    spans
+}
+
+fn table_cell(
+    state: &AppState,
+    cells: &[String],
+    column: usize,
+    width: usize,
+    separator: bool,
+) -> (String, Style) {
+    if separator {
+        return ("─".repeat(width), code_style(state));
+    }
+    let cell = cells.get(column).cloned().unwrap_or_default();
+    let mut text: String = cell.chars().take(width).collect();
+    let used = text.chars().count();
+    text.push_str(&" ".repeat(width.saturating_sub(used)));
+    (text, state.theme.base())
+}
+
+fn push_table_rows(
+    rows: &mut Vec<Line<'static>>,
+    state: &AppState,
+    block: &[String],
+    width: usize,
+) {
+    let parsed: Vec<(Vec<String>, bool)> = block
+        .iter()
+        .map(|line| {
+            let inner = line.trim().trim_matches('|');
+            let cells: Vec<String> = inner
+                .split('|')
+                .map(|cell| cell.trim().to_string())
+                .collect();
+            let separator = cells.iter().all(|cell| {
+                !cell.is_empty() && cell.chars().all(|ch| ch == '-' || ch == ':' || ch == ' ')
+            });
+            (cells, separator)
+        })
+        .collect();
+    let columns = parsed
+        .iter()
+        .map(|(cells, _)| cells.len())
+        .max()
+        .unwrap_or(0);
+    if columns == 0 {
+        return;
+    }
+    let mut widths = vec![1usize; columns];
+    for (cells, separator) in &parsed {
+        if !separator {
+            update_widths(&mut widths, cells);
+        }
+    }
+    let border_width = columns + 1;
+    let max_cells = width.saturating_sub(border_width) / columns.max(1);
+    for width in &mut widths {
+        *width = (*width).min(max_cells.max(1));
+    }
+    for (cells, separator) in parsed {
+        push_styled(
+            rows,
+            table_row_spans(state, &cells, &widths, separator),
+            width,
+        );
+    }
 }
 
 fn push_entry_rows(

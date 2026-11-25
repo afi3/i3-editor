@@ -78,6 +78,8 @@ impl App {
             | Command::AiBackground
             | Command::AiObjectiveAdd
             | Command::AiObjectives
+            | Command::AiQueueObjectives
+            | Command::AiObjectiveLink
             | Command::AiIndexProject
             | Command::AiContextFiles => {
                 self.dispatch_ai(command);
@@ -119,6 +121,8 @@ impl App {
             Command::AiBackground => self.open_ai_background(),
             Command::AiObjectiveAdd => self.open_ai_objective_add(),
             Command::AiObjectives => self.open_ai_objectives(),
+            Command::AiQueueObjectives => self.start_objective_queue(),
+            Command::AiObjectiveLink => self.open_ai_objective_link(),
             Command::AiIndexProject => self.index_ai_context(),
             Command::AiContextFiles => self.open_ai_context_files(),
             _ => {}

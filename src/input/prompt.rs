@@ -51,10 +51,12 @@ pub enum PromptKind {
     McpResourceList,
     McpPrompts,
     McpPromptList,
+    McpPromptArgs,
     McpSampling,
     AiBackground,
     AiObjectiveAdd,
     AiObjectives,
+    AiObjectiveLink,
     AiContextFiles,
 }
 
@@ -93,6 +95,7 @@ impl PromptKind {
                 | PromptKind::McpResourceList
                 | PromptKind::McpPrompts
                 | PromptKind::McpPromptList
+                | PromptKind::McpPromptArgs
                 | PromptKind::McpSampling
         )
     }
@@ -118,6 +121,7 @@ impl PromptKind {
                 | PromptKind::AiBackground
                 | PromptKind::AiObjectiveAdd
                 | PromptKind::AiObjectives
+                | PromptKind::AiObjectiveLink
                 | PromptKind::AiContextFiles
         )
     }
@@ -149,7 +153,9 @@ impl PromptKind {
 
     fn query_title(self) -> &'static str {
         self.core_query_title()
+            .or_else(|| self.workspace_query_title())
             .or_else(|| self.mcp_query_title())
+            .or_else(|| self.mcp_resource_query_title())
             .or_else(|| self.ai_query_title())
             .unwrap_or("")
     }
@@ -167,7 +173,22 @@ impl PromptKind {
             PromptKind::GitStatus => "Git Status",
             PromptKind::Conflicts => "Merge Conflicts",
             PromptKind::CommitMessage => "Commit Message",
-            PromptKind::SelectWorkspace => "Workspace",
+            _ => return None,
+        })
+    }
+
+    fn workspace_query_title(self) -> Option<&'static str> {
+        (self == PromptKind::SelectWorkspace).then_some("Workspace")
+    }
+
+    fn mcp_resource_query_title(self) -> Option<&'static str> {
+        Some(match self {
+            PromptKind::McpResources => "MCP Resource Servers",
+            PromptKind::McpResourceTemplates => "MCP Resource Template Servers",
+            PromptKind::McpResourceList => "MCP Resources",
+            PromptKind::McpPrompts => "MCP Prompt Servers",
+            PromptKind::McpPromptList => "MCP Prompts",
+            PromptKind::McpPromptArgs => "MCP Prompt Arguments",
             _ => return None,
         })
     }
@@ -177,6 +198,7 @@ impl PromptKind {
             PromptKind::AiBackground => "Background Agent Task",
             PromptKind::AiObjectiveAdd => "Add Agent Objective",
             PromptKind::AiObjectives => "Agent Objectives",
+            PromptKind::AiObjectiveLink => "Link Objective Dependencies",
             PromptKind::AiContextFiles => "Indexed Context Files",
             _ => return None,
         })
@@ -191,11 +213,6 @@ impl PromptKind {
             PromptKind::McpConfirm => "Call MCP Tool",
             PromptKind::McpAdd => "Add MCP Server",
             PromptKind::McpAddPath => "MCP Server Directory",
-            PromptKind::McpResources => "MCP Resource Servers",
-            PromptKind::McpResourceTemplates => "MCP Resource Template Servers",
-            PromptKind::McpResourceList => "MCP Resources",
-            PromptKind::McpPrompts => "MCP Prompt Servers",
-            PromptKind::McpPromptList => "MCP Prompts",
             PromptKind::McpSampling => "MCP Sampling Request",
             _ => return None,
         })
@@ -322,6 +339,7 @@ pub struct PromptState {
     pub mcp_tool: Option<String>,
     pub mcp_arguments: Option<String>,
     pub mcp_fields: Vec<crate::mcp::ToolArg>,
+    pub mcp_prompt_args: Vec<String>,
     pub mcp_template: Option<String>,
 }
 
@@ -344,6 +362,7 @@ impl PromptState {
             mcp_tool: None,
             mcp_arguments: None,
             mcp_fields: Vec::new(),
+            mcp_prompt_args: Vec::new(),
             mcp_template: None,
         }
     }

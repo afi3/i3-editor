@@ -95,6 +95,8 @@ pub enum Command {
     AiBackground,
     AiObjectiveAdd,
     AiObjectives,
+    AiQueueObjectives,
+    AiObjectiveLink,
     AiIndexProject,
     AiContextFiles,
     GitStatus,
@@ -280,6 +282,10 @@ impl Command {
             Command::AiBackground => ("ai_background", "Start a read-only background agent"),
             Command::AiObjectiveAdd => ("ai_objective_add", "Add a persistent agent objective"),
             Command::AiObjectives => ("ai_objectives", "List and run agent objectives"),
+            Command::AiQueueObjectives => {
+                ("ai_queue_objectives", "Run pending objectives in sequence")
+            }
+            Command::AiObjectiveLink => ("ai_objective_link", "Link objective dependencies"),
             Command::AiIndexProject => ("ai_index_project", "Build the workspace metadata index"),
             Command::AiContextFiles => {
                 ("ai_context_files", "Choose an indexed file for AI context")
@@ -321,6 +327,8 @@ impl Command {
             | Command::AiBackground
             | Command::AiObjectiveAdd
             | Command::AiObjectives
+            | Command::AiQueueObjectives
+            | Command::AiObjectiveLink
             | Command::AiIndexProject
             | Command::AiContextFiles => return self.ai_spec(),
             Command::LspUninstall => (
@@ -566,6 +574,8 @@ impl Command {
             Command::AiBackground,
             Command::AiObjectiveAdd,
             Command::AiObjectives,
+            Command::AiQueueObjectives,
+            Command::AiObjectiveLink,
             Command::AiIndexProject,
             Command::AiContextFiles,
             Command::GitStatus,
@@ -721,6 +731,8 @@ mod tests {
             Command::AiBackground,
             Command::AiObjectiveAdd,
             Command::AiObjectives,
+            Command::AiQueueObjectives,
+            Command::AiObjectiveLink,
             Command::AiIndexProject,
             Command::AiContextFiles,
             Command::GitStatus,

@@ -274,6 +274,7 @@ impl App {
         }
         self.state.ai.busy = false;
         if self.background_agent {
+            self.objective_queue = false;
             self.finish_objective("blocked");
         }
         self.background_agent = false;
@@ -377,12 +378,109 @@ impl App {
         self.dirty = true;
     }
 
+    pub(crate) fn start_objective_queue(&mut self) {
+        if !self.state.config.ai.background_agents || !self.state.config.ai.agent_auto_queue {
+            self.notify("enable background_agents and agent_auto_queue first");
+            return;
+        }
+        if self.background_agent || self.state.ai.busy {
+            self.notify("an AI turn is already running");
+            return;
+        }
+        self.objective_queue = true;
+        self.run_next_objective();
+    }
+
+    fn run_next_objective(&mut self) {
+        let next = self
+            .objectives
+            .objectives
+            .iter()
+            .find(|objective| {
+                objective.status == "pending"
+                    && objective.depends_on.iter().all(|dep| {
+                        self.objectives
+                            .get(*dep)
+                            .is_some_and(|dependency| dependency.status == "done")
+                    })
+            })
+            .cloned();
+        let Some(objective) = next else {
+            self.objective_queue = false;
+            let waiting = self
+                .objectives
+                .objectives
+                .iter()
+                .any(|objective| objective.status == "pending");
+            self.notify(if waiting {
+                "objective queue is waiting for dependencies"
+            } else {
+                "objective queue finished"
+            });
+            return;
+        };
+        self.active_objective = Some(objective.id);
+        self.objectives.set_status(objective.id, "running");
+        let _ = crate::objectives::save(&self.objectives);
+        self.start_background_task(objective.text);
+    }
+
+    pub(crate) fn open_ai_objective_link(&mut self) {
+        self.state.mode = InputMode::Prompt(PromptState::new(PromptKind::AiObjectiveLink));
+        self.notify("enter: objective-id dependency-id,dependency-id");
+        self.dirty = true;
+    }
+
+    pub(crate) fn submit_ai_objective_link(&mut self, prompt: PromptState) {
+        let raw = prompt.fields.first().cloned().unwrap_or_default();
+        let Some((id, deps)) = raw.split_once(':') else {
+            self.notify("use objective-id: dependency-id,dependency-id");
+            return;
+        };
+        let Ok(id) = id.trim().parse::<u64>() else {
+            self.notify("objective id must be a number");
+            return;
+        };
+        let deps: Result<Vec<u64>, _> = deps
+            .split(',')
+            .filter(|part| !part.trim().is_empty())
+            .map(|part| part.trim().parse::<u64>())
+            .collect();
+        let Ok(deps) = deps else {
+            self.notify("dependency ids must be numbers");
+            return;
+        };
+        if let Some(objective) = self
+            .objectives
+            .objectives
+            .iter_mut()
+            .find(|objective| objective.id == id)
+        {
+            objective.depends_on = deps;
+            let _ = crate::objectives::save(&self.objectives);
+            self.state.mode = InputMode::Normal;
+            self.notify("objective dependencies saved");
+        } else {
+            self.notify("objective not found");
+        }
+    }
+
     pub(crate) fn open_ai_objectives(&mut self) {
         let candidates = self
             .objectives
             .objectives
             .iter()
-            .map(|objective| format!("{} [{}] {}", objective.id, objective.status, objective.text))
+            .map(|objective| {
+                let deps = if objective.depends_on.is_empty() {
+                    String::new()
+                } else {
+                    format!(" deps:{:?}", objective.depends_on)
+                };
+                format!(
+                    "{} [{}] {}{}",
+                    objective.id, objective.status, objective.text, deps
+                )
+            })
             .collect();
         let mut prompt = PromptState::new(PromptKind::AiObjectives);
         prompt.candidates = candidates;
@@ -408,7 +506,7 @@ impl App {
             self.notify("enable [ai] background_agents first");
             return;
         }
-        if self.background_agent || self.state.ai.busy {
+        if self.background_agent || self.state.ai.busy || self.objective_queue {
             self.notify("an AI turn is already running");
             return;
         }
@@ -476,6 +574,7 @@ impl App {
             }));
         }
         self.background_agent = false;
+        self.objective_queue = false;
         self.finish_objective("blocked");
         self.state.ai.busy = false;
         self.state
@@ -498,6 +597,9 @@ impl App {
             .push("[background] finished".to_string());
         self.notify("background agent finished");
         self.save_ai_history();
+        if self.objective_queue {
+            self.run_next_objective();
+        }
     }
 
     pub(crate) fn attach_ai_file(&mut self) {
@@ -781,6 +883,7 @@ impl App {
             Ok(reply) => self.finish_ai_reply(reply, false),
             Err(error) => {
                 if self.background_agent {
+                    self.objective_queue = false;
                     self.finish_objective("blocked");
                 }
                 self.background_agent = false;
@@ -817,6 +920,7 @@ impl App {
                     self.ai_stream = None;
                     self.ai_streamed = false;
                     if self.background_agent {
+                        self.objective_queue = false;
                         self.finish_objective("blocked");
                     }
                     self.background_agent = false;
@@ -1235,6 +1339,7 @@ impl App {
             .push("[tool] denied by user".to_string());
         if self.background_agent {
             self.background_agent = false;
+            self.objective_queue = false;
             self.finish_objective("blocked");
             self.state
                 .ai

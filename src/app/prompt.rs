@@ -281,6 +281,10 @@ impl App {
             self.submit_ai_objective(prompt);
             return Ok(());
         }
+        if prompt.kind == PromptKind::AiObjectiveLink {
+            self.submit_ai_objective_link(prompt);
+            return Ok(());
+        }
         if prompt.kind == PromptKind::AiContextFiles {
             self.submit_ai_context_file(prompt);
             return Ok(());

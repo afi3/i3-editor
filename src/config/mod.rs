@@ -142,6 +142,8 @@ pub struct AiConfig {
     pub persist_history: bool,
     /// Allow the explicit background-agent command.
     pub background_agents: bool,
+    /// Run pending objectives sequentially after ai_queue_objectives.
+    pub agent_auto_queue: bool,
     /// Optional input price in USD per million prompt tokens.
     pub input_cost_per_million: f64,
     /// Optional output price in USD per million completion tokens.
@@ -174,6 +176,7 @@ impl Default for AiConfig {
             stream: true,
             persist_history: false,
             background_agents: false,
+            agent_auto_queue: false,
             input_cost_per_million: 0.0,
             output_cost_per_million: 0.0,
             keyring_service: String::new(),
@@ -778,6 +781,7 @@ const AI_KEYS: &[&str] = &[
     "stream",
     "persist_history",
     "background_agents",
+    "agent_auto_queue",
     "input_cost_per_million",
     "output_cost_per_million",
     "keyring_service",

@@ -632,6 +632,9 @@ mod tests {
             "- **bold** and `code` [link](https://example.test)".to_string(),
             "> quoted".to_string(),
             "1. ordered".to_string(),
+            "| name | value |".to_string(),
+            "| --- | --- |".to_string(),
+            "| alpha | 1 |".to_string(),
         ];
         let screen = draw(&mut state, 100, 24);
         assert!(screen.contains("Heading"), "{screen}");
@@ -640,6 +643,7 @@ mod tests {
         assert!(screen.contains("link"), "{screen}");
         assert!(screen.contains("quoted"), "{screen}");
         assert!(screen.contains("ordered"), "{screen}");
+        assert!(screen.contains("alpha"), "{screen}");
         std::fs::remove_dir_all(&dir).ok();
     }
 

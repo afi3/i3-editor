@@ -450,8 +450,8 @@ url = "https://example.test/mcp"
 - `mcp_resources` lists resources from a trusted server; selecting one opens its
   text in a read-only overlay. `mcp_resource_templates` lists URI templates.
   `mcp_prompts` lists prompts and opens the returned messages in the same
-  overlay. Resource and prompt lists follow `nextCursor` pages. Prompt arguments
-  are not prompted for yet.
+  overlay. Resource and prompt lists follow `nextCursor` pages. Prompts with
+  declared arguments open a field form before the request is sent.
 - A tool result opens in a read-only overlay. It cannot edit a buffer or run a
   shell command automatically. `Esc` or `q` closes the overlay.
 - HTTP transport posts JSON-RPC requests to `url`, accepts JSON or SSE
@@ -486,6 +486,7 @@ timeout_secs = 60
 stream = true                    # SSE token streaming
 persist_history = false          # opt in to ai_history.json
 background_agents = false        # opt in to background tasks
+agent_auto_queue = false         # queue pending objectives after ai_queue_objectives
 background_auto_tools = []       # empty keeps write confirmation; e.g. ["native/edit_file"]
 keyring_service = ""             # optional OS keyring service
 keyring_account = ""
@@ -542,8 +543,8 @@ panel_width = 20                 # percent of terminal width
   conversation tokens against the configured budget plus actual provider
   prompt/completion usage; if input/output pricing
   is configured, it also shows an estimated session cost. Headings, lists,
-  blockquotes, tables, fenced/inline code, bold/italic text, links, and user
-  turns get Markdown styling;
+  blockquotes, aligned tables, fenced/inline code, bold/italic text, links, and
+  user turns get Markdown styling;
   long transcript lines wrap inside the panel, and `Ctrl+Left`/`Ctrl+Right`
   scrolls horizontally when needed.
 - The default provider is OpenRouter (`https://openrouter.ai/api/v1`,
@@ -601,7 +602,10 @@ same turn. Cancelling the AI turn kills a running check; non-Rust edits skip it.
   without that explicit allowlist.
 - `ai_objective_add` saves a persistent objective; `ai_objectives` lists and runs
   one as a background task. Objectives live in `agent_objectives.json` with
-  `pending/running/done/blocked` status.
+  `pending/running/done/blocked` status. With `agent_auto_queue = true`,
+  `ai_queue_objectives` runs pending objectives sequentially and stops on the
+  first blocked result. `ai_objective_link` stores dependencies using
+  `objective-id: dependency-id,dependency-id`.
 - `ai_index_project` builds a path+size-only workspace index. `ai_context_files`
   lets you explicitly choose an indexed file and attach its contents to the
   next prompt; the index itself never stores file contents.
@@ -973,6 +977,7 @@ timeout_secs = 60
 stream = true
 persist_history = false
 background_agents = false
+agent_auto_queue = false
 background_auto_tools = []
 keyring_service = ""
 keyring_account = ""

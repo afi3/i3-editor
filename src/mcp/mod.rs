@@ -324,6 +324,12 @@ impl McpManager {
             .is_some_and(|server| server.tools_loaded)
     }
 
+    pub fn prompts(&self, server: &str) -> Option<&[Prompt]> {
+        self.servers
+            .get(server)
+            .map(|server| server.prompts.as_slice())
+    }
+
     pub fn logs(&self, server: &str) -> Option<&VecDeque<String>> {
         self.servers.get(server).map(|server| &server.logs)
     }
@@ -417,10 +423,19 @@ impl McpManager {
     }
 
     pub fn get_prompt(&mut self, server: &str, name: &str) -> Result<(), String> {
+        self.get_prompt_with_args(server, name, json!({}))
+    }
+
+    pub fn get_prompt_with_args(
+        &mut self,
+        server: &str,
+        name: &str,
+        arguments: Value,
+    ) -> Result<(), String> {
         self.request(
             server,
             "prompts/get",
-            json!({"name": name}),
+            json!({"name": name, "arguments": arguments}),
             ReplyKind::PromptGet,
             Some(name.to_string()),
         )

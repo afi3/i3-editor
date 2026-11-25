@@ -478,6 +478,26 @@ impl App {
 
     pub(crate) fn submit_mcp_prompt(&mut self, prompt: PromptState) {
         match prompt.kind {
+            PromptKind::Mcp
+            | PromptKind::McpTrust
+            | PromptKind::McpTools
+            | PromptKind::McpArgs
+            | PromptKind::McpConfirm
+            | PromptKind::McpAdd
+            | PromptKind::McpAddPath => self.submit_mcp_core(prompt),
+            PromptKind::McpResources
+            | PromptKind::McpResourceTemplates
+            | PromptKind::McpResourceList
+            | PromptKind::McpPrompts
+            | PromptKind::McpPromptList
+            | PromptKind::McpPromptArgs => self.submit_mcp_resource_prompt(prompt),
+            PromptKind::McpSampling => self.submit_mcp_sampling(prompt),
+            _ => {}
+        }
+    }
+
+    fn submit_mcp_core(&mut self, prompt: PromptState) {
+        match prompt.kind {
             PromptKind::Mcp => self.submit_mcp_server(prompt),
             PromptKind::McpTrust => self.submit_mcp_trust(prompt),
             PromptKind::McpTools => self.submit_mcp_tools(prompt),
@@ -485,12 +505,18 @@ impl App {
             PromptKind::McpConfirm => self.submit_mcp_confirm(prompt),
             PromptKind::McpAdd => self.submit_mcp_add(prompt),
             PromptKind::McpAddPath => self.submit_mcp_add_path(prompt),
+            _ => {}
+        }
+    }
+
+    fn submit_mcp_resource_prompt(&mut self, prompt: PromptState) {
+        match prompt.kind {
             PromptKind::McpResources => self.submit_mcp_resources(prompt),
             PromptKind::McpResourceTemplates => self.submit_mcp_resource_templates(prompt),
             PromptKind::McpResourceList => self.submit_mcp_resource_list(prompt),
             PromptKind::McpPrompts => self.submit_mcp_prompts(prompt),
             PromptKind::McpPromptList => self.submit_mcp_prompt_list(prompt),
-            PromptKind::McpSampling => self.submit_mcp_sampling(prompt),
+            PromptKind::McpPromptArgs => self.submit_mcp_prompt_args(prompt),
             _ => {}
         }
     }
@@ -590,8 +616,49 @@ impl App {
         let Some(server) = prompt.mcp_server else {
             return;
         };
+        let args = self
+            .mcp
+            .as_ref()
+            .and_then(|manager| manager.prompts(&server))
+            .and_then(|prompts| prompts.iter().find(|prompt| prompt.name == name))
+            .map(|prompt| prompt.arguments.clone())
+            .unwrap_or_default();
+        if args.is_empty() {
+            if let Some(manager) = self.mcp.as_mut()
+                && let Err(error) = manager.get_prompt(&server, &name)
+            {
+                self.notify(error);
+            } else {
+                self.notify(format!("loading prompt {name}"));
+            }
+            return;
+        }
+        let mut form = PromptState::new(PromptKind::McpPromptArgs);
+        form.mcp_server = Some(server);
+        form.mcp_tool = Some(name);
+        form.mcp_prompt_args = args.clone();
+        form.fields = vec![String::new(); args.len()];
+        self.state.mode = InputMode::Prompt(form);
+    }
+
+    pub(crate) fn submit_mcp_prompt_args(&mut self, prompt: PromptState) {
+        let Some(server) = prompt.mcp_server else {
+            return;
+        };
+        let Some(name) = prompt.mcp_tool else {
+            return;
+        };
+        let mut arguments = serde_json::Map::new();
+        for (index, arg) in prompt.mcp_prompt_args.iter().enumerate() {
+            arguments.insert(
+                arg.clone(),
+                Value::String(prompt.fields.get(index).cloned().unwrap_or_default()),
+            );
+        }
+        self.state.mode = InputMode::Normal;
         if let Some(manager) = self.mcp.as_mut()
-            && let Err(error) = manager.get_prompt(&server, &name)
+            && let Err(error) =
+                manager.get_prompt_with_args(&server, &name, Value::Object(arguments))
         {
             self.notify(error);
         } else {
