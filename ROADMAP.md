@@ -9,8 +9,9 @@ verified before the next one started.
   engineering, correctness, daily-driver operations, performance, polish, and
   Git depth.
 - `v0.2.x` covers MCP and AI features. `v0.2.0` ships the stdio MCP client;
-  `v0.2.1` is the read-only agent harness; context/streaming and editing actions
-  follow in later `v0.2.x` releases. Do not tag `v0.3.0` until that work lands.
+  `v0.2.1` is the bounded agent harness with streaming; persistent history,
+  explicit context, and editing actions follow in later `v0.2.x` releases. Do
+  not tag `v0.3.0` until that work lands.
 
 ## Phase 1 — Terminal foundation and pane skeleton: done
 
@@ -909,8 +910,8 @@ user's explicit choice.
 - Prompt context and tool output are bounded; tool definitions obey the `[ai]`
   allow/deny policy, and decisions/results are written to a redacted audit log.
 - Retryable provider failures use bounded backoff, and the panel supports
-  resize, clear, copy, token display, wrapped multiline input, and horizontal
-  transcript scrolling.
+  resize, clear, copy, token display, wrapped multiline input, horizontal
+  transcript scrolling, and SSE streaming by default.
 - Native hashline tools provide snapshot/hash-validated reads, atomic edits,
   and an `ignore`/`regex` search without subprocesses; Rust edits trigger a
   bounded background `cargo check` whose diagnostics join the same tool turn.
@@ -938,6 +939,10 @@ user's explicit choice.
 - [x] Add native hashline `read_file`/`edit_file` tools with policy, confirmation, audit, and dirty-buffer protection.
 - [x] Add native `search` using `ignore` + `regex`, and wrap long AI panel text.
 - [x] Add post-edit `cargo check` verification with timeout and cancellation.
+- [x] Stream SSE deltas into the AI panel with a non-streaming fallback.
+- [x] Add opt-in persistent AI conversation history.
+- [x] Add explicit file/selection context attachments for one AI turn.
+- [x] Add native edit diff previews and snapshot-safe undo.
 
 ### Acceptance
 
@@ -953,9 +958,9 @@ user's explicit choice.
 
 ### Deferred to v0.2.2 / v0.2.3
 
-- v0.2.2: streaming responses, persistent chat history, explicit file/selection
-  context.
-- v0.2.3: diff preview, apply/undo, and explicit write-tool workflows.
+- v0.2.2: explicit file/selection context.
+- v0.2.3: diff preview and apply/undo are implemented; explicit write-tool
+  workflows remain limited to confirmed `native/edit_file`.
 - Later: MCP HTTP/SSE, resources/prompts/sampling, autonomous background agents.
 
 Risk: model output can request a dangerous MCP tool or contain prompt injection.
@@ -972,4 +977,4 @@ cargo clippy --all-targets --all-features
 cargo run -- --dump-keymap
 ```
 
-Last recorded run: `cargo test` → 430 passed (423 unit + 6 CLI process + 1 PTY smoke), `cargo clippy` → 0 warnings.
+Last recorded run: `cargo test` → 434 passed (427 unit + 6 CLI process + 1 PTY smoke), `cargo clippy` → 0 warnings.

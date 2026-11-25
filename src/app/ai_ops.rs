@@ -38,6 +38,7 @@ impl App {
 
     pub(crate) fn clear_ai(&mut self) {
         if self.ai_task.is_some()
+            || self.ai_stream.is_some()
             || self.state.ai.waiting.is_some()
             || self.state.ai.queued_question.is_some()
             || !self.state.ai.pending.is_empty()
@@ -57,6 +58,8 @@ impl App {
         self.state.ai.scroll_x = 0;
         self.state.ai.rounds = 0;
         self.state.ai.tool_map.clear();
+        self.state.ai.attachments.clear();
+        self.remove_ai_history();
         self.dirty = true;
     }
 
@@ -127,7 +130,10 @@ impl App {
     }
 
     fn handle_ai_interrupt(&mut self, combo: KeyCombo) -> bool {
-        if combo.code != KeyCode::Esc || (self.ai_task.is_none() && self.state.ai.waiting.is_none())
+        if combo.code != KeyCode::Esc
+            || (self.ai_task.is_none()
+                && self.ai_stream.is_none()
+                && self.state.ai.waiting.is_none())
         {
             return false;
         }
@@ -231,6 +237,10 @@ impl App {
         if let Some(task) = self.ai_task.take() {
             task.cancel();
         }
+        if let Some(task) = self.ai_stream.take() {
+            task.cancel();
+        }
+        self.ai_streamed = false;
         if let Some(task) = self.native_check.take() {
             task.cancel();
         }
@@ -264,6 +274,79 @@ impl App {
         }
         self.state.ai.busy = false;
         self.state.ai.entries.push("[cancelled]".to_string());
+        self.save_ai_history();
+        self.dirty = true;
+    }
+
+    pub(crate) fn attach_ai_file(&mut self) {
+        let Some(document) = self.state.active_document() else {
+            self.notify("no active document to attach");
+            return;
+        };
+        let path = document
+            .path
+            .as_ref()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| "<untitled>".to_string());
+        let text = crate::ai::truncate_text(
+            &document.rope.to_string(),
+            self.state.config.ai.max_tool_output_chars,
+        );
+        let label = format!("{path} (file)");
+        self.attach_ai_context(label, text);
+    }
+
+    pub(crate) fn attach_ai_selection(&mut self) {
+        let Some(pane) = self.state.focused_pane() else {
+            self.notify("focus an editor pane before attaching a selection");
+            return;
+        };
+        let Some(document) = self.state.active_document() else {
+            self.notify("no active document to attach");
+            return;
+        };
+        let ranges = pane.selected_ranges();
+        if ranges.is_empty() {
+            self.notify("select text before attaching a selection");
+            return;
+        }
+        let path = document
+            .path
+            .as_ref()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| "<untitled>".to_string());
+        let text = ranges
+            .iter()
+            .map(|range| document.rope.slice(range.clone()).to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let text = crate::ai::truncate_text(&text, self.state.config.ai.max_tool_output_chars);
+        let start = document.line_of_char(ranges[0].start) + 1;
+        let end = document.line_of_char(ranges[ranges.len() - 1].end.saturating_sub(1)) + 1;
+        let label = format!("{path} (selection lines {start}-{end})");
+        self.attach_ai_context(label, text);
+    }
+
+    fn attach_ai_context(&mut self, label: String, text: String) {
+        self.state.ai.attachments.push(crate::state::AiAttachment {
+            path: label.clone(),
+            text,
+        });
+        self.state
+            .ai
+            .entries
+            .push(format!("[context] attached {label}"));
+        self.notify(format!("attached {label}"));
+        self.dirty = true;
+    }
+
+    pub(crate) fn clear_ai_context(&mut self) {
+        if self.state.ai.attachments.is_empty() {
+            self.notify("no AI context attached");
+            return;
+        }
+        self.state.ai.attachments.clear();
+        self.state.ai.entries.push("[context] cleared".to_string());
         self.dirty = true;
     }
 
@@ -277,21 +360,41 @@ impl App {
             return;
         }
         let question = self.state.ai.input.trim().to_string();
-        if question.is_empty() {
+        let attachments = std::mem::take(&mut self.state.ai.attachments);
+        if question.is_empty() && attachments.is_empty() {
             return;
         }
+        let context = attachments
+            .iter()
+            .map(|attachment| {
+                format!(
+                    "<context path=\"{}\">\n{}\n</context>",
+                    attachment.path, attachment.text
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        let content = if context.is_empty() {
+            question.clone()
+        } else if question.is_empty() {
+            context
+        } else {
+            format!("{context}\n\n{question}")
+        };
         self.state.ai.input.clear();
         self.state.ai.cursor = 0;
         self.state.ai.scroll = 0;
         self.state.ai.scroll_x = 0;
-        self.state.ai.entries.push(format!("> {question}"));
+        if !question.is_empty() {
+            self.state.ai.entries.push(format!("> {question}"));
+        }
         self.prime_ai_tools();
         if self.ai_tools_pending() {
             self.state.ai.entries.push("[tools] loading...".to_string());
-            self.state.ai.queued_question = Some(question);
+            self.state.ai.queued_question = Some(content);
             return;
         }
-        self.start_ai_question(question);
+        self.start_ai_question(content);
     }
 
     fn start_ai_question(&mut self, question: String) {
@@ -327,11 +430,22 @@ impl App {
         self.state.ai.rounds += 1;
         let tools = self.ai_tool_definitions();
         let messages = self.state.ai.conversation.clone();
-        self.ai_task = Some(crate::ai::spawn_chat(
-            self.state.config.ai.clone(),
-            messages,
-            tools,
-        ));
+        self.ai_task = None;
+        self.ai_stream = None;
+        self.ai_streamed = false;
+        if self.state.config.ai.stream {
+            self.ai_stream = Some(crate::ai::spawn_stream(
+                self.state.config.ai.clone(),
+                messages,
+                tools,
+            ));
+        } else {
+            self.ai_task = Some(crate::ai::spawn_chat(
+                self.state.config.ai.clone(),
+                messages,
+                tools,
+            ));
+        }
         self.state.ai.busy = true;
         self.state
             .ai
@@ -424,6 +538,10 @@ impl App {
     }
 
     pub(crate) fn pump_ai(&mut self) {
+        if self.ai_stream.is_some() {
+            self.pump_ai_stream();
+            return;
+        }
         let Some(task) = self.ai_task.as_ref() else {
             return;
         };
@@ -436,6 +554,67 @@ impl App {
         };
         self.ai_task = None;
         self.state.ai.busy = false;
+        self.remove_thinking_entry();
+        match result {
+            Ok(reply) => self.finish_ai_reply(reply, false),
+            Err(error) => self.state.ai.entries.push(format!("[error] {error}")),
+        }
+        self.dirty = true;
+    }
+
+    fn pump_ai_stream(&mut self) {
+        let Some(task) = self.ai_stream.as_ref() else {
+            return;
+        };
+        let mut events = Vec::new();
+        while let Some(event) = task.try_recv() {
+            events.push(event);
+        }
+        if events.is_empty() {
+            return;
+        }
+        for event in events {
+            match event {
+                crate::ai::StreamEvent::Delta(delta) => self.push_stream_delta(&delta),
+                crate::ai::StreamEvent::Done(reply) => {
+                    self.ai_stream = None;
+                    self.state.ai.busy = false;
+                    self.remove_thinking_entry();
+                    let streamed = self.ai_streamed;
+                    self.ai_streamed = false;
+                    self.finish_ai_reply(reply, streamed);
+                    break;
+                }
+                crate::ai::StreamEvent::Error(error) => {
+                    self.ai_stream = None;
+                    self.ai_streamed = false;
+                    self.state.ai.busy = false;
+                    self.remove_thinking_entry();
+                    self.state.ai.entries.push(format!("[error] {error}"));
+                    break;
+                }
+            }
+        }
+        self.dirty = true;
+    }
+
+    fn push_stream_delta(&mut self, delta: &str) {
+        if delta.is_empty() {
+            return;
+        }
+        self.remove_thinking_entry();
+        if self.ai_streamed
+            && let Some(last) = self.state.ai.entries.last_mut()
+            && last.starts_with("[assistant] ")
+        {
+            last.push_str(delta);
+            return;
+        }
+        self.ai_streamed = true;
+        self.state.ai.entries.push(format!("[assistant] {delta}"));
+    }
+
+    fn remove_thinking_entry(&mut self) {
         if self
             .state
             .ai
@@ -445,60 +624,72 @@ impl App {
         {
             self.state.ai.entries.pop();
         }
-        match result {
-            Ok(reply) => {
-                self.state.ai.conversation.push(reply.message);
-                if let Some(content) = reply.content.filter(|text| !text.is_empty()) {
-                    self.state
-                        .ai
-                        .entries
-                        .extend(content.lines().map(str::to_string));
-                }
-                for call in reply.tool_calls {
-                    let Some((server, tool)) = self.state.ai.tool_map.get(&call.name).cloned()
-                    else {
-                        super::audit::blocked(
-                            &self.state,
-                            &call.id,
-                            "unknown",
-                            &call.name,
-                            &call.arguments,
-                            "tool not offered",
+    }
+
+    fn finish_ai_reply(&mut self, reply: crate::ai::Reply, streamed: bool) {
+        self.state.ai.conversation.push(reply.message);
+        if !streamed && let Some(content) = reply.content.filter(|text| !text.is_empty()) {
+            self.state
+                .ai
+                .entries
+                .extend(content.lines().map(str::to_string));
+        }
+        for call in reply.tool_calls {
+            let Some((server, tool)) = self.state.ai.tool_map.get(&call.name).cloned() else {
+                super::audit::blocked(
+                    &self.state,
+                    &call.id,
+                    "unknown",
+                    &call.name,
+                    &call.arguments,
+                    "tool not offered",
+                );
+                self.state
+                    .ai
+                    .entries
+                    .push(format!("[error] unknown tool {}", call.name));
+                self.state.ai.conversation.push(json!({
+                    "role": "tool",
+                    "tool_call_id": call.id,
+                    "content": format!("Unknown tool {}", call.name)
+                }));
+                continue;
+            };
+            let capability = self.ai_tool_capability(&server, &tool);
+            self.state.ai.entries.push(format!(
+                "[tool] {server}/{tool} [{capability}] {}",
+                serde_json::to_string(&call.arguments).unwrap_or_default()
+            ));
+            if server == crate::native::SERVER && tool == "edit_file" {
+                match crate::native::preview_edit(&self.state.explorer.root, &call.arguments) {
+                    Ok(diff) => {
+                        let diff = crate::ai::truncate_text(
+                            &diff,
+                            self.state.config.ai.max_tool_output_chars,
                         );
                         self.state
                             .ai
                             .entries
-                            .push(format!("[error] unknown tool {}", call.name));
-                        self.state.ai.conversation.push(json!({
-                            "role": "tool",
-                            "tool_call_id": call.id,
-                            "content": format!("Unknown tool {}", call.name)
-                        }));
-                        continue;
-                    };
-                    let capability = self.ai_tool_capability(&server, &tool);
-                    self.state.ai.entries.push(format!(
-                        "[tool] {server}/{tool} [{capability}] {}",
-                        serde_json::to_string(&call.arguments).unwrap_or_default()
-                    ));
-                    self.state.ai.pending.push_back(AiToolCall {
-                        id: call.id,
-                        server,
-                        tool,
-                        capability,
-                        arguments: call.arguments,
-                    });
-                }
-                if let Some(call) = self.state.ai.pending.front() {
-                    self.state.ai.entries.push(format!(
-                        "Allow {}/{} [{}]? [y] yes  [n] no",
-                        call.server, call.tool, call.capability
-                    ));
+                            .extend(diff.lines().map(str::to_string));
+                    }
+                    Err(error) => self.state.ai.entries.push(format!("[diff] {error}")),
                 }
             }
-            Err(error) => self.state.ai.entries.push(format!("[error] {error}")),
+            self.state.ai.pending.push_back(AiToolCall {
+                id: call.id,
+                server,
+                tool,
+                capability,
+                arguments: call.arguments,
+            });
         }
-        self.dirty = true;
+        if let Some(call) = self.state.ai.pending.front() {
+            self.state.ai.entries.push(format!(
+                "Allow {}/{} [{}]? [y] yes  [n] no",
+                call.server, call.tool, call.capability
+            ));
+        }
+        self.save_ai_history();
     }
 
     fn allow_ai_tool(&mut self) {
@@ -684,14 +875,47 @@ impl App {
         if call.tool != "edit_file" {
             return Err(format!("unknown native tool {}", call.tool));
         }
-        let result = crate::native::edit_file(root, &call.arguments);
-        if result.is_ok()
-            && let Some((id, _)) = document_id
-        {
-            self.reload_document(id)
-                .map_err(|error| format!("reload after edit: {error}"))?;
+        match crate::native::edit_with_undo(root, &call.arguments) {
+            Ok((text, undo)) => {
+                self.native_undo.push(undo);
+                if let Some((id, _)) = document_id {
+                    self.reload_document(id)
+                        .map_err(|error| format!("reload after edit: {error}"))?;
+                }
+                Ok(text)
+            }
+            Err(error) => Err(error),
         }
-        result
+    }
+
+    pub(crate) fn undo_ai_edit(&mut self) {
+        let Some(undo) = self.native_undo.pop() else {
+            self.notify("no native edit to undo");
+            return;
+        };
+        let path = match crate::native::undo_edit(&self.state.explorer.root, &undo) {
+            Ok(path) => path,
+            Err(error) => {
+                self.native_undo.push(undo);
+                self.notify(format!("native undo refused: {error}"));
+                return;
+            }
+        };
+        if let Some(id) = self.state.documents.values().find_map(|document| {
+            document
+                .path
+                .as_deref()
+                .is_some_and(|open| super::same_path(open, &path))
+                .then_some(document.id)
+        }) {
+            let _ = self.reload_document(id);
+        }
+        self.state
+            .ai
+            .entries
+            .push(format!("[undo] restored {}", path.display()));
+        self.notify("native edit undone");
+        self.dirty = true;
     }
 
     fn deny_ai_tool(&mut self) {
@@ -709,6 +933,7 @@ impl App {
             .entries
             .push("[tool] denied by user".to_string());
         self.state.ai.busy = false;
+        self.save_ai_history();
     }
 
     pub(crate) fn finish_ai_tool(
@@ -754,7 +979,35 @@ impl App {
         } else {
             self.start_ai_request();
         }
+        self.save_ai_history();
         self.dirty = true;
+    }
+
+    pub(crate) fn load_ai_history(&mut self) {
+        if !self.state.config.ai.persist_history {
+            return;
+        }
+        let Some(history) = crate::ai_history::load() else {
+            return;
+        };
+        self.state.ai.entries = history.entries;
+        self.state.ai.conversation = history.conversation;
+    }
+
+    fn save_ai_history(&self) {
+        if !self.state.config.ai.persist_history {
+            return;
+        }
+        let history = crate::ai_history::History {
+            version: crate::ai_history::VERSION,
+            entries: self.state.ai.entries.clone(),
+            conversation: self.state.ai.conversation.clone(),
+        };
+        let _ = crate::ai_history::save(&history);
+    }
+
+    fn remove_ai_history(&self) {
+        crate::ai_history::remove();
     }
 }
 

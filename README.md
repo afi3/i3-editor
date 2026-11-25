@@ -459,7 +459,8 @@ CI uses the local mock server instead.
 ### AI assistant
 
 The assistant is an OpenAI-compatible chat panel with a bounded MCP tool loop.
-It does not stream, send project context automatically, or edit buffers.
+It streams SSE deltas by default, does not attach project context automatically,
+and only edits files through confirmed native tools.
 
 ```toml
 [ai]
@@ -468,6 +469,8 @@ model = "openai/gpt-4o-mini"
 api_key_env = "OPENROUTER_API_KEY"
 api_key = ""                     # optional local override; prefer the env var
 timeout_secs = 60
+stream = true                    # SSE token streaming
+persist_history = false          # opt in to ai_history.json
 max_context_tokens = 16000       # prompt budget; old turns are dropped
 max_tool_output_chars = 20000    # one MCP result kept in history
 max_history_turns = 24
@@ -482,7 +485,11 @@ panel_width = 20                 # percent of terminal width
 - `F1` → `ai_chat` opens and focuses the right-side `AI` panel; `ai_panel`
   toggles it. `ai_wider`/`ai_narrower` resize it, `ai_clear` clears a finished
   conversation, and `ai_copy` copies the transcript to the internal and system
-  clipboards. The panel keeps session-only history.
+  clipboards. History is session-only unless `persist_history = true`.
+- `ai_attach_file` attaches the active document, `ai_attach_selection` attaches
+  the selected text, and `ai_clear_context` drops pending attachments. Attached
+  context is prefixed to the next user message as explicit `<context>` blocks
+  and is consumed by that turn.
 - Type a message and press `Enter` to send. Use `Shift+Enter`, `Alt+Enter`, or
   `Ctrl+J` for a newline; the input grows up to six wrapped rows. If trusted MCP
   servers are still reading their tool lists, the question waits and is sent
@@ -534,7 +541,8 @@ The harness also exposes two built-in tools, independent of MCP:
 - `native/edit_file` takes `path`, the `snapshot`, and an `edits` array of
   `{line, hash, text}`. Every line hash and the snapshot are validated before
   one atomic write; edits apply from bottom to top. Empty `text` deletes the
-  line.
+  line. The confirmation transcript includes a compact `- line | old` /
+  `+ line | new` diff before the user presses `y`.
 - Reads and edits are limited to regular UTF-8 files inside the workspace root,
   at most 16 MiB. Symlinks escaping the root, stale hashes, stale snapshots,
   and dirty open buffers are rejected. A clean open buffer is reloaded after a
@@ -543,6 +551,8 @@ The harness also exposes two built-in tools, independent of MCP:
   capability labels (`read-only`/`destructive`), and audit log as MCP tools.
 - After a Rust edit, a bounded background `cargo check` result is attached to
   the tool response; it does not block the UI.
+- `ai_undo_edit` restores the last native edit when the file still matches the
+  post-edit snapshot. Undo is refused after further external or manual changes.
   `native/read_file`, `native/search`, and `native/edit_file` are visible even
   when no MCP server is configured.
 
@@ -552,9 +562,14 @@ is appended to the edit tool result, so the model can fix compile errors in the
 same turn. Cancelling the AI turn kills a running check; non-Rust edits skip it.
 - The API key is read from `api_key_env`; leave it empty for a local
   OpenAI-compatible server without authentication.
-- Requests are non-streaming and do not include the active file unless you paste
-  it into the prompt. Context indexing and automatic edits are not part of this
-  slice.
+- Requests use SSE streaming by default, so assistant text appears as deltas
+  arrive; set `stream = false` to use the non-streaming path. The active file is
+  not attached unless you paste it into the prompt. Context indexing and
+  automatic edits are not part of this slice.
+- With `persist_history = true`, the transcript and conversation are saved to
+  `<config>/i3-editor/ai_history.json` and restored at the next start.
+  `ai_clear` removes both the visible history and that file. Tool output and
+  arguments can contain sensitive data; enable this only for trusted projects.
 
 ### Git
 
@@ -913,6 +928,8 @@ model = "openai/gpt-4o-mini"
 api_key_env = "OPENROUTER_API_KEY"
 api_key = ""
 timeout_secs = 60
+stream = true
+persist_history = false
 max_context_tokens = 16000
 max_tool_output_chars = 20000
 max_history_turns = 24

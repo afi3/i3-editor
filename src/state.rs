@@ -298,6 +298,12 @@ pub struct AiWaiting {
     pub capability: String,
 }
 
+#[derive(Clone, Debug)]
+pub struct AiAttachment {
+    pub path: String,
+    pub text: String,
+}
+
 #[derive(Debug, Default)]
 pub struct AiPanel {
     pub visible: bool,
@@ -313,6 +319,7 @@ pub struct AiPanel {
     pub waiting: Option<AiWaiting>,
     pub rounds: usize,
     pub queued_question: Option<String>,
+    pub attachments: Vec<AiAttachment>,
     pub tool_map: std::collections::BTreeMap<String, (String, String)>,
 }
 

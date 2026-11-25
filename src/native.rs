@@ -390,12 +390,68 @@ pub fn read_file(root: &Path, arguments: &Value) -> Result<String, String> {
     Ok(output)
 }
 
+pub struct EditPlan {
+    pub path: PathBuf,
+    pub raw: String,
+    pub before: String,
+    pub after: String,
+    pub changes: Vec<EditChange>,
+}
+
+pub struct EditChange {
+    pub line: usize,
+    pub before: String,
+    pub after: String,
+}
+
+pub struct UndoState {
+    pub raw: String,
+    pub before: String,
+    pub after: String,
+}
+
+#[cfg(test)]
 pub fn edit_file(root: &Path, arguments: &Value) -> Result<String, String> {
+    edit_with_undo(root, arguments).map(|(text, _)| text)
+}
+
+pub fn edit_with_undo(root: &Path, arguments: &Value) -> Result<(String, UndoState), String> {
+    let plan = plan_edit(root, arguments)?;
+    crate::editor::document::write_atomic(&plan.path, plan.after.as_bytes())
+        .map_err(|error| format!("write {}: {error}", plan.raw))?;
+    let text = format!(
+        "edited {}: {} line(s)\nsnapshot: {}",
+        plan.raw,
+        plan.changes.len(),
+        snapshot(&plan.after)
+    );
+    Ok((
+        text,
+        UndoState {
+            raw: plan.raw,
+            before: plan.before,
+            after: plan.after,
+        },
+    ))
+}
+
+pub fn undo_edit(root: &Path, undo: &UndoState) -> Result<PathBuf, String> {
+    let path = resolve_path(root, &undo.raw)?;
+    let current = read_text(&path)?;
+    if snapshot(&current) != snapshot(&undo.after) {
+        return Err("file changed after edit".to_string());
+    }
+    crate::editor::document::write_atomic(&path, undo.before.as_bytes())
+        .map_err(|error| format!("undo {}: {error}", undo.raw))?;
+    Ok(path)
+}
+
+pub fn plan_edit(root: &Path, arguments: &Value) -> Result<EditPlan, String> {
     let raw = string_arg(arguments, "path")?;
     let path = resolve_path(root, raw)?;
     let expected_snapshot = string_arg(arguments, "snapshot")?;
-    let text = read_text(&path)?;
-    let actual_snapshot = snapshot(&text);
+    let before = read_text(&path)?;
+    let actual_snapshot = snapshot(&before);
     if expected_snapshot != actual_snapshot {
         return Err(format!(
             "stale snapshot: expected {expected_snapshot}, current {actual_snapshot}; re-read the file"
@@ -429,9 +485,10 @@ pub fn edit_file(root: &Path, arguments: &Value) -> Result<String, String> {
     if replacements.windows(2).any(|pair| pair[0].0 == pair[1].0) {
         return Err("duplicate edit line".to_string());
     }
-    let lines = line_contents(&text);
-    let mut segments: Vec<String> = text.split_inclusive('\n').map(str::to_string).collect();
-    let crlf = text.contains("\r\n");
+    let lines = line_contents(&before);
+    let mut segments: Vec<String> = before.split_inclusive('\n').map(str::to_string).collect();
+    let crlf = before.contains("\r\n");
+    let mut changes = Vec::with_capacity(replacements.len());
     for (line, expected_hash, replacement) in &replacements {
         if *line == 0 || *line > lines.len() {
             return Err(format!("line {line} is outside 1..={}", lines.len()));
@@ -450,16 +507,40 @@ pub fn edit_file(root: &Path, arguments: &Value) -> Result<String, String> {
         } else {
             ""
         };
-        segments[line - 1] = replacement_text(replacement, ending, crlf);
+        let replacement = replacement_text(replacement, ending, crlf);
+        changes.push(EditChange {
+            line: *line,
+            before: content.to_string(),
+            after: replacement.clone(),
+        });
+        segments[line - 1] = replacement;
     }
-    let new_text = segments.concat();
-    crate::editor::document::write_atomic(&path, new_text.as_bytes())
-        .map_err(|error| format!("write {raw}: {error}"))?;
-    Ok(format!(
-        "edited {raw}: {} line(s)\nsnapshot: {}",
-        replacements.len(),
-        snapshot(&new_text)
-    ))
+    changes.sort_by_key(|change| change.line);
+    let after = segments.concat();
+    Ok(EditPlan {
+        path,
+        raw: raw.to_string(),
+        before,
+        after,
+        changes,
+    })
+}
+
+pub fn preview_edit(root: &Path, arguments: &Value) -> Result<String, String> {
+    let plan = plan_edit(root, arguments)?;
+    let mut output = format!("diff -- {}\n", plan.raw);
+    for change in plan.changes {
+        append_preview_change(&mut output, change);
+    }
+    Ok(output)
+}
+
+fn append_preview_change(output: &mut String, change: EditChange) {
+    output.push_str(&format!("- {} | {}\n", change.line, change.before));
+    for (offset, line) in change.after.lines().enumerate() {
+        let marker = if offset == 0 { '+' } else { ' ' };
+        output.push_str(&format!("{marker} {} | {line}\n", change.line + offset));
+    }
 }
 
 fn replacement_text(text: &str, ending: &str, crlf: bool) -> String {
@@ -495,7 +576,7 @@ fn line_hash(line: &str) -> String {
     short_hash(line.as_bytes(), 3)
 }
 
-fn snapshot(text: &str) -> String {
+pub(crate) fn snapshot(text: &str) -> String {
     short_hash(text.as_bytes(), 4)
 }
 
@@ -569,6 +650,10 @@ mod tests {
             "snapshot": snapshot,
             "edits": [{"line": number.parse::<usize>().unwrap(), "hash": hash, "text": "fn main() {}"}]
         });
+        let preview = preview_edit(&root, &edit).expect("preview");
+        assert!(preview.contains("diff --"), "{preview}");
+        assert!(preview.contains("- 1 | fn main() {"), "{preview}");
+        assert!(preview.contains("+ 1 | fn main() {}"), "{preview}");
         edit_file(&root, &edit).expect("edit");
         let text = fs::read_to_string(&path).expect("text");
         assert_eq!(text, "fn main() {}\n    println!(\"hi\");\n}\n");

@@ -85,6 +85,10 @@ pub enum Command {
     AiNarrower,
     AiScrollLeft,
     AiScrollRight,
+    AiAttachFile,
+    AiAttachSelection,
+    AiClearContext,
+    AiUndoEdit,
     GitStatus,
     GitDiff,
     GitLog,
@@ -245,6 +249,16 @@ impl Command {
             Command::AiNarrower => ("ai_narrower", "Narrow the AI panel"),
             Command::AiScrollLeft => ("ai_scroll_left", "Scroll the AI transcript left"),
             Command::AiScrollRight => ("ai_scroll_right", "Scroll the AI transcript right"),
+            Command::AiAttachFile => (
+                "ai_attach_file",
+                "Attach the active file to the next AI prompt",
+            ),
+            Command::AiAttachSelection => (
+                "ai_attach_selection",
+                "Attach the editor selection to the next AI prompt",
+            ),
+            Command::AiClearContext => ("ai_clear_context", "Clear pending AI attachments"),
+            Command::AiUndoEdit => ("ai_undo_edit", "Undo the last native AI edit"),
             _ => return None,
         })
     }
@@ -269,7 +283,11 @@ impl Command {
             | Command::AiWider
             | Command::AiNarrower
             | Command::AiScrollLeft
-            | Command::AiScrollRight => return self.ai_spec(),
+            | Command::AiScrollRight
+            | Command::AiAttachFile
+            | Command::AiAttachSelection
+            | Command::AiClearContext
+            | Command::AiUndoEdit => return self.ai_spec(),
             Command::LspUninstall => (
                 "lsp_uninstall",
                 "Remove the installed language server for the active file",
@@ -503,6 +521,10 @@ impl Command {
             Command::AiNarrower,
             Command::AiScrollLeft,
             Command::AiScrollRight,
+            Command::AiAttachFile,
+            Command::AiAttachSelection,
+            Command::AiClearContext,
+            Command::AiUndoEdit,
             Command::GitStatus,
             Command::GitDiff,
             Command::GitLog,
@@ -646,6 +668,10 @@ mod tests {
             Command::AiNarrower,
             Command::AiScrollLeft,
             Command::AiScrollRight,
+            Command::AiAttachFile,
+            Command::AiAttachSelection,
+            Command::AiClearContext,
+            Command::AiUndoEdit,
             Command::GitStatus,
             Command::GitDiff,
             Command::GitLog,

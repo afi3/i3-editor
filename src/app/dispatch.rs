@@ -67,7 +67,11 @@ impl App {
             | Command::AiWider
             | Command::AiNarrower
             | Command::AiScrollLeft
-            | Command::AiScrollRight => {
+            | Command::AiScrollRight
+            | Command::AiAttachFile
+            | Command::AiAttachSelection
+            | Command::AiClearContext
+            | Command::AiUndoEdit => {
                 self.dispatch_ai(command);
                 return Ok(None);
             }
@@ -86,6 +90,10 @@ impl App {
             Command::AiNarrower => self.resize_ai(-5),
             Command::AiScrollLeft => self.scroll_ai_horizontal(-4),
             Command::AiScrollRight => self.scroll_ai_horizontal(4),
+            Command::AiAttachFile => self.attach_ai_file(),
+            Command::AiAttachSelection => self.attach_ai_selection(),
+            Command::AiClearContext => self.clear_ai_context(),
+            Command::AiUndoEdit => self.undo_ai_edit(),
             _ => {}
         }
     }

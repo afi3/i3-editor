@@ -136,6 +136,10 @@ pub struct AiConfig {
     pub retry_max_ms: u64,
     /// AI panel width as a percentage of the terminal width.
     pub panel_width: u16,
+    /// Request SSE streaming from the provider.
+    pub stream: bool,
+    /// Keep the transcript and conversation across restarts.
+    pub persist_history: bool,
 }
 
 impl Default for AiConfig {
@@ -155,6 +159,8 @@ impl Default for AiConfig {
             retry_base_ms: 500,
             retry_max_ms: 8_000,
             panel_width: 20,
+            stream: true,
+            persist_history: false,
         }
     }
 }
@@ -749,6 +755,8 @@ const AI_KEYS: &[&str] = &[
     "retry_base_ms",
     "retry_max_ms",
     "panel_width",
+    "stream",
+    "persist_history",
 ];
 const LUA_KEYS: &[&str] = &["enabled", "allow_file", "allow_process", "time_budget_ms"];
 const KEYS_KEYS: &[&str] = &["preset", "global", "editing", "explorer"];

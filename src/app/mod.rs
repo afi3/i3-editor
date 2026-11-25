@@ -62,8 +62,11 @@ impl App {
             lsp: None,
             mcp: None,
             ai_task: None,
+            ai_stream: None,
+            ai_streamed: false,
             native_check: None,
             native_check_output: None,
+            native_undo: Vec::new(),
             mcp_trusted: std::collections::HashSet::new(),
             mcp_recent: std::collections::BTreeMap::new(),
             persist_mcp_state: false,
@@ -145,8 +148,11 @@ pub struct App {
     pub(crate) mcp: Option<crate::mcp::McpManager>,
     /// Running AI request, if any.
     pub(crate) ai_task: Option<crate::ai::Task>,
+    pub(crate) ai_stream: Option<crate::ai::StreamTask>,
+    pub(crate) ai_streamed: bool,
     pub(crate) native_check: Option<crate::native::CheckTask>,
     pub(crate) native_check_output: Option<String>,
+    pub(crate) native_undo: Vec<crate::native::UndoState>,
     /// Trusted MCP server config hashes for this session.
     pub(crate) mcp_trusted: std::collections::HashSet<String>,
     /// Recent MCP tool names per server.
@@ -277,8 +283,11 @@ impl App {
             lsp: None,
             mcp: None,
             ai_task: None,
+            ai_stream: None,
+            ai_streamed: false,
             native_check: None,
             native_check_output: None,
+            native_undo: Vec::new(),
             mcp_trusted,
             mcp_recent,
             persist_mcp_state: true,
@@ -293,6 +302,7 @@ impl App {
             dirty: true,
             watch_signature: None,
         };
+        app.load_ai_history();
         if let Err(error) = app.apply_active_root() {
             app.state
                 .warnings
@@ -478,7 +488,7 @@ impl App {
     }
 
     fn frame_timeout(&self) -> Duration {
-        if self.lsp_install.is_some() || self.ai_task.is_some() {
+        if self.lsp_install.is_some() || self.ai_task.is_some() || self.ai_stream.is_some() {
             return Duration::from_millis(100);
         }
         if !self.state.terminals.is_empty() {

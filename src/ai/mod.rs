@@ -1,7 +1,8 @@
 //! Minimal OpenAI-compatible chat client.
 //!
 //! Network I/O runs through `curl`, matching the updater/installer policy and
-//! avoiding a second TLS stack. Requests are non-streaming for now.
+//! avoiding a second TLS stack. The panel uses SSE streaming by default and
+//! falls back to a single JSON response when the provider does not stream.
 
 use std::io::Write;
 use std::process::{Command, Stdio};
@@ -14,6 +15,9 @@ use std::time::{Duration, Instant};
 use serde_json::{Value, json};
 
 use crate::config::AiConfig;
+
+mod stream;
+pub use stream::{StreamEvent, StreamTask, spawn_stream};
 
 #[derive(Clone, Debug)]
 pub struct ToolCall {
@@ -73,12 +77,17 @@ pub fn ask(config: &AiConfig, prompt: &str) -> Result<String, String> {
         .ok_or_else(|| "AI response has no message content".to_string())
 }
 
-fn chat_with_cancel(
+pub(crate) struct PreparedRequest {
+    pub curl_config: String,
+    pub body_file: tempfile::NamedTempFile,
+}
+
+pub(crate) fn prepare_request(
     config: &AiConfig,
     messages: &[Value],
     tools: &[Value],
-    cancel: &AtomicBool,
-) -> Result<Reply, String> {
+    stream: bool,
+) -> Result<PreparedRequest, String> {
     if config.base_url.trim().is_empty() || config.model.trim().is_empty() {
         return Err("AI base_url and model must be configured".to_string());
     }
@@ -91,6 +100,9 @@ fn chat_with_cancel(
     });
     if !tools.is_empty() {
         body["tools"] = Value::Array(tools.to_vec());
+    }
+    if stream {
+        body["stream"] = Value::Bool(true);
     }
     let body_text = serde_json::to_vec(&body).map_err(|error| error.to_string())?;
     let mut body_file = tempfile::NamedTempFile::new().map_err(|error| error.to_string())?;
@@ -117,6 +129,21 @@ fn chat_with_cancel(
         quote(&format!("@{}", body_file.path().to_string_lossy()))
     ));
     curl_config.push_str(&format!("max-time = {}\n", config.timeout_secs.max(1)));
+    Ok(PreparedRequest {
+        curl_config,
+        body_file,
+    })
+}
+
+fn chat_with_cancel(
+    config: &AiConfig,
+    messages: &[Value],
+    tools: &[Value],
+    cancel: &AtomicBool,
+) -> Result<Reply, String> {
+    let prepared = prepare_request(config, messages, tools, false)?;
+    let curl_config = prepared.curl_config;
+    let _body_file = prepared.body_file;
 
     let attempts = config.retry_attempts.saturating_add(1).max(1);
     let mut last_error = "AI request failed".to_string();
@@ -145,9 +172,9 @@ fn chat_with_cancel(
     Err(last_error)
 }
 
-struct AttemptError {
-    message: String,
-    retryable: bool,
+pub(crate) struct AttemptError {
+    pub(crate) message: String,
+    pub(crate) retryable: bool,
 }
 
 impl AttemptError {
@@ -228,7 +255,11 @@ fn request_once(curl_config: &str, cancel: &AtomicBool) -> Result<Reply, Attempt
             retryable,
         ));
     }
-    let value: Value = serde_json::from_str(body.trim())
+    parse_reply(body.trim())
+}
+
+pub(crate) fn parse_reply(body: &str) -> Result<Reply, AttemptError> {
+    let value: Value = serde_json::from_str(body)
         .map_err(|error| AttemptError::new(format!("AI response: {error}"), false))?;
     let message = value
         .pointer("/choices/0/message")
@@ -448,8 +479,39 @@ pub(crate) fn test_config(base_url: String) -> AiConfig {
         api_key_env: "I3_EDITOR_TEST_AI_KEY".to_string(),
         timeout_secs: 5,
         retry_attempts: 0,
+        stream: false,
         ..AiConfig::default()
     }
+}
+
+#[cfg(test)]
+pub(crate) fn sse_hello_server() -> (String, std::thread::JoinHandle<()>) {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
+    let address = listener.local_addr().expect("address");
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("accept");
+        let mut request = [0u8; 8192];
+        let _ = stream.read(&mut request).expect("read");
+        stream
+            .write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n",
+            )
+            .expect("headers");
+        for chunk in [
+            r#"data: {"choices":[{"delta":{"content":"hel"}}]}"#,
+            r#"data: {"choices":[{"delta":{"content":"lo"}}]}"#,
+            "data: [DONE]",
+        ] {
+            stream
+                .write_all(format!("{chunk}\n\n").as_bytes())
+                .expect("chunk");
+            stream.flush().expect("flush");
+        }
+    });
+    (format!("http://{address}/v1"), server)
 }
 
 #[cfg(test)]
@@ -570,6 +632,40 @@ mod tests {
         config.retry_max_ms = 1;
         let reply = ask(&config, "hello").expect("retry reply");
         assert_eq!(reply, "after retry");
+        server.join().expect("server");
+    }
+
+    #[test]
+    fn streams_sse_content_and_finishes_with_a_reply() {
+        let (base_url, server) = sse_hello_server();
+        let mut config = test_config(base_url);
+        config.stream = true;
+        let task = spawn_stream(
+            config,
+            vec![json!({"role": "user", "content": "hello"})],
+            Vec::new(),
+        );
+        let deadline = Instant::now() + std::time::Duration::from_secs(5);
+        let mut deltas = String::new();
+        let mut done = None;
+        for _ in 0..1_000 {
+            if let Some(event) = task.try_recv() {
+                match event {
+                    StreamEvent::Delta(delta) => deltas.push_str(&delta),
+                    StreamEvent::Done(reply) => {
+                        done = Some(reply);
+                        break;
+                    }
+                    StreamEvent::Error(error) => panic!("{error}"),
+                }
+            } else if Instant::now() >= deadline {
+                break;
+            } else {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+        }
+        assert_eq!(deltas, "hello");
+        assert_eq!(done.expect("done").content.as_deref(), Some("hello"));
         server.join().expect("server");
     }
 

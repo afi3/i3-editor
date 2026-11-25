@@ -2600,6 +2600,84 @@ fn native_edit_refuses_a_dirty_buffer() {
 }
 
 #[test]
+fn ai_file_and_selection_context_are_injected_once() {
+    let (mut app, dir) = fixture("x\n");
+    app.state.config.ai.base_url.clear();
+    app.state.config.ai.stream = false;
+    app.dispatch(Command::AiAttachFile).expect("attach file");
+    assert_eq!(app.state.ai.attachments.len(), 1);
+    let pane = app.state.focused_pane_mut().expect("pane");
+    pane.anchor = Some(0);
+    pane.cursor = 1;
+    app.dispatch(Command::AiAttachSelection)
+        .expect("attach selection");
+    assert_eq!(app.state.ai.attachments.len(), 2);
+    app.dispatch(Command::AiChat).expect("ai panel");
+    app.state.ai.input = "what is this".to_string();
+    app.state.ai.cursor = app.state.ai.input.chars().count();
+    app.handle_key(ratatui::crossterm::event::KeyEvent::new(
+        ratatui::crossterm::event::KeyCode::Enter,
+        ratatui::crossterm::event::KeyModifiers::NONE,
+    ));
+    let message = app
+        .state
+        .ai
+        .conversation
+        .iter()
+        .find(|message| message["role"] == "user")
+        .expect("user message");
+    let content = message["content"].as_str().expect("content");
+    assert!(content.contains("<context path="), "{content}");
+    assert!(content.contains("what is this"), "{content}");
+    assert!(app.state.ai.attachments.is_empty());
+    if let Some(task) = app.ai_task.as_ref() {
+        task.cancel();
+    }
+    app.ai_task = None;
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn ai_panel_renders_streamed_deltas_before_done() {
+    use std::time::{Duration, Instant};
+
+    let (base_url, server) = crate::ai::sse_hello_server();
+    let (mut app, dir) = fixture("x\n");
+    let mut config = crate::ai::test_config(base_url);
+    config.stream = true;
+    app.state.config.ai = config;
+    app.dispatch(Command::AiChat).expect("ai panel");
+    app.state.ai.input = "hello".to_string();
+    app.state.ai.cursor = 5;
+    app.handle_key(ratatui::crossterm::event::KeyEvent::new(
+        ratatui::crossterm::event::KeyCode::Enter,
+        ratatui::crossterm::event::KeyModifiers::NONE,
+    ));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline && app.ai_stream.is_some() {
+        app.pump_ai();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(app.ai_stream.is_none());
+    assert!(
+        app.state
+            .ai
+            .entries
+            .iter()
+            .any(|line| line.contains("hello"))
+    );
+    assert!(
+        app.state
+            .ai
+            .conversation
+            .iter()
+            .any(|message| { message["role"] == "assistant" && message["content"] == "hello" })
+    );
+    server.join().expect("server");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn ai_input_accepts_shift_enter_newlines_and_enter_submits() {
     use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 

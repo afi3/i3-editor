@@ -395,13 +395,18 @@ trust is still checked before a server starts. Built-in `native/read_file` and
 `native/edit_file` tools add a workspace-root boundary, a file snapshot,
 six-hex line hashes, and atomic writes; dirty open buffers are rejected and
 clean buffers reload after an edit. `native/search` walks with `ignore` and
-matches per-line regexes without spawning `grep`. Rust edits in a Cargo
-workspace start a background `cargo check --message-format=short` (20-second
-timeout); its output is appended to the edit result before the next model turn.
-The AI transcript is pre-wrapped to the panel width and scrolled in visual
-rows; the input is also wrapped, grows to six rows, and accepts `Shift+Enter`
-or `Alt+Enter` newlines. No harness path edits an editor buffer directly or
-applies an unconfirmed patch.
+matches per-line regexes without spawning `grep`. Native edit plans render a
+compact diff before confirmation, and successful edits push an undo record;
+`ai_undo_edit` restores it only while the post-edit snapshot still matches.
+Rust edits in a Cargo workspace start a background `cargo check
+--message-format=short` (20-second timeout); its output is appended to the edit
+result before the next model turn.
+The AI request uses SSE by default: `ai::stream` reads delta events from curl
+and `App::pump_ai` appends them live, while non-SSE responses fall back through
+the same reply parser. The AI transcript is pre-wrapped to the panel width and
+scrolled in visual rows; the input is also wrapped, grows to six rows, and
+accepts `Shift+Enter` or `Alt+Enter` newlines. No harness path edits an editor
+buffer directly or applies an unconfirmed patch.
 
 **File operations follow the focused surface.** `duplicate_file`, `copy_path`,
 and `reveal_in_terminal` take the explorer row when the explorer has focus;
