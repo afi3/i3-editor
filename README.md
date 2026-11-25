@@ -539,10 +539,15 @@ The harness also exposes two built-in tools, independent of MCP:
   successful edit.
 - The tools use the same `allowed_tools`/`denied_tools` policy, confirmation,
   capability labels (`read-only`/`destructive`), and audit log as MCP tools.
+- After a Rust edit, a bounded background `cargo check` result is attached to
+  the tool response; it does not block the UI.
   `native/read_file`, `native/search`, and `native/edit_file` are visible even
   when no MCP server is configured.
 
-Post-edit `cargo check` verification is not part of this slice.
+After editing a Rust file in a workspace with `Cargo.toml`, the harness starts
+`cargo check --message-format=short` in a worker (20-second timeout). Its output
+is appended to the edit tool result, so the model can fix compile errors in the
+same turn. Cancelling the AI turn kills a running check; non-Rust edits skip it.
 - The API key is read from `api_key_env`; leave it empty for a local
   OpenAI-compatible server without authentication.
 - Requests are non-streaming and do not include the active file unless you paste

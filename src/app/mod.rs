@@ -62,6 +62,8 @@ impl App {
             lsp: None,
             mcp: None,
             ai_task: None,
+            native_check: None,
+            native_check_output: None,
             mcp_trusted: std::collections::HashSet::new(),
             mcp_recent: std::collections::BTreeMap::new(),
             persist_mcp_state: false,
@@ -143,6 +145,8 @@ pub struct App {
     pub(crate) mcp: Option<crate::mcp::McpManager>,
     /// Running AI request, if any.
     pub(crate) ai_task: Option<crate::ai::Task>,
+    pub(crate) native_check: Option<crate::native::CheckTask>,
+    pub(crate) native_check_output: Option<String>,
     /// Trusted MCP server config hashes for this session.
     pub(crate) mcp_trusted: std::collections::HashSet<String>,
     /// Recent MCP tool names per server.
@@ -273,6 +277,8 @@ impl App {
             lsp: None,
             mcp: None,
             ai_task: None,
+            native_check: None,
+            native_check_output: None,
             mcp_trusted,
             mcp_recent,
             persist_mcp_state: true,
@@ -388,6 +394,7 @@ impl App {
             self.pump_lsp();
             self.pump_mcp();
             self.pump_ai();
+            self.pump_native_check();
             self.pump_lsp_install();
             self.refresh_git_if_due();
             self.autosave_swaps();

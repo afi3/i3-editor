@@ -216,6 +216,10 @@ impl App {
         if let Some(task) = self.ai_task.take() {
             task.cancel();
         }
+        if let Some(task) = self.native_check.take() {
+            task.cancel();
+        }
+        self.native_check_output = None;
         if let Some(waiting) = self.state.ai.waiting.take() {
             if let Some(mcp) = self.mcp.as_mut() {
                 mcp.cancel_tool_call(&waiting.server);
@@ -577,24 +581,62 @@ impl App {
             capability: call.capability.clone(),
         };
         self.state.ai.waiting = Some(waiting);
-        let text = match result {
+        match result {
             Ok(text) => {
+                if call.tool == "edit_file" && crate::native::check_eligible(&root, &call.arguments)
+                {
+                    self.native_check_output = Some(text);
+                    self.native_check = Some(crate::native::CheckTask::spawn(
+                        root,
+                        crate::native::CHECK_TIMEOUT,
+                    ));
+                    self.state
+                        .ai
+                        .entries
+                        .push("[check] cargo check...".to_string());
+                    return;
+                }
                 self.finish_ai_tool(
                     crate::native::SERVER,
                     &call.tool,
                     &[ToolContent::Text(text)],
                     false,
                 );
-                return;
             }
-            Err(error) => error,
+            Err(error) => {
+                self.finish_ai_tool(
+                    crate::native::SERVER,
+                    &call.tool,
+                    &[ToolContent::Text(error)],
+                    true,
+                );
+            }
+        }
+    }
+
+    pub(crate) fn pump_native_check(&mut self) {
+        let Some(task) = self.native_check.as_ref() else {
+            return;
         };
+        let Some(result) = task.try_recv() else {
+            return;
+        };
+        self.native_check = None;
+        let Some(prefix) = self.native_check_output.take() else {
+            return;
+        };
+        let Some(waiting) = self.state.ai.waiting.take() else {
+            return;
+        };
+        let text = format!("{prefix}\n\ncargo check:\n{}", result.output);
+        self.state.ai.waiting = Some(waiting);
         self.finish_ai_tool(
             crate::native::SERVER,
-            &call.tool,
+            "edit_file",
             &[ToolContent::Text(text)],
-            true,
+            !result.success,
         );
+        self.dirty = true;
     }
 
     fn run_native_tool(

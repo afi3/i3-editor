@@ -395,9 +395,12 @@ trust is still checked before a server starts. Built-in `native/read_file` and
 `native/edit_file` tools add a workspace-root boundary, a file snapshot,
 six-hex line hashes, and atomic writes; dirty open buffers are rejected and
 clean buffers reload after an edit. `native/search` walks with `ignore` and
-matches per-line regexes without spawning `grep`. The AI transcript is
-pre-wrapped to the panel width and scrolled in visual rows. No harness path
-edits an editor buffer directly or applies an unconfirmed patch.
+matches per-line regexes without spawning `grep`. Rust edits in a Cargo
+workspace start a background `cargo check --message-format=short` (20-second
+timeout); its output is appended to the edit result before the next model turn.
+The AI transcript is pre-wrapped to the panel width and scrolled in visual
+rows. No harness path edits an editor buffer directly or applies an
+unconfirmed patch.
 
 **File operations follow the focused surface.** `duplicate_file`, `copy_path`,
 and `reveal_in_terminal` take the explorer row when the explorer has focus;

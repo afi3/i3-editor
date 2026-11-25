@@ -6,6 +6,12 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, Receiver};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use globset::{Glob, GlobMatcher};
 use ignore::WalkBuilder;
@@ -17,6 +23,7 @@ pub const SERVER: &str = "native";
 pub const MAX_FILE_BYTES: u64 = 16 << 20;
 pub const READ_LINES: usize = 400;
 const SEARCH_RESULTS: usize = 200;
+pub const CHECK_TIMEOUT: Duration = Duration::from_secs(20);
 
 pub fn capability(tool: &str) -> &'static str {
     match tool {
@@ -203,6 +210,123 @@ pub fn search(root: &Path, arguments: &Value) -> Result<String, String> {
         output.push_str("[truncated at max_results]\n");
     }
     Ok(output)
+}
+
+pub fn check_eligible(root: &Path, arguments: &Value) -> bool {
+    let Some(raw) = arguments.get("path").and_then(Value::as_str) else {
+        return false;
+    };
+    let Ok(path) = resolve_path(root, raw) else {
+        return false;
+    };
+    path.extension().is_some_and(|extension| extension == "rs") && root.join("Cargo.toml").is_file()
+}
+
+pub struct CheckTask {
+    receiver: Receiver<CheckResult>,
+    cancel: Arc<AtomicBool>,
+}
+
+#[derive(Debug)]
+pub struct CheckResult {
+    pub success: bool,
+    pub output: String,
+}
+
+impl CheckTask {
+    pub fn spawn(root: PathBuf, timeout: Duration) -> Self {
+        let (sender, receiver) = mpsc::channel();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let flag = Arc::clone(&cancel);
+        let _ = std::thread::Builder::new()
+            .name("i3-cargo-check".to_string())
+            .spawn(move || {
+                let result = run_cargo_check(&root, timeout, &flag);
+                let _ = sender.send(result);
+            });
+        Self { receiver, cancel }
+    }
+
+    pub fn try_recv(&self) -> Option<CheckResult> {
+        self.receiver.try_recv().ok()
+    }
+
+    pub fn cancel(&self) {
+        self.cancel.store(true, Ordering::Relaxed);
+    }
+}
+
+impl Drop for CheckTask {
+    fn drop(&mut self) {
+        self.cancel();
+    }
+}
+
+fn run_cargo_check(root: &Path, timeout: Duration, cancel: &AtomicBool) -> CheckResult {
+    let mut child = match Command::new("cargo")
+        .args(["check", "--message-format=short"])
+        .current_dir(root)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(error) => {
+            return CheckResult {
+                success: false,
+                output: format!("cargo check: {error}"),
+            };
+        }
+    };
+    let deadline = Instant::now() + timeout;
+    loop {
+        if cancel.load(Ordering::Relaxed) {
+            let _ = child.kill();
+            let _ = child.wait();
+            return CheckResult {
+                success: false,
+                output: "cargo check cancelled".to_string(),
+            };
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return CheckResult {
+                success: false,
+                output: "cargo check timed out".to_string(),
+            };
+        }
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) => thread::sleep(Duration::from_millis(20)),
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return CheckResult {
+                    success: false,
+                    output: format!("cargo check: {error}"),
+                };
+            }
+        }
+    }
+    let output = match child.wait_with_output() {
+        Ok(output) => output,
+        Err(error) => {
+            return CheckResult {
+                success: false,
+                output: format!("cargo check: {error}"),
+            };
+        }
+    };
+    let mut text = String::from_utf8_lossy(&output.stderr).into_owned();
+    text.push_str(&String::from_utf8_lossy(&output.stdout));
+    if text.trim().is_empty() {
+        text = "cargo check: ok".to_string();
+    }
+    CheckResult {
+        success: output.status.success(),
+        output: text,
+    }
 }
 
 pub fn resolve_path(root: &Path, raw: &str) -> Result<PathBuf, String> {
@@ -448,6 +572,32 @@ mod tests {
         edit_file(&root, &edit).expect("edit");
         let text = fs::read_to_string(&path).expect("text");
         assert_eq!(text, "fn main() {}\n    println!(\"hi\");\n}\n");
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn check_eligible_requires_a_rust_file_and_manifest() {
+        let root = std::env::temp_dir().join(format!(
+            "i3-native-check-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        fs::create_dir_all(root.join("src")).expect("src");
+        fs::write(root.join("src/main.rs"), "fn main() {}\n").expect("rust");
+        fs::write(root.join("Cargo.toml"), "[package]\nname = \"x\"\n").expect("manifest");
+        assert!(check_eligible(
+            &root,
+            &serde_json::json!({"path": "src/main.rs"})
+        ));
+        assert!(!check_eligible(
+            &root,
+            &serde_json::json!({"path": "src/lib.txt"})
+        ));
+        fs::remove_file(root.join("Cargo.toml")).expect("remove manifest");
+        assert!(!check_eligible(
+            &root,
+            &serde_json::json!({"path": "src/main.rs"})
+        ));
         std::fs::remove_dir_all(root).ok();
     }
 
