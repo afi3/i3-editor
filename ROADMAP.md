@@ -872,10 +872,10 @@ targets; the aarch64 macOS asset passed its SHA-256 check, reported
 
 ## Unreleased v0.2.1 — agent harness (no auto-apply)
 
-The one-shot AI baseline is already on `main`: `[ai]` provider config, a worker
-thread using `curl`, `ai_chat`, HTTP error bodies, and a read-only response
-overlay. This release turns that request into a bounded multi-turn tool loop
-against configured MCP servers.
+The AI baseline is already on `main`: `[ai]` provider config, a worker thread
+using `curl`, `ai_chat`, HTTP error bodies, and a read-only response view. This
+release turns that request into a bounded multi-turn tool loop against
+configured MCP servers, rendered in the right-side `AI` panel.
 
 "Read-only" here means the harness never edits an editor buffer, opens a file,
 or applies a patch. Every MCP tool call still passes the trust gate and the
@@ -884,7 +884,7 @@ user's explicit choice.
 
 ### Scope
 
-- `ai_chat` becomes a chat transcript instead of a single response overlay.
+- `ai_chat` opens a chat transcript panel instead of a single response overlay.
 - Send the configured MCP tools (`name`, `description`, `inputSchema`) with the
   model request.
 - Parse OpenAI-compatible `tool_calls`, show the requested server/tool/arguments,
@@ -896,7 +896,7 @@ user's explicit choice.
 
 ### Harness rules
 
-- A normal `ai_chat` prompt starts a conversation; `Enter` sends the next user
+- A normal `ai_chat` panel starts a conversation; `Enter` sends the next user
   message.
 - A tool call is shown before execution. Declining it ends the current turn with
   a visible "tool call denied" result.
@@ -908,31 +908,33 @@ user's explicit choice.
   a new instruction or applied to a buffer.
 - API failures, 429 responses, malformed tool calls, MCP timeouts, and server
   crashes stop the turn with a visible error.
-- `Esc` cancels the active turn; `q`/`Esc` closes a finished transcript view.
+- `Esc` cancels the active turn; `Esc` with no active turn leaves the panel
+  focused state.
 
 ### Delivery checklist
 
 - [x] One-shot OpenAI-compatible request and response overlay.
 - [x] MCP tools/list, schema form, trust, confirmation, and read-only results.
-- [ ] Extend the provider request with MCP tool definitions.
-- [ ] Parse tool calls and multi-turn assistant/tool messages.
-- [ ] Add a transcript view with user, assistant, tool-call, and result entries.
-- [ ] Wire tool confirmation and denial into the harness loop.
-- [ ] Enforce the 8-step cap and cancellation.
-- [ ] Extend the mock HTTP endpoint with tool-call and malformed-call sequences.
-- [ ] Extend the mock MCP server or use the existing mock for harness tests.
-- [ ] Test denial, cap, API failure, tool timeout, and no-buffer-mutation paths.
-- [ ] Update README, ARCHITECTURE, and this roadmap.
+- [x] Extend the provider request with MCP tool definitions.
+- [x] Parse tool calls and multi-turn assistant/tool messages.
+- [x] Add a transcript view with user, assistant, tool-call, and result entries.
+- [x] Wire tool confirmation and denial into the harness loop.
+- [x] Enforce the 8-step cap and cancellation.
+- [x] Exercise tool-call, final-response, and malformed-argument sequences against a local mock endpoint.
+- [x] Extend the mock MCP server or use the existing mock for harness tests.
+- [x] Test denial, cap, API failure, malformed arguments, and no-buffer-mutation paths; MCP timeout stays covered by the manager suite.
+- [x] Update README, ARCHITECTURE, and this roadmap.
 
 ### Acceptance
 
-- A mock model requests `list_directory`, the user confirms, the mock MCP result
+- [x] A mock model requests `echo`, the user confirms, the mock MCP result
   returns to the model, and the final text appears in the transcript.
-- Denying the tool call ends the turn without invoking MCP.
-- The ninth model round trip is refused with a clear message.
-- A 429/API error and a malformed tool call are shown without blocking input.
-- No harness path mutates an editor buffer, opens a file, or applies a patch.
-- Full suite, fmt, clippy, MSRV 1.91, audit, and gate pass.
+- [x] Denying the tool call ends the turn without invoking MCP.
+- [x] The ninth model round trip is refused with a clear message.
+- [x] A 429/API error and a malformed tool call are shown without blocking input.
+- [x] No harness path mutates an editor buffer, opens a file, or applies a patch.
+- [x] Full suite, fmt, clippy, and gate pass.
+- [ ] MSRV 1.91 and `cargo audit` pass.
 
 ### Deferred to v0.2.2 / v0.2.3
 
@@ -955,4 +957,4 @@ cargo clippy --all-targets --all-features
 cargo run -- --dump-keymap
 ```
 
-Last recorded run: `cargo test` → 405 passed (398 unit + 6 CLI process + 1 PTY smoke), `cargo clippy` → 0 warnings.
+Last recorded run: `cargo test` → 410 passed (403 unit + 6 CLI process + 1 PTY smoke), `cargo clippy` → 0 warnings.

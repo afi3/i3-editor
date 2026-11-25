@@ -136,14 +136,27 @@ impl App {
         let mut refresh_tools = false;
         for event in events {
             match event {
-                crate::mcp::Event::Warning(message) => self.notify(message),
+                crate::mcp::Event::Warning(message) => {
+                    if self.state.ai.waiting.is_some() {
+                        self.state.ai.waiting = None;
+                        self.state.ai.busy = false;
+                        self.state.ai.entries.push(format!("[error] {message}"));
+                    }
+                    self.notify(message);
+                }
                 crate::mcp::Event::Tools { .. } => refresh_tools = true,
                 crate::mcp::Event::ToolResult {
                     server,
                     tool,
                     content,
                     is_error,
-                } => self.show_mcp_result(&server, &tool, &content, is_error),
+                } => {
+                    if self.state.ai.waiting.is_some() {
+                        self.finish_ai_tool(&server, &tool, &content, is_error);
+                    } else {
+                        self.show_mcp_result(&server, &tool, &content, is_error);
+                    }
+                }
                 crate::mcp::Event::Log { .. } => {}
             }
         }
@@ -196,7 +209,7 @@ impl App {
         prompt.set_candidates(candidates);
     }
 
-    fn mcp_trusted(&self, server: &str) -> bool {
+    pub(crate) fn mcp_trusted(&self, server: &str) -> bool {
         self.mcp
             .as_ref()
             .and_then(|mcp| mcp.config_hash(server))

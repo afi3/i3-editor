@@ -103,16 +103,18 @@ a POSIX terminal; `--update` additionally uses `curl` and `tar`.
 
 ```text
  workspace tabs (F7 new, F8 close)
-+--------------------------------------+
-| Explorer   | pane 1        | pane 2  |
-|            | tabs / text   |         |
-+--------------------------------------+
++------------------------------------------------+
+| Explorer   | pane 1        | pane 2  | AI     |
+|            | tabs / text   |         | chat   |
++------------------------------------------------+
  status bar: file | line:col | lines | UTF-8 EOL | focus | message
 ```
 
 - Explorer: 20% of the width by default, collapsible with `Ctrl+B`.
 - Panes: recursive weighted splits, independent cursor, selection, and scroll.
 - Workspaces: independent layouts and tabs; switching preserves everything.
+- AI panel: optional right-side transcript and input; `ai_chat` opens it and
+  `ai_panel` toggles it.
 
 ## Default keys
 
@@ -456,8 +458,8 @@ CI uses the local mock server instead.
 
 ### AI assistant
 
-The assistant is a one-shot OpenAI-compatible chat client. It does not stream,
-send project context automatically, or edit buffers.
+The assistant is an OpenAI-compatible chat panel with a bounded MCP tool loop.
+It does not stream, send project context automatically, or edit buffers.
 
 ```toml
 [ai]
@@ -467,13 +469,23 @@ api_key_env = "OPENAI_API_KEY"
 timeout_secs = 60
 ```
 
-- `F1` → `ai_chat` opens an `Ask:` prompt. `Enter` sends the typed question.
+- `F1` → `ai_chat` opens and focuses the right-side `AI` panel; `ai_panel`
+  toggles it. The panel keeps session-only history.
+- Type a message and press `Enter`. The active turn shows `thinking...` until
+  the reply arrives. `Esc` cancels a running request or tool call; `Esc` with
+  no active turn leaves the panel focused state.
+- Configured MCP tools are sent with the request. When the model asks for one,
+  the panel shows the server, tool, and JSON arguments and asks for
+  confirmation: `y`/`Enter` runs it, `n`/`Esc` denies it. Trust must already be
+  granted in the `mcp` menu; the harness cannot bypass the trust gate.
+- Tool results are appended to the transcript as untrusted text and returned to
+  the model. A turn stops after 8 model round trips, on cancellation, or on an
+  API/MCP error. There is no automatic edit, patch apply, or background agent.
 - The API key is read from `api_key_env`; leave it empty for a local
   OpenAI-compatible server without authentication.
-- The response opens in a read-only `AI` overlay. `Esc`/`q` closes it.
 - Requests are non-streaming and do not include the active file unless you paste
-  it into the prompt. Tool calls, context indexing, and automatic edits are not
-  part of this slice.
+  it into the prompt. Context indexing and automatic edits are not part of this
+  slice.
 
 ### Git
 

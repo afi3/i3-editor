@@ -46,7 +46,6 @@ pub enum PromptKind {
     McpConfirm,
     McpAdd,
     McpAddPath,
-    AiChat,
 }
 
 /// Grouping used by the prompt setup and submit code, so neither needs one
@@ -91,7 +90,6 @@ impl PromptKind {
                 | PromptKind::McpConfirm
                 | PromptKind::McpAdd
                 | PromptKind::McpAddPath
-                | PromptKind::AiChat
         )
     }
 
@@ -153,7 +151,6 @@ impl PromptKind {
             PromptKind::McpConfirm => "Call MCP Tool",
             PromptKind::McpAdd => "Add MCP Server",
             PromptKind::McpAddPath => "MCP Server Directory",
-            PromptKind::AiChat => "Ask AI",
             _ => return None,
         })
     }

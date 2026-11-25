@@ -5,6 +5,8 @@
 
 use std::io::Write;
 use std::process::{Command, Stdio};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
 
@@ -12,39 +14,82 @@ use serde_json::{Value, json};
 
 use crate::config::AiConfig;
 
+#[derive(Clone, Debug)]
+pub struct ToolCall {
+    pub id: String,
+    pub name: String,
+    pub arguments: Value,
+}
+
+#[derive(Clone, Debug)]
+pub struct Reply {
+    pub message: Value,
+    pub content: Option<String>,
+    pub tool_calls: Vec<ToolCall>,
+}
+
 pub struct Task {
-    rx: Receiver<Result<String, String>>,
+    rx: Receiver<Result<Reply, String>>,
+    cancel: Arc<AtomicBool>,
 }
 
 impl Task {
-    pub fn try_recv(&self) -> Result<Result<String, String>, mpsc::TryRecvError> {
+    pub fn try_recv(&self) -> Result<Result<Reply, String>, mpsc::TryRecvError> {
         self.rx.try_recv()
+    }
+
+    pub fn cancel(&self) {
+        self.cancel.store(true, Ordering::Relaxed);
     }
 }
 
-pub fn spawn(config: AiConfig, prompt: String) -> Task {
+pub fn spawn_chat(config: AiConfig, messages: Vec<Value>, tools: Vec<Value>) -> Task {
     let (tx, rx) = mpsc::channel();
+    let cancel = Arc::new(AtomicBool::new(false));
+    let worker_cancel = Arc::clone(&cancel);
     thread::spawn(move || {
-        let result = ask(&config, &prompt);
+        let result = chat_with_cancel(&config, &messages, &tools, &worker_cancel);
         let _ = tx.send(result);
     });
-    Task { rx }
+    Task { rx, cancel }
 }
 
+/// Keep the one-shot helper for tests.
+#[cfg(test)]
 pub fn ask(config: &AiConfig, prompt: &str) -> Result<String, String> {
     let prompt = prompt.trim();
     if prompt.is_empty() {
         return Err("AI prompt is empty".to_string());
     }
+    let reply = chat_with_cancel(
+        config,
+        &[json!({"role": "user", "content": prompt})],
+        &[],
+        &AtomicBool::new(false),
+    )?;
+    reply
+        .content
+        .ok_or_else(|| "AI response has no message content".to_string())
+}
+
+fn chat_with_cancel(
+    config: &AiConfig,
+    messages: &[Value],
+    tools: &[Value],
+    cancel: &AtomicBool,
+) -> Result<Reply, String> {
     if config.base_url.trim().is_empty() || config.model.trim().is_empty() {
         return Err("AI base_url and model must be configured".to_string());
     }
     let url = completions_url(&config.base_url);
-    let body = json!({
+    let mut body = json!({
         "model": config.model,
-        "messages": [{"role": "user", "content": prompt}],
+        "messages": messages,
         "temperature": 0.2
     });
+    if !tools.is_empty() {
+        body["tools"] = Value::Array(tools.to_vec());
+    }
     let body_text = serde_json::to_vec(&body).map_err(|error| error.to_string())?;
     let mut body_file = tempfile::NamedTempFile::new().map_err(|error| error.to_string())?;
     body_file
@@ -86,6 +131,18 @@ pub fn ask(config: &AiConfig, prompt: &str) -> Result<String, String> {
             .write_all(curl_config.as_bytes())
             .map_err(|error| format!("curl config: {error}"))?;
     }
+    loop {
+        if cancel.load(Ordering::Relaxed) {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err("AI request cancelled".to_string());
+        }
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) => thread::sleep(std::time::Duration::from_millis(20)),
+            Err(error) => return Err(format!("curl: {error}")),
+        }
+    }
     let output = child
         .wait_with_output()
         .map_err(|error| format!("curl: {error}"))?;
@@ -112,11 +169,50 @@ pub fn ask(config: &AiConfig, prompt: &str) -> Result<String, String> {
     }
     let value: Value =
         serde_json::from_str(body.trim()).map_err(|error| format!("AI response: {error}"))?;
-    value
-        .pointer("/choices/0/message/content")
+    let message = value
+        .pointer("/choices/0/message")
+        .cloned()
+        .ok_or_else(|| "AI response has no message".to_string())?;
+    let content = message
+        .get("content")
         .and_then(Value::as_str)
-        .map(str::to_string)
-        .ok_or_else(|| "AI response has no message content".to_string())
+        .map(str::to_string);
+    let mut tool_calls = Vec::new();
+    if let Some(calls) = message.get("tool_calls").and_then(Value::as_array) {
+        for call in calls {
+            let id = call
+                .get("id")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            let function = call.get("function").ok_or("tool call has no function")?;
+            let name = function
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            let raw_arguments = function
+                .get("arguments")
+                .and_then(Value::as_str)
+                .unwrap_or("{}")
+                .to_string();
+            let arguments = serde_json::from_str::<Value>(&raw_arguments)
+                .map_err(|error| format!("tool arguments for {name}: {error}"))?;
+            tool_calls.push(ToolCall {
+                id,
+                name,
+                arguments,
+            });
+        }
+    }
+    if content.is_none() && tool_calls.is_empty() {
+        return Err("AI response has neither content nor tool calls".to_string());
+    }
+    Ok(Reply {
+        message,
+        content,
+        tool_calls,
+    })
 }
 
 fn completions_url(base: &str) -> String {
@@ -193,6 +289,47 @@ mod tests {
         let error = ask(&config, "hello").expect_err("429");
         assert!(error.contains("429"), "{error}");
         assert!(error.contains("quota exceeded"), "{error}");
+        server.join().expect("server");
+    }
+
+    #[test]
+    fn reports_malformed_tool_arguments() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
+        let address = listener.local_addr().expect("address");
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept");
+            let mut request = [0u8; 8192];
+            let _ = stream.read(&mut request).expect("read");
+            let body = r#"{"choices":[{"message":{"role":"assistant","content":null,"tool_calls":[{"id":"bad","type":"function","function":{"name":"bad","arguments":"{"}}]}}]}"#;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            stream.write_all(response.as_bytes()).expect("write");
+        });
+        let config = AiConfig {
+            base_url: format!("http://{address}/v1"),
+            model: "mock-model".to_string(),
+            api_key_env: "I3_EDITOR_TEST_AI_KEY".to_string(),
+            timeout_secs: 5,
+        };
+        let task = spawn_chat(
+            config,
+            vec![json!({"role": "user", "content": "hello"})],
+            Vec::new(),
+        );
+        let error = loop {
+            match task.try_recv() {
+                Ok(result) => break result.expect_err("malformed arguments"),
+                Err(std::sync::mpsc::TryRecvError::Empty) => {
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    panic!("worker disconnected")
+                }
+            }
+        };
+        assert!(error.contains("tool arguments for bad"), "{error}");
         server.join().expect("server");
     }
 

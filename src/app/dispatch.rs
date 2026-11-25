@@ -61,6 +61,7 @@ impl App {
             Command::Mcp => self.open_mcp(),
             Command::McpAdd => self.open_mcp_add(),
             Command::AiChat => self.open_ai(),
+            Command::AiPanel => self.toggle_ai_panel(),
             other => return Ok(Some(other)),
         }
         Ok(None)

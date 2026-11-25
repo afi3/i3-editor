@@ -107,6 +107,11 @@ impl App {
     fn on_left_click(&mut self, mouse: MouseEvent) {
         let extend = mouse.modifiers.contains(KeyModifiers::SHIFT);
         self.selecting = None;
+        if self.state.ai.visible && contains(self.state.ui.ai, mouse.column, mouse.row) {
+            self.state.ai.focused = true;
+            return;
+        }
+        self.state.ai.focused = false;
         if contains(self.state.ui.workspace_bar, mouse.column, mouse.row) {
             if let Some(index) = self
                 .state

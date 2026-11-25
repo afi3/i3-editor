@@ -65,7 +65,7 @@ fn fixture(text: &str) -> (App, PathBuf) {
         git_diff: None,
         help: None,
         mcp_view: None,
-        ai_view: None,
+        ai: crate::state::AiPanel::default(),
         hunks: None,
         plugin_status: Vec::new(),
         fullscreen: None,
@@ -2169,22 +2169,202 @@ fn palette_lists_and_switches_workspaces() {
 }
 
 #[test]
-fn ai_chat_command_opens_a_prompt_and_rejects_empty_input() {
-    use crate::input::PromptKind;
+fn ai_commands_open_and_toggle_the_panel() {
+    use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
     let (mut app, dir) = fixture("x\n");
     app.dispatch(Command::AiChat).expect("ai_chat");
-    let InputMode::Prompt(prompt) = &mut app.state.mode else {
-        panic!("AI prompt missing")
+    assert!(app.state.ai.visible);
+    assert!(app.state.ai.focused);
+    assert!(!app.state.ai.entries.is_empty());
+
+    app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    assert!(!app.state.ai.focused);
+
+    app.dispatch(Command::AiPanel).expect("ai_panel");
+    assert!(!app.state.ai.visible);
+    app.dispatch(Command::AiPanel).expect("ai_panel");
+    assert!(app.state.ai.visible);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn ai_harness_confirms_a_tool_and_returns_the_final_answer() {
+    use crate::config::AiConfig;
+    use std::collections::BTreeMap;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::time::{Duration, Instant};
+
+    if std::process::Command::new("python3")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        eprintln!("skipping AI harness: python3 unavailable");
+        return;
+    }
+    let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
+    let address = listener.local_addr().expect("address");
+    let responses = [
+        r#"{"choices":[{"message":{"role":"assistant","content":null,"tool_calls":[{"id":"call-1","type":"function","function":{"name":"mock__echo","arguments":"{\"text\":\"hello\"}"}}]}}]}"#,
+        r#"{"choices":[{"message":{"role":"assistant","content":"final answer"}}]}"#,
+    ];
+    std::thread::spawn(move || {
+        for body in responses {
+            let Ok((mut stream, _)) = listener.accept() else {
+                return;
+            };
+            let mut request = [0u8; 8192];
+            let _ = stream.read(&mut request);
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            let _ = stream.write_all(response.as_bytes());
+        }
+    });
+
+    let (mut app, dir) = fixture("x\n");
+    let script = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+        .join("mock_mcp.py");
+    let mcp = crate::mcp::McpServerConfig {
+        command: "python3".to_string(),
+        args: vec![script.to_string_lossy().into_owned()],
+        cwd: None,
+        env: BTreeMap::from([("MOCK_MCP_MODE".to_string(), "normal".to_string())]),
     };
-    assert_eq!(prompt.kind, PromptKind::AiChat);
-    app.submit_prompt().expect("empty prompt");
-    assert!(app.ai_task.is_none());
-    assert!(app.state.ui.message.contains("empty"));
+    app.state
+        .config
+        .mcp
+        .servers
+        .insert("mock".to_string(), mcp.clone());
+    app.mcp = Some(crate::mcp::McpManager::new(
+        BTreeMap::from([("mock".to_string(), mcp)]),
+        dir.clone(),
+    ));
+    app.state.config.ai = AiConfig {
+        base_url: format!("http://{address}/v1"),
+        model: "mock-model".to_string(),
+        api_key_env: "I3_EDITOR_TEST_AI_KEY".to_string(),
+        timeout_secs: 5,
+    };
+    app.mcp
+        .as_mut()
+        .expect("mcp")
+        .list_tools("mock")
+        .expect("load tools");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        app.pump_mcp();
+        if app
+            .mcp
+            .as_ref()
+            .and_then(|mcp| mcp.tools("mock"))
+            .is_some_and(|tools| !tools.is_empty())
+        {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(
+        app.mcp
+            .as_ref()
+            .and_then(|mcp| mcp.tools("mock"))
+            .is_some_and(|tools| !tools.is_empty()),
+        "mock MCP tools did not load"
+    );
+
+    app.dispatch(Command::AiChat).expect("ai panel");
+    app.state.ai.input = "use echo".to_string();
+    app.state.ai.cursor = app.state.ai.input.chars().count();
     app.handle_key(ratatui::crossterm::event::KeyEvent::new(
-        ratatui::crossterm::event::KeyCode::Esc,
+        ratatui::crossterm::event::KeyCode::Enter,
         ratatui::crossterm::event::KeyModifiers::NONE,
     ));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline && app.state.ai.pending.is_empty() {
+        app.pump_ai();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let call = app.state.ai.pending.front().cloned().expect("pending tool");
+    assert_eq!(call.server, "mock");
+    assert_eq!(call.tool, "echo");
+
+    app.handle_key(ratatui::crossterm::event::KeyEvent::new(
+        ratatui::crossterm::event::KeyCode::Char('y'),
+        ratatui::crossterm::event::KeyModifiers::NONE,
+    ));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline
+        && !app
+            .state
+            .ai
+            .entries
+            .iter()
+            .any(|line| line.contains("final answer"))
+    {
+        app.pump_mcp();
+        app.pump_ai();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(
+        app.state
+            .ai
+            .entries
+            .iter()
+            .any(|line| line.contains("final answer")),
+        "{:?}",
+        app.state.ai.entries
+    );
+    assert_eq!(text(&app), "x\n", "AI harness must not edit the buffer");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn denying_an_ai_tool_call_does_not_invoke_mcp() {
+    use crate::state::AiToolCall;
+
+    let (mut app, dir) = fixture("x\n");
+    app.dispatch(Command::AiChat).expect("ai panel");
+    app.state.ai.pending.push_back(AiToolCall {
+        id: "call-deny".to_string(),
+        server: "mock".to_string(),
+        tool: "echo".to_string(),
+        arguments: serde_json::json!({"text": "hello"}),
+    });
+    app.handle_key(ratatui::crossterm::event::KeyEvent::new(
+        ratatui::crossterm::event::KeyCode::Char('n'),
+        ratatui::crossterm::event::KeyModifiers::NONE,
+    ));
+    assert!(app.state.ai.pending.is_empty());
+    assert!(
+        app.state
+            .ai
+            .entries
+            .iter()
+            .any(|line| line.contains("denied by user"))
+    );
+    assert_eq!(app.state.ai.conversation.last().unwrap()["role"], "tool");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn ai_turn_stops_at_the_round_cap() {
+    let (mut app, dir) = fixture("x\n");
+    app.dispatch(Command::AiChat).expect("ai panel");
+    app.state.ai.rounds = 8;
+    app.start_ai_request();
+    assert!(app.ai_task.is_none());
+    assert!(
+        app.state
+            .ai
+            .entries
+            .iter()
+            .any(|line| line.contains("stopped after 8 model rounds"))
+    );
     std::fs::remove_dir_all(&dir).ok();
 }
 

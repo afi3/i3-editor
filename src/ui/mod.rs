@@ -1,5 +1,6 @@
 //! Rendering. Every function here takes `&AppState` and never mutates it.
 
+pub mod ai;
 pub mod overlay;
 pub mod pane;
 pub mod shell;
@@ -42,6 +43,7 @@ pub struct UiState {
     pub pane_rects: HashMap<PaneId, Rect>,
     pub workspace_bar: Rect,
     pub explorer: Rect,
+    pub ai: Rect,
     pub panes: Rect,
     pub shell: Rect,
     pub status: Rect,
@@ -184,10 +186,33 @@ pub fn compute_layout(state: &mut AppState, area: Rect) {
         0
     };
     let explorer = Rect::new(main.x, main.y, explorer_width.min(main.width), main.height);
+    let ai_width = if state.ai.visible {
+        let desired = (u32::from(main.width) * 20 / 100) as u16;
+        let available = main.width.saturating_sub(
+            explorer
+                .width
+                .saturating_add(crate::workspace::MIN_PANE_COLS),
+        );
+        desired.max(24).min(available)
+    } else {
+        0
+    };
+    let panes_width = main
+        .width
+        .saturating_sub(explorer.width)
+        .saturating_sub(ai_width);
     let panes = Rect::new(
         main.x.saturating_add(explorer.width),
         main.y,
-        main.width.saturating_sub(explorer.width),
+        panes_width,
+        main.height,
+    );
+    let ai = Rect::new(
+        main.x
+            .saturating_add(explorer.width)
+            .saturating_add(panes_width),
+        main.y,
+        ai_width,
         main.height,
     );
 
@@ -215,6 +240,7 @@ pub fn compute_layout(state: &mut AppState, area: Rect) {
         }
     }
     state.ui.explorer = explorer;
+    state.ui.ai = ai;
     state.ui.status = status;
 }
 
@@ -246,6 +272,9 @@ pub fn render(frame: &mut Frame, state: &AppState) {
     }
 
     render_tab_bars(frame, state);
+    if state.ai.visible {
+        ai::render(frame, state);
+    }
 
     if state.ui.shell.height > 0 {
         shell::render(frame, state);
@@ -258,7 +287,6 @@ pub fn render(frame: &mut Frame, state: &AppState) {
     overlay::render_popups(frame, state);
     overlay::render_help(frame, state);
     overlay::render_mcp(frame, state);
-    overlay::render_ai(frame, state);
     overlay::render_hunks(frame, state);
     if let InputMode::Prompt(prompt) = &state.mode {
         overlay::render_prompt(frame, state, prompt);
@@ -340,10 +368,14 @@ fn render_status(frame: &mut Frame, state: &AppState) {
         _ => (0, 0, 0),
     };
 
-    let focus = match state.focus {
-        crate::state::Focus::Explorer => "EXPLORER".to_string(),
-        crate::state::Focus::Pane(id) => format!("PANE {id}"),
-        crate::state::Focus::Shell => "SHELL".to_string(),
+    let focus = if state.ai.focused {
+        "AI".to_string()
+    } else {
+        match state.focus {
+            crate::state::Focus::Explorer => "EXPLORER".to_string(),
+            crate::state::Focus::Pane(id) => format!("PANE {id}"),
+            crate::state::Focus::Shell => "SHELL".to_string(),
+        }
     };
     let encoding = document
         .map(|document| document.eol.as_str())
@@ -452,7 +484,7 @@ mod tests {
             git_diff: None,
             help: None,
             mcp_view: None,
-            ai_view: None,
+            ai: crate::state::AiPanel::default(),
             hunks: None,
             plugin_status: Vec::new(),
             fullscreen: None,
@@ -565,6 +597,22 @@ mod tests {
         assert!(screen.contains("Terminal"), "{screen}");
         assert!(screen.contains("[1 /bin/sh]"), "{screen}");
         assert!(screen.contains("[2* /bin/sh]"), "{screen}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn renders_ai_panel_with_transcript_and_input() {
+        let (mut state, dir) = state("x\n");
+        state.ai.visible = true;
+        state.ai.focused = true;
+        state.ai.entries.push("> hello".to_string());
+        state.ai.entries.push("answer".to_string());
+        state.ai.input = "next".to_string();
+        let screen = draw(&mut state, 100, 24);
+        assert!(state.ui.ai.width >= 24, "AI panel must reserve width");
+        assert!(screen.contains("hello"), "{screen}");
+        assert!(screen.contains("answer"), "{screen}");
+        assert!(screen.contains("next"), "{screen}");
         std::fs::remove_dir_all(&dir).ok();
     }
 

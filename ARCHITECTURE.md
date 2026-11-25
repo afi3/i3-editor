@@ -370,12 +370,17 @@ and stderr logs render in read-only overlays with no automatic buffer or shell
 mutation. `mcp_add` writes managed server entries to `mcp.toml`; recent tool
 choices are kept in `mcp_recent.toml` and sorted first.
 
-**The AI assistant is a one-shot worker, not a runtime.** `ai::ask` writes the
-prompt JSON to a private temporary file and runs `curl --config -`, keeping the
-API key out of argv while reusing the existing TLS/network dependency. The
-worker returns through a channel; `App::pump_ai` renders the answer or error in
-a read-only overlay. No project context is attached and no response can mutate
-an editor buffer in this slice.
+**The AI assistant is a bounded worker loop, not a runtime.** `ai::spawn_chat`
+writes the OpenAI-compatible request to a private temporary file and runs
+`curl --config -`, keeping the API key out of argv while reusing the existing
+TLS/network dependency. The worker returns through a channel; `App::pump_ai`
+appends text or tool calls to the right-side `AiPanel`. Tool calls are resolved
+against the configured MCP server/tool map, shown for per-call confirmation, and
+executed through `McpManager`; their untrusted output is appended as a `tool`
+message before the next request. The loop is capped at 8 model round trips and
+`Esc` cancels the worker by killing its `curl` child. MCP trust is still checked
+before a server starts, and no harness path can edit a buffer, open a file, or
+apply a patch.
 
 **File operations follow the focused surface.** `duplicate_file`, `copy_path`,
 and `reveal_in_terminal` take the explorer row when the explorer has focus;

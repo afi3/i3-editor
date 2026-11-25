@@ -281,6 +281,36 @@ pub struct HelpView {
     pub lines: Vec<String>,
     pub scroll: usize,
 }
+#[derive(Clone, Debug)]
+pub struct AiToolCall {
+    pub id: String,
+    pub server: String,
+    pub tool: String,
+    pub arguments: serde_json::Value,
+}
+
+#[derive(Clone, Debug)]
+pub struct AiWaiting {
+    pub id: String,
+    pub server: String,
+    pub tool: String,
+}
+
+#[derive(Debug, Default)]
+pub struct AiPanel {
+    pub visible: bool,
+    pub focused: bool,
+    pub entries: Vec<String>,
+    pub input: String,
+    pub cursor: usize,
+    pub scroll: usize,
+    pub busy: bool,
+    pub conversation: Vec<serde_json::Value>,
+    pub pending: std::collections::VecDeque<AiToolCall>,
+    pub waiting: Option<AiWaiting>,
+    pub rounds: usize,
+    pub tool_map: std::collections::BTreeMap<String, (String, String)>,
+}
 
 /// Selectable hunk list for partial staging.
 #[derive(Clone, Debug)]
@@ -346,8 +376,8 @@ pub struct AppState {
     pub help: Option<HelpView>,
     /// Read-only MCP status overlay.
     pub mcp_view: Option<HelpView>,
-    /// Read-only AI response overlay.
-    pub ai_view: Option<HelpView>,
+    /// AI assistant panel.
+    pub ai: AiPanel,
     /// Partial-staging overlay.
     pub hunks: Option<HunkPicker>,
     /// Statusline strings produced by Lua plugins.

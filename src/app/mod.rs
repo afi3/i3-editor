@@ -230,7 +230,7 @@ impl App {
             git_diff: None,
             help: None,
             mcp_view: None,
-            ai_view: None,
+            ai: crate::state::AiPanel::default(),
             hunks: None,
             plugin_status: Vec::new(),
             fullscreen: None,
