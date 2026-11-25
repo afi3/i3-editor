@@ -145,6 +145,9 @@ impl App {
             task.cancel();
         }
         if let Some(waiting) = self.state.ai.waiting.take() {
+            if let Some(mcp) = self.mcp.as_mut() {
+                mcp.cancel_tool_call(&waiting.server);
+            }
             self.state.ai.conversation.push(json!({
                 "role": "tool",
                 "tool_call_id": waiting.id,
@@ -168,6 +171,10 @@ impl App {
             self.notify("AI request is still running");
             return;
         }
+        if self.state.ai.queued_question.is_some() {
+            self.notify("waiting for MCP tools");
+            return;
+        }
         let question = self.state.ai.input.trim().to_string();
         if question.is_empty() {
             return;
@@ -175,13 +182,35 @@ impl App {
         self.state.ai.input.clear();
         self.state.ai.cursor = 0;
         self.state.ai.scroll = 0;
-        self.state.ai.rounds = 0;
         self.state.ai.entries.push(format!("> {question}"));
+        self.prime_ai_tools();
+        if self.ai_tools_pending() {
+            self.state.ai.entries.push("[tools] loading...".to_string());
+            self.state.ai.queued_question = Some(question);
+            return;
+        }
+        self.start_ai_question(question);
+    }
+
+    fn start_ai_question(&mut self, question: String) {
+        self.state.ai.rounds = 0;
         self.state
             .ai
             .conversation
             .push(json!({"role": "user", "content": question}));
         self.start_ai_request();
+    }
+
+    pub(crate) fn try_start_queued_ai_turn(&mut self) {
+        let Some(question) = self.state.ai.queued_question.clone() else {
+            return;
+        };
+        if self.ai_tools_pending() {
+            return;
+        }
+        self.state.ai.queued_question = None;
+        self.state.ai.entries.push("[tools] ready".to_string());
+        self.start_ai_question(question);
     }
 
     pub(crate) fn start_ai_request(&mut self) {
@@ -215,14 +244,31 @@ impl App {
             .as_ref()
             .map(|mcp| mcp.names().into_iter().map(str::to_string).collect())
             .unwrap_or_default();
+        let mut failures = Vec::new();
         for name in names {
             if self.mcp_trusted(&name)
-                && self.mcp.as_ref().and_then(|mcp| mcp.tools(&name)).is_none()
+                && self
+                    .mcp
+                    .as_ref()
+                    .is_some_and(|mcp| !mcp.failed(&name) && !mcp.tools_loaded(&name))
                 && let Some(mcp) = self.mcp.as_mut()
+                && let Err(error) = mcp.list_tools(&name)
             {
-                let _ = mcp.list_tools(&name);
+                failures.push(error);
             }
         }
+        for failure in failures {
+            self.notify(failure);
+        }
+    }
+
+    fn ai_tools_pending(&self) -> bool {
+        let Some(mcp) = self.mcp.as_ref() else {
+            return false;
+        };
+        mcp.names()
+            .into_iter()
+            .any(|name| self.mcp_trusted(name) && !mcp.failed(name) && !mcp.tools_loaded(name))
     }
 
     fn ai_tool_definitions(&mut self) -> Vec<Value> {

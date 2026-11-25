@@ -309,6 +309,7 @@ pub struct AiPanel {
     pub pending: std::collections::VecDeque<AiToolCall>,
     pub waiting: Option<AiWaiting>,
     pub rounds: usize,
+    pub queued_question: Option<String>,
     pub tool_map: std::collections::BTreeMap<String, (String, String)>,
 }
 

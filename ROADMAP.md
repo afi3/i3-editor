@@ -908,8 +908,9 @@ user's explicit choice.
   a new instruction or applied to a buffer.
 - API failures, 429 responses, malformed tool calls, MCP timeouts, and server
   crashes stop the turn with a visible error.
-- `Esc` cancels the active turn; `Esc` with no active turn leaves the panel
-  focused state.
+- `Esc` cancels the active turn; cancelling an active tool call terminates that
+  MCP server process, and its tools reload on the next question. `Esc` with no
+  active turn leaves the panel focused state.
 
 ### Delivery checklist
 
@@ -957,4 +958,4 @@ cargo clippy --all-targets --all-features
 cargo run -- --dump-keymap
 ```
 
-Last recorded run: `cargo test` → 410 passed (403 unit + 6 CLI process + 1 PTY smoke), `cargo clippy` → 0 warnings.
+Last recorded run: `cargo test` → 412 passed (405 unit + 6 CLI process + 1 PTY smoke), `cargo clippy` → 0 warnings.

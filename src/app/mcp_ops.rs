@@ -137,6 +137,13 @@ impl App {
         for event in events {
             match event {
                 crate::mcp::Event::Warning(message) => {
+                    if self.state.ai.queued_question.is_some() {
+                        self.state.ai.queued_question = None;
+                        self.state
+                            .ai
+                            .entries
+                            .push(format!("[error] MCP tools unavailable: {message}"));
+                    }
                     if self.state.ai.waiting.is_some() {
                         self.state.ai.waiting = None;
                         self.state.ai.busy = false;
@@ -162,6 +169,7 @@ impl App {
         }
         self.dirty = true;
         if refresh_tools {
+            self.try_start_queued_ai_turn();
             let server = match &self.state.mode {
                 InputMode::Prompt(prompt) if prompt.kind == PromptKind::McpTools => {
                     prompt.mcp_server.clone()

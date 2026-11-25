@@ -378,9 +378,13 @@ appends text or tool calls to the right-side `AiPanel`. Tool calls are resolved
 against the configured MCP server/tool map, shown for per-call confirmation, and
 executed through `McpManager`; their untrusted output is appended as a `tool`
 message before the next request. The loop is capped at 8 model round trips and
-`Esc` cancels the worker by killing its `curl` child. MCP trust is still checked
-before a server starts, and no harness path can edit a buffer, open a file, or
-apply a patch.
+`Esc` cancels the worker by killing its `curl` child. Cancelling an active tool
+call removes that MCP server process, because MCP has no mandatory cancellation
+acknowledgement; the next question reloads its tools. The panel holds a question
+until every trusted server reports a loaded tool list or is marked failed, so
+the first request sees the tools it will offer. MCP trust is still checked
+before a server starts, and
+no harness path can edit a buffer, open a file, or apply a patch.
 
 **File operations follow the focused surface.** `duplicate_file`, `copy_path`,
 and `reveal_in_terminal` take the explorer row when the explorer has focus;

@@ -471,8 +471,11 @@ timeout_secs = 60
 
 - `F1` → `ai_chat` opens and focuses the right-side `AI` panel; `ai_panel`
   toggles it. The panel keeps session-only history.
-- Type a message and press `Enter`. The active turn shows `thinking...` until
-  the reply arrives. `Esc` cancels a running request or tool call; `Esc` with
+- Type a message and press `Enter`. If trusted MCP servers are still reading
+  their tool lists, the question waits and is sent once the tools are loaded.
+  The active turn shows `thinking...` until the reply arrives. `Esc` cancels a
+  running request or tool call; cancelling a tool call terminates that MCP
+  server process, and its tools are reloaded on the next question. `Esc` with
   no active turn leaves the panel focused state.
 - Configured MCP tools are sent with the request. When the model asks for one,
   the panel shows the server, tool, and JSON arguments and asks for

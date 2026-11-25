@@ -2324,6 +2324,165 @@ fn ai_harness_confirms_a_tool_and_returns_the_final_answer() {
 }
 
 #[test]
+fn ai_waits_for_mcp_tools_before_the_first_request() {
+    use std::collections::BTreeMap;
+    use std::time::{Duration, Instant};
+
+    if std::process::Command::new("python3")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        eprintln!("skipping AI tool readiness: python3 unavailable");
+        return;
+    }
+    let (mut app, dir) = fixture("x\n");
+    let script = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+        .join("mock_mcp.py");
+    let mcp = crate::mcp::McpServerConfig {
+        command: "python3".to_string(),
+        args: vec![script.to_string_lossy().into_owned()],
+        cwd: None,
+        env: BTreeMap::from([("MOCK_MCP_MODE".to_string(), "normal".to_string())]),
+    };
+    app.state
+        .config
+        .mcp
+        .servers
+        .insert("mock".to_string(), mcp.clone());
+    app.mcp = Some(crate::mcp::McpManager::new(
+        BTreeMap::from([("mock".to_string(), mcp)]),
+        dir.clone(),
+    ));
+    let hash = app
+        .mcp
+        .as_ref()
+        .and_then(|mcp| mcp.config_hash("mock"))
+        .expect("config hash");
+    app.mcp_trusted.insert(hash);
+    app.state.config.ai.base_url.clear();
+
+    app.dispatch(Command::AiChat).expect("ai panel");
+    app.state.ai.input = "hello".to_string();
+    app.state.ai.cursor = app.state.ai.input.chars().count();
+    app.handle_key(ratatui::crossterm::event::KeyEvent::new(
+        ratatui::crossterm::event::KeyCode::Enter,
+        ratatui::crossterm::event::KeyModifiers::NONE,
+    ));
+    assert!(app.ai_task.is_none(), "request must wait for tools");
+    assert!(app.state.ai.queued_question.is_some());
+    assert!(
+        app.state
+            .ai
+            .entries
+            .iter()
+            .any(|line| line.contains("loading"))
+    );
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline && app.state.ai.queued_question.is_some() {
+        app.pump_mcp();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(app.state.ai.queued_question.is_none());
+    assert!(
+        app.state.ai.tool_map.contains_key("mock__echo"),
+        "first request must carry the loaded MCP tools"
+    );
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline && app.ai_task.is_some() {
+        app.pump_ai();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(
+        app.state
+            .ai
+            .conversation
+            .iter()
+            .any(|message| message["role"] == "user" && message["content"] == "hello")
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn cancelling_an_ai_tool_call_stops_the_mcp_server() {
+    use crate::state::AiWaiting;
+    use std::collections::BTreeMap;
+    use std::time::{Duration, Instant};
+
+    if std::process::Command::new("python3")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        eprintln!("skipping AI cancellation: python3 unavailable");
+        return;
+    }
+    let (mut app, dir) = fixture("x\n");
+    let script = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+        .join("mock_mcp.py");
+    let mcp = crate::mcp::McpServerConfig {
+        command: "python3".to_string(),
+        args: vec![script.to_string_lossy().into_owned()],
+        cwd: None,
+        env: BTreeMap::from([("MOCK_MCP_MODE".to_string(), "normal".to_string())]),
+    };
+    app.state
+        .config
+        .mcp
+        .servers
+        .insert("mock".to_string(), mcp.clone());
+    app.mcp = Some(crate::mcp::McpManager::new(
+        BTreeMap::from([("mock".to_string(), mcp)]),
+        dir.clone(),
+    ));
+    app.mcp
+        .as_mut()
+        .expect("mcp")
+        .list_tools("mock")
+        .expect("load tools");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        app.pump_mcp();
+        if app
+            .mcp
+            .as_ref()
+            .and_then(|mcp| mcp.tools("mock"))
+            .is_some_and(|tools| !tools.is_empty())
+        {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(app.mcp.as_ref().is_some_and(|mcp| mcp.is_running("mock")));
+
+    app.dispatch(Command::AiChat).expect("ai panel");
+    app.state.ai.waiting = Some(AiWaiting {
+        id: "call-cancel".to_string(),
+        server: "mock".to_string(),
+        tool: "echo".to_string(),
+    });
+    app.handle_key(ratatui::crossterm::event::KeyEvent::new(
+        ratatui::crossterm::event::KeyCode::Esc,
+        ratatui::crossterm::event::KeyModifiers::NONE,
+    ));
+    assert!(!app.mcp.as_ref().is_some_and(|mcp| mcp.is_running("mock")));
+    assert!(app.state.ai.waiting.is_none());
+    assert!(
+        app.state
+            .ai
+            .conversation
+            .iter()
+            .any(|message| message["content"] == "Tool call cancelled.")
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn denying_an_ai_tool_call_does_not_invoke_mcp() {
     use crate::state::AiToolCall;
 

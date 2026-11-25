@@ -167,6 +167,7 @@ struct Server {
     pending: HashMap<i64, Pending>,
     queued: VecDeque<Queued>,
     tools: Vec<Tool>,
+    tools_loaded: bool,
     logs: VecDeque<String>,
 }
 
@@ -226,6 +227,12 @@ impl McpManager {
             .map(|server| server.tools.as_slice())
     }
 
+    pub fn tools_loaded(&self, server: &str) -> bool {
+        self.servers
+            .get(server)
+            .is_some_and(|server| server.tools_loaded)
+    }
+
     pub fn logs(&self, server: &str) -> Option<&VecDeque<String>> {
         self.servers.get(server).map(|server| &server.logs)
     }
@@ -236,6 +243,18 @@ impl McpManager {
 
     pub fn list_tools(&mut self, server: &str) -> Result<(), String> {
         self.request(server, "tools/list", json!({}), ReplyKind::ToolsList, None)
+    }
+
+    /// Stop a tool call by terminating the MCP server process. MCP has no
+    /// mandatory request-cancellation acknowledgement, so killing the child is
+    /// the only deterministic way to stop a tool that is already running.
+    pub fn cancel_tool_call(&mut self, server: &str) -> bool {
+        let Some(process) = self.servers.remove(server) else {
+            return false;
+        };
+        drop(process);
+        self.failed.remove(server);
+        true
     }
 
     pub fn call_tool(&mut self, server: &str, tool: &str, arguments: Value) -> Result<(), String> {
@@ -334,7 +353,13 @@ impl McpManager {
             .get(name)
             .cloned()
             .ok_or_else(|| format!("MCP {name}: no configuration"))?;
-        let mut server = spawn_server(name, &config, &self.root)?;
+        let mut server = match spawn_server(name, &config, &self.root) {
+            Ok(server) => server,
+            Err(error) => {
+                self.failed.insert(name.to_string());
+                return Err(error);
+            }
+        };
         let id = self.next_id();
         if let Err(error) = write_request(&mut server.writer, id, "initialize", initialize_params())
         {
@@ -456,6 +481,7 @@ impl McpManager {
                     let tools = parse_tools(&result);
                     if let Some(server) = self.servers.get_mut(name) {
                         server.tools = tools.clone();
+                        server.tools_loaded = true;
                     }
                     events.push(Event::Tools {
                         server: name.to_string(),
@@ -578,6 +604,7 @@ fn spawn_server(name: &str, config: &McpServerConfig, root: &Path) -> Result<Ser
         pending: HashMap::new(),
         queued: VecDeque::new(),
         tools: Vec::new(),
+        tools_loaded: false,
         logs: VecDeque::new(),
     })
 }
