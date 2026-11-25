@@ -2236,6 +2236,7 @@ fn ai_harness_confirms_a_tool_and_returns_the_final_answer() {
         env: BTreeMap::from([("MOCK_MCP_MODE".to_string(), "normal".to_string())]),
         url: None,
         allow_sampling: false,
+        auth_token_env: None,
     };
     app.state
         .config
@@ -2344,6 +2345,7 @@ fn ai_waits_for_mcp_tools_before_the_first_request() {
         env: BTreeMap::from([("MOCK_MCP_MODE".to_string(), "normal".to_string())]),
         url: None,
         allow_sampling: false,
+        auth_token_env: None,
     };
     app.state
         .config
@@ -2430,6 +2432,7 @@ fn cancelling_an_ai_tool_call_stops_the_mcp_server() {
         env: BTreeMap::from([("MOCK_MCP_MODE".to_string(), "normal".to_string())]),
         url: None,
         allow_sampling: false,
+        auth_token_env: None,
     };
     app.state
         .config
@@ -2906,6 +2909,7 @@ fn ai_tool_policy_filters_the_tool_definitions() {
         env: BTreeMap::from([("MOCK_MCP_MODE".to_string(), "normal".to_string())]),
         url: None,
         allow_sampling: false,
+        auth_token_env: None,
     };
     app.state
         .config
@@ -3213,6 +3217,7 @@ fn mcp_trust_tools_call_and_result_flow() {
         env: BTreeMap::from([("MOCK_MCP_MODE".to_string(), "normal".to_string())]),
         url: None,
         allow_sampling: false,
+        auth_token_env: None,
     };
     app.state
         .config

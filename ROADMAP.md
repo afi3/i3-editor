@@ -924,7 +924,7 @@ and no-auto-apply boundaries.
 - [x] Add MCP resource templates and pagination.
 - [x] Add an opt-in sequential objective queue.
 - [x] Add aligned Markdown tables, MCP prompt argument forms, and objective dependencies.
-- [x] Add HTTP server-initiated SSE sampling.
+- [x] Add HTTP server-initiated SSE sampling and bearer-token auth.
 - [x] Add task/nested lists, strikethrough, and persisted queue state.
 - [x] Published aarch64 macOS asset passed its SHA-256 check and reports
   `i3-editor 0.2.1`.
@@ -933,6 +933,7 @@ and no-auto-apply boundaries.
 
 - Richer Markdown extensions beyond task/nested lists and strikethrough.
 - Fully automatic cross-session queue resume.
+- MCP HTTP custom headers beyond bearer auth and Windows keyring support.
 
 Risk: MCP servers are arbitrary code and model output is untrusted. Trust hashes,
 explicit tool confirmation, capability gating, context/tool budgets, audits,

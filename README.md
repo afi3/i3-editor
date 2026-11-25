@@ -430,6 +430,7 @@ allow_sampling = true   # opt in to stdio sampling; default false
 # HTTP endpoint instead of command/args:
 [mcp.remote]
 url = "https://example.test/mcp"
+auth_token_env = "MCP_TOKEN"   # optional bearer token env
 ```
 
 - `F1` → `mcp_add` starts the wizard. Choose `filesystem`, enter a directory

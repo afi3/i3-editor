@@ -117,6 +117,7 @@ impl App {
             env: Default::default(),
             url: None,
             allow_sampling: false,
+            auth_token_env: None,
         };
         self.state
             .config

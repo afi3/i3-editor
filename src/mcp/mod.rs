@@ -36,6 +36,8 @@ pub struct McpServerConfig {
     pub url: Option<String>,
     /// Advertise MCP sampling and allow server-initiated model requests.
     pub allow_sampling: bool,
+    /// Environment variable containing a bearer token for HTTP MCP.
+    pub auth_token_env: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -242,6 +244,7 @@ enum Transport {
     Http {
         url: String,
         session: Arc<Mutex<Option<String>>>,
+        authorization: Option<String>,
     },
 }
 
@@ -489,10 +492,15 @@ impl McpManager {
         };
         match &mut server.transport {
             Transport::Stdio { writer, .. } => write_message(writer, &value),
-            Transport::Http { url, session } => {
+            Transport::Http {
+                url,
+                session,
+                authorization,
+            } => {
                 spawn_http_payload(
                     url.clone(),
                     Arc::clone(session),
+                    authorization.clone(),
                     server.sender.clone(),
                     value,
                 );
@@ -901,7 +909,11 @@ impl McpManager {
             if let Err(error) = send_notification(server, "notifications/initialized") {
                 events.push(Event::Warning(format!("MCP {name}: {error}")));
             }
-            if let Transport::Http { url, session } = &server.transport
+            if let Transport::Http {
+                url,
+                session,
+                authorization,
+            } = &server.transport
                 && self
                     .configs
                     .get(name)
@@ -910,6 +922,7 @@ impl McpManager {
                 server.http_stream = Some(spawn_http_stream(
                     url.clone(),
                     Arc::clone(session),
+                    authorization.clone(),
                     server.sender.clone(),
                 ));
             }
@@ -931,17 +944,28 @@ impl McpManager {
 
 fn start_transport(name: &str, config: &McpServerConfig, root: &Path) -> Result<Server, String> {
     if let Some(url) = config.url.as_deref().filter(|url| !url.trim().is_empty()) {
-        return Ok(spawn_http_server(url));
+        let authorization = config
+            .auth_token_env
+            .as_deref()
+            .filter(|name| !name.trim().is_empty())
+            .map(|name| {
+                std::env::var(name)
+                    .map(|token| format!("Authorization: Bearer {token}"))
+                    .map_err(|_| format!("MCP {name}: auth token environment is missing"))
+            })
+            .transpose()?;
+        return Ok(spawn_http_server(url, authorization));
     }
     spawn_server(name, config, root)
 }
 
-fn spawn_http_server(url: &str) -> Server {
+fn spawn_http_server(url: &str, authorization: Option<String>) -> Server {
     let (sender, incoming) = mpsc::channel();
     Server {
         transport: Transport::Http {
             url: url.to_string(),
             session: Arc::new(Mutex::new(None)),
+            authorization,
         },
         sender,
         incoming,
@@ -968,10 +992,15 @@ fn send_request(
     let sender = server.sender.clone();
     match &mut server.transport {
         Transport::Stdio { writer, .. } => write_request(writer, id, method, params),
-        Transport::Http { url, session } => {
+        Transport::Http {
+            url,
+            session,
+            authorization,
+        } => {
             spawn_http_request(
                 url.clone(),
                 Arc::clone(session),
+                authorization.clone(),
                 sender,
                 Some(id),
                 method,
@@ -986,10 +1015,15 @@ fn send_notification(server: &mut Server, method: &'static str) -> Result<(), St
     let sender = server.sender.clone();
     match &mut server.transport {
         Transport::Stdio { writer, .. } => write_notification(writer, method),
-        Transport::Http { url, session } => {
+        Transport::Http {
+            url,
+            session,
+            authorization,
+        } => {
             spawn_http_request(
                 url.clone(),
                 Arc::clone(session),
+                authorization.clone(),
                 sender,
                 None,
                 method,
@@ -1003,6 +1037,7 @@ fn send_notification(server: &mut Server, method: &'static str) -> Result<(), St
 fn spawn_http_request(
     url: String,
     session: Arc<Mutex<Option<String>>>,
+    authorization: Option<String>,
     sender: Sender<Incoming>,
     id: Option<i64>,
     method: &'static str,
@@ -1027,6 +1062,9 @@ fn spawn_http_request(
         let mut config = format!("url = {}\nrequest = \"POST\"\n", quote_curl(&url));
         config.push_str("header = \"Content-Type: application/json\"\n");
         config.push_str("header = \"Accept: application/json, text/event-stream\"\n");
+        if let Some(auth) = &authorization {
+            config.push_str(&format!("header = {}\n", quote_curl(auth)));
+        }
         if let Ok(session) = session.lock()
             && let Some(session) = session.as_deref()
         {
@@ -1086,6 +1124,7 @@ fn spawn_http_request(
 fn spawn_http_stream(
     url: String,
     session: Arc<Mutex<Option<String>>>,
+    authorization: Option<String>,
     sender: Sender<Incoming>,
 ) -> HttpStream {
     let cancel = Arc::new(AtomicBool::new(false));
@@ -1096,6 +1135,9 @@ fn spawn_http_stream(
         let session = session.lock().ok().and_then(|session| session.clone());
         let mut config = format!("url = {}\nrequest = \"GET\"\n", quote_curl(&url));
         config.push_str("header = \"Accept: text/event-stream\"\n");
+        if let Some(auth) = &authorization {
+            config.push_str(&format!("header = {}\n", quote_curl(auth)));
+        }
         if let Some(session) = session {
             config.push_str(&format!(
                 "header = {}\n",
@@ -1151,6 +1193,7 @@ fn spawn_http_stream(
 fn spawn_http_payload(
     url: String,
     session: Arc<Mutex<Option<String>>>,
+    authorization: Option<String>,
     sender: Sender<Incoming>,
     body: Value,
 ) {
@@ -1168,6 +1211,9 @@ fn spawn_http_payload(
         let session = session.lock().ok().and_then(|session| session.clone());
         let mut config = format!("url = {}\nrequest = \"POST\"\n", quote_curl(&url));
         config.push_str("header = \"Content-Type: application/json\"\n");
+        if let Some(auth) = &authorization {
+            config.push_str(&format!("header = {}\n", quote_curl(auth)));
+        }
         if let Some(session) = session {
             config.push_str(&format!(
                 "header = {}\n",
@@ -1624,6 +1670,7 @@ mod tests {
             env,
             url: None,
             allow_sampling: false,
+            auth_token_env: None,
         };
         McpManager::new(
             BTreeMap::from([("mock".to_string(), config)]),
@@ -1680,6 +1727,7 @@ mod tests {
             env: BTreeMap::from([("MOCK_MCP_MODE".to_string(), "sampling".to_string())]),
             url: None,
             allow_sampling: true,
+            auth_token_env: None,
         };
         let mut manager = McpManager::new(
             BTreeMap::from([("mock".to_string(), config)]),
@@ -1844,6 +1892,7 @@ mod tests {
                     env: BTreeMap::new(),
                     url: Some(format!("http://{address}/mcp")),
                     allow_sampling: false,
+                    auth_token_env: None,
                 },
             )]),
             std::env::temp_dir(),
@@ -2066,6 +2115,7 @@ mod tests {
             env: BTreeMap::new(),
             url: None,
             allow_sampling: false,
+            auth_token_env: None,
         };
         let mut manager = McpManager::new(
             BTreeMap::from([("filesystem".to_string(), config)]),
