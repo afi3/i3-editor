@@ -160,7 +160,7 @@ impl App {
                 _ => {}
             }
         }
-        let last = self.state.ai.entries.len().saturating_sub(1);
+        let last = crate::ui::ai::max_scroll(&self.state);
         match combo.code {
             KeyCode::Up => self.state.ai.scroll = self.state.ai.scroll.saturating_sub(1),
             KeyCode::Down => self.state.ai.scroll = (self.state.ai.scroll + 1).min(last),
@@ -620,6 +620,9 @@ impl App {
         }
         if call.tool == "read_file" {
             return crate::native::read_file(root, &call.arguments);
+        }
+        if call.tool == "search" {
+            return crate::native::search(root, &call.arguments);
         }
         if call.tool != "edit_file" {
             return Err(format!("unknown native tool {}", call.tool));

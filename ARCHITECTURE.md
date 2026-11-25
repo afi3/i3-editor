@@ -394,8 +394,10 @@ commands copy/clear it, and the title reports an estimated token count. MCP
 trust is still checked before a server starts. Built-in `native/read_file` and
 `native/edit_file` tools add a workspace-root boundary, a file snapshot,
 six-hex line hashes, and atomic writes; dirty open buffers are rejected and
-clean buffers reload after an edit. No harness path edits an editor buffer
-directly or applies an unconfirmed patch.
+clean buffers reload after an edit. `native/search` walks with `ignore` and
+matches per-line regexes without spawning `grep`. The AI transcript is
+pre-wrapped to the panel width and scrolled in visual rows. No harness path
+edits an editor buffer directly or applies an unconfirmed patch.
 
 **File operations follow the focused surface.** `duplicate_file`, `copy_path`,
 and `reveal_in_terminal` take the explorer row when the explorer has focus;

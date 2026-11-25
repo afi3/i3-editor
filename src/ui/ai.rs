@@ -39,27 +39,11 @@ pub fn render(frame: &mut Frame, state: &AppState) {
     }
     let input_row = inner.y.saturating_add(inner.height.saturating_sub(1));
     let transcript_height = inner.height.saturating_sub(1);
-    let last = panel.entries.len().saturating_sub(1);
-    let scroll = panel.scroll.min(last);
-    let mut in_code = false;
-    for line in panel.entries.iter().take(scroll) {
-        if line.starts_with("```") {
-            in_code = !in_code;
-        }
-    }
-    let rows: Vec<Line> = panel
-        .entries
-        .iter()
-        .skip(scroll)
-        .take(transcript_height as usize)
-        .map(|line| {
-            let style = line_style(state, line, &mut in_code);
-            let text = clip(line, panel.scroll_x);
-            Line::from(Span::styled(text, style))
-        })
-        .collect();
+    let rows = build_rows(state);
+    let max_scroll = rows.len().saturating_sub(transcript_height as usize);
+    let scroll = panel.scroll.min(max_scroll) as u16;
     frame.render_widget(
-        Paragraph::new(rows),
+        Paragraph::new(rows).scroll((scroll, 0)),
         Rect::new(inner.x, inner.y, inner.width, transcript_height),
     );
 
@@ -91,6 +75,62 @@ pub fn render(frame: &mut Frame, state: &AppState) {
             .saturating_add(cursor as u16)
             .min(inner.x.saturating_add(inner.width).saturating_sub(1));
         frame.set_cursor_position((x, input_row));
+    }
+}
+
+pub(crate) fn max_scroll(state: &AppState) -> usize {
+    let height = state.ui.ai.height.saturating_sub(3) as usize;
+    build_rows(state).len().saturating_sub(height)
+}
+
+fn build_rows(state: &AppState) -> Vec<Line<'static>> {
+    let width = state.ui.ai.width.saturating_sub(2) as usize;
+    if width == 0 {
+        return Vec::new();
+    }
+    let mut rows = Vec::new();
+    let mut in_code = false;
+    for entry in &state.ai.entries {
+        push_entry_rows(&mut rows, state, entry, width, &mut in_code);
+    }
+    rows
+}
+
+fn push_entry_rows(
+    rows: &mut Vec<Line<'static>>,
+    state: &AppState,
+    entry: &str,
+    width: usize,
+    in_code: &mut bool,
+) {
+    for raw in entry.split('\n') {
+        let style = line_style(state, raw, in_code);
+        let text = clip(raw, state.ai.scroll_x);
+        push_wrapped(rows, &text, width, style);
+    }
+}
+
+fn push_wrapped(rows: &mut Vec<Line<'static>>, text: &str, width: usize, style: Style) {
+    if text.is_empty() {
+        rows.push(Line::from(""));
+        return;
+    }
+    let mut current = String::new();
+    let mut used = 0usize;
+    for ch in text.chars() {
+        let cells = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+        if used > 0 && used + cells > width {
+            rows.push(Line::from(Span::styled(
+                std::mem::take(&mut current),
+                style,
+            )));
+            used = 0;
+        }
+        current.push(ch);
+        used += cells;
+    }
+    if !current.is_empty() {
+        rows.push(Line::from(Span::styled(current, style)));
     }
 }
 

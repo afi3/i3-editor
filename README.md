@@ -511,7 +511,8 @@ panel_width = 20                 # percent of terminal width
   token, secret, password, authorization, or api_key are redacted.
 - The panel title shows estimated conversation tokens against the configured
   budget. Headings, fenced code, and user turns get basic Markdown styling;
-  `Ctrl+Left`/`Ctrl+Right` scrolls long transcript lines horizontally.
+  long transcript lines wrap inside the panel, and `Ctrl+Left`/`Ctrl+Right`
+  scrolls horizontally when needed.
 - The default provider is OpenRouter (`https://openrouter.ai/api/v1`,
   `openai/gpt-4o-mini`) with `OPENROUTER_API_KEY`. Put the key in the
   environment for normal use; `api_key` is available only as an explicit local
@@ -524,6 +525,10 @@ The harness also exposes two built-in tools, independent of MCP:
 - `native/read_file {"path": "...", "start_line": 1, "end_line": 400}` returns
   `path`, `total_lines`, a file `snapshot`, and lines shaped like
   `42:a3f1c9|    let value = 1;`.
+- `native/search {"query": "regex", "glob": "src/**/*.rs"}` walks the workspace
+  with `ignore` (honoring `.gitignore`) and returns matching files with their
+  snapshot and hashed lines. It supports `show_hidden`, `case_sensitive`, and
+  `max_results`; no external `grep` process is started.
 - `native/edit_file` takes `path`, the `snapshot`, and an `edits` array of
   `{line, hash, text}`. Every line hash and the snapshot are validated before
   one atomic write; edits apply from bottom to top. Empty `text` deletes the
@@ -534,10 +539,10 @@ The harness also exposes two built-in tools, independent of MCP:
   successful edit.
 - The tools use the same `allowed_tools`/`denied_tools` policy, confirmation,
   capability labels (`read-only`/`destructive`), and audit log as MCP tools.
-  `native/read_file` and `native/edit_file` are visible even when no MCP server
-  is configured.
+  `native/read_file`, `native/search`, and `native/edit_file` are visible even
+  when no MCP server is configured.
 
-Search and post-edit `cargo check` are not part of this slice.
+Post-edit `cargo check` verification is not part of this slice.
 - The API key is read from `api_key_env`; leave it empty for a local
   OpenAI-compatible server without authentication.
 - Requests are non-streaming and do not include the active file unless you paste

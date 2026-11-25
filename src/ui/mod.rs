@@ -622,6 +622,18 @@ mod tests {
     }
 
     #[test]
+    fn wraps_long_ai_transcript_lines_without_hiding_text() {
+        let (mut state, dir) = state("x\n");
+        state.ai.visible = true;
+        state.ai.focused = true;
+        state.ai.entries.push("w".repeat(200));
+        let screen = draw(&mut state, 100, 24);
+        let count = screen.matches('w').count();
+        assert!(count >= 200, "count {count}\n{screen}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
     fn stays_inside_a_tiny_terminal() {
         let (mut state, dir) = state("x\n");
         let _screen = draw(&mut state, 20, 6);

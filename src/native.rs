@@ -7,16 +7,20 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use globset::{Glob, GlobMatcher};
+use ignore::WalkBuilder;
+use regex::RegexBuilder;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 pub const SERVER: &str = "native";
 pub const MAX_FILE_BYTES: u64 = 16 << 20;
 pub const READ_LINES: usize = 400;
+const SEARCH_RESULTS: usize = 200;
 
 pub fn capability(tool: &str) -> &'static str {
     match tool {
-        "read_file" => "read-only",
+        "read_file" | "search" => "read-only",
         "edit_file" => "destructive",
         _ => "unknown",
     }
@@ -26,6 +30,7 @@ pub fn description(tool: &str) -> &'static str {
     match tool {
         "read_file" => "Read a file with a snapshot and per-line hashes",
         "edit_file" => "Replace lines validated by snapshot and line hashes",
+        "search" => "Search project files with ignore and regex",
         _ => "Native tool",
     }
 }
@@ -34,6 +39,7 @@ pub fn tools() -> Vec<(&'static str, Value)> {
     vec![
         ("read_file", read_file_schema()),
         ("edit_file", edit_file_schema()),
+        ("search", search_schema()),
     ]
 }
 
@@ -70,6 +76,133 @@ fn edit_file_schema() -> Value {
         },
         "required": ["path", "snapshot", "edits"]
     })
+}
+
+fn search_schema() -> Value {
+    serde_json::json!({
+        "type": "object",
+        "properties": {
+            "query": {"type": "string", "description": "Regex searched per line"},
+            "glob": {"type": "string", "description": "Optional path glob, e.g. src/**/*.rs"},
+            "show_hidden": {"type": "boolean", "description": "Include hidden and ignored files"},
+            "case_sensitive": {"type": "boolean", "description": "Default true"},
+            "max_results": {"type": "integer", "description": "1..=1000, default 200"}
+        },
+        "required": ["query"]
+    })
+}
+
+fn append_matches(
+    output: &mut String,
+    relative: &str,
+    text: &str,
+    regex: &regex::Regex,
+    max_results: usize,
+    total: &mut usize,
+) -> bool {
+    let mut header = false;
+    for (index, line) in line_contents(text).iter().enumerate() {
+        if !regex.is_match(line) {
+            continue;
+        }
+        if !header {
+            output.push_str(&format!("path: {relative}\nsnapshot: {}\n", snapshot(text)));
+            header = true;
+        }
+        output.push_str(&format!("{}:{}|{}\n", index + 1, line_hash(line), line));
+        *total += 1;
+        if *total >= max_results {
+            return true;
+        }
+    }
+    false
+}
+
+pub fn search(root: &Path, arguments: &Value) -> Result<String, String> {
+    let query = string_arg(arguments, "query")?;
+    let case_sensitive = arguments
+        .get("case_sensitive")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    let regex = RegexBuilder::new(query)
+        .case_insensitive(!case_sensitive)
+        .build()
+        .map_err(|error| format!("invalid regex: {error}"))?;
+    let show_hidden = arguments
+        .get("show_hidden")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let max_results = integer_arg(arguments, "max_results")
+        .unwrap_or(SEARCH_RESULTS)
+        .clamp(1, 1_000);
+    let glob: Option<GlobMatcher> = arguments
+        .get("glob")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .map(|value| {
+            Glob::new(value)
+                .map(|glob| glob.compile_matcher())
+                .map_err(|error| format!("invalid glob: {error}"))
+        })
+        .transpose()?;
+    let root = fs::canonicalize(root).map_err(|error| format!("workspace root: {error}"))?;
+    let walker = WalkBuilder::new(&root)
+        .hidden(!show_hidden)
+        .git_ignore(!show_hidden)
+        .git_global(!show_hidden)
+        .git_exclude(!show_hidden)
+        .ignore(!show_hidden)
+        .require_git(false)
+        .build();
+    let mut output = String::new();
+    let mut total = 0usize;
+    let mut truncated = false;
+    'walk: for entry in walker.flatten() {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let Ok(metadata) = std::fs::metadata(path) else {
+            continue;
+        };
+        if metadata.len() > MAX_FILE_BYTES {
+            continue;
+        }
+        let relative = path
+            .strip_prefix(&root)
+            .unwrap_or(path)
+            .to_string_lossy()
+            .into_owned();
+        if let Some(glob) = &glob
+            && !glob.is_match(&relative)
+        {
+            continue;
+        }
+        let Ok(bytes) = std::fs::read(path) else {
+            continue;
+        };
+        let Ok(text) = String::from_utf8(bytes) else {
+            continue;
+        };
+        if append_matches(
+            &mut output,
+            &relative,
+            &text,
+            &regex,
+            max_results,
+            &mut total,
+        ) {
+            truncated = true;
+            break 'walk;
+        }
+    }
+    if total == 0 {
+        return Ok("no matches".to_string());
+    }
+    if truncated {
+        output.push_str("[truncated at max_results]\n");
+    }
+    Ok(output)
 }
 
 pub fn resolve_path(root: &Path, raw: &str) -> Result<PathBuf, String> {
@@ -315,6 +448,32 @@ mod tests {
         edit_file(&root, &edit).expect("edit");
         let text = fs::read_to_string(&path).expect("text");
         assert_eq!(text, "fn main() {}\n    println!(\"hi\");\n}\n");
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn search_honors_gitignore_and_returns_hashes() {
+        let root = std::env::temp_dir().join(format!(
+            "i3-native-search-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        fs::create_dir_all(root.join("src")).expect("src");
+        fs::write(root.join(".gitignore"), "ignored.txt\n").expect("ignore");
+        fs::write(root.join("src/main.rs"), "needle\n").expect("main");
+        fs::write(root.join("ignored.txt"), "needle\n").expect("ignored");
+        let output = search(
+            &root,
+            &serde_json::json!({"query": "needle", "glob": "src/**/*.rs"}),
+        )
+        .expect("search");
+        assert!(output.contains("path: src/main.rs"), "{output}");
+        assert!(!output.contains("ignored.txt"), "{output}");
+        assert!(output.contains("1:"), "{output}");
+        assert!(output.contains("|needle"), "{output}");
+        let ignored = search(&root, &serde_json::json!({"query": "needle"})).expect("search all");
+        assert!(ignored.contains("src/main.rs"), "{ignored}");
+        assert!(!ignored.contains("ignored.txt"), "{ignored}");
         std::fs::remove_dir_all(root).ok();
     }
 

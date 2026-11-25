@@ -910,8 +910,9 @@ user's explicit choice.
   allow/deny policy, and decisions/results are written to a redacted audit log.
 - Retryable provider failures use bounded backoff, and the panel supports
   resize, clear, copy, token display, and horizontal transcript scrolling.
-- Native hashline tools provide snapshot/hash-validated reads and atomic edits;
-  search and post-edit verification follow in later slices.
+- Native hashline tools provide snapshot/hash-validated reads, atomic edits,
+  and an `ignore`/`regex` search without subprocesses; post-edit verification
+  follows in a later slice.
 - API failures, 429 responses, malformed tool calls, MCP timeouts, and server
   crashes stop the turn with a visible error.
 - `Esc` cancels the active turn; cancelling an active tool call terminates that
@@ -934,6 +935,7 @@ user's explicit choice.
 - [x] Bound prompt context and tool output; add tool policy and audit logging.
 - [x] Retry transient provider failures with bounded backoff; finish panel controls.
 - [x] Add native hashline `read_file`/`edit_file` tools with policy, confirmation, audit, and dirty-buffer protection.
+- [x] Add native `search` using `ignore` + `regex`, and wrap long AI panel text.
 
 ### Acceptance
 
@@ -968,4 +970,4 @@ cargo clippy --all-targets --all-features
 cargo run -- --dump-keymap
 ```
 
-Last recorded run: `cargo test` → 425 passed (418 unit + 6 CLI process + 1 PTY smoke), `cargo clippy` → 0 warnings.
+Last recorded run: `cargo test` → 427 passed (420 unit + 6 CLI process + 1 PTY smoke), `cargo clippy` → 0 warnings.
