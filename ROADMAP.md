@@ -946,7 +946,7 @@ user's explicit choice.
 - [x] Add HTTP MCP transport with JSON/SSE responses and session headers.
 - [x] Add MCP resources and prompts list/read menus.
 - [x] Add consent-gated MCP sampling over stdio.
-- [x] Add opt-in read-only background agents with automatic destructive-tool refusal.
+- [x] Add opt-in background agents with automatic read-only tools and approval-gated writes.
 
 ### Acceptance
 
@@ -981,4 +981,4 @@ cargo clippy --all-targets --all-features
 cargo run -- --dump-keymap
 ```
 
-Last recorded run: `cargo test` → 440 passed (433 unit + 6 CLI process + 1 PTY smoke), `cargo clippy` → 0 warnings.
+Last recorded run: `cargo test` → 441 passed (434 unit + 6 CLI process + 1 PTY smoke), `cargo clippy` → 0 warnings.

@@ -2803,6 +2803,68 @@ fn background_agent_auto_runs_read_only_tools_and_finishes() {
 }
 
 #[test]
+fn background_agent_pauses_for_a_write_and_resumes_on_approval() {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::time::{Duration, Instant};
+
+    let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
+    let address = listener.local_addr().expect("address");
+    let server = std::thread::spawn(move || {
+        let bodies = [
+            r#"{"choices":[{"message":{"role":"assistant","content":null,"tool_calls":[{"id":"write-1","type":"function","function":{"name":"native__write_file","arguments":"{\"path\":\"new.txt\",\"content\":\"created\\n\"}"}}]}}]}"#,
+            r#"{"choices":[{"message":{"content":"write done"}}]}"#,
+        ];
+        for body in bodies {
+            let (mut stream, _) = listener.accept().expect("accept");
+            let mut request = [0u8; 8192];
+            let _ = stream.read(&mut request).expect("read");
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            stream.write_all(response.as_bytes()).expect("write");
+        }
+    });
+    let (mut app, dir) = fixture("x\n");
+    let mut config = crate::ai::test_config(format!("http://{address}/v1"));
+    config.stream = false;
+    config.background_agents = true;
+    app.state.config.ai = config;
+    app.dispatch(Command::AiBackground)
+        .expect("background prompt");
+    let InputMode::Prompt(prompt) = &mut app.state.mode else {
+        panic!("background prompt missing")
+    };
+    prompt.fields[0] = "create a file".to_string();
+    app.submit_prompt().expect("start background");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline && app.state.ai.pending.is_empty() {
+        app.pump_ai();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(app.background_agent);
+    assert!(app.state.ai.pending.front().is_some());
+    assert!(!dir.join("new.txt").exists());
+    app.dispatch(Command::AiPanel).expect("open panel");
+    app.handle_key(ratatui::crossterm::event::KeyEvent::new(
+        ratatui::crossterm::event::KeyCode::Char('y'),
+        ratatui::crossterm::event::KeyModifiers::NONE,
+    ));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline && app.background_agent {
+        app.pump_ai();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(
+        std::fs::read_to_string(dir.join("new.txt")).expect("written file"),
+        "created\n"
+    );
+    server.join().expect("server");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn ai_panel_commands_copy_clear_resize_and_scroll() {
     let (mut app, dir) = fixture("x\n");
     app.dispatch(Command::AiChat).expect("ai panel");

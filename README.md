@@ -584,8 +584,8 @@ same turn. Cancelling the AI turn kills a running check; non-Rust edits skip it.
   not attached unless you paste it into the prompt. Context indexing and
   automatic edits are not part of this slice.
 - `ai_background` starts a background agent after `background_agents = true`.
-  It runs only read-only native/MCP tools automatically; the first write or
-  destructive tool stops the agent and is recorded as blocked. It never opens,
+  Read-only native/MCP tools run automatically; a write or destructive tool
+  pauses the agent for explicit `y`/`n` approval in the AI panel. It never opens,
   writes, or applies a file implicitly.
 - With `persist_history = true`, the transcript and conversation are saved to
   `<config>/i3-editor/ai_history.json` and restored at the next start.

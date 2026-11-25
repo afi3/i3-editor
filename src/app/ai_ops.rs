@@ -284,7 +284,11 @@ impl App {
             self.notify("enable [ai] background_agents first");
             return;
         }
-        if self.state.ai.busy || self.ai_task.is_some() || self.ai_stream.is_some() {
+        if self.background_agent
+            || self.state.ai.busy
+            || self.ai_task.is_some()
+            || self.ai_stream.is_some()
+        {
             self.notify("an AI turn is already running");
             return;
         }
@@ -319,36 +323,48 @@ impl App {
             self.finish_background();
             return;
         };
-        if call.capability != "read-only"
-            || !tool_allowed(&self.state.config.ai, &call.server, &call.tool)
-        {
-            let pending_calls: Vec<AiToolCall> = self.state.ai.pending.drain(..).collect();
-            for pending in pending_calls {
-                super::audit::blocked(
-                    &self.state,
-                    &pending.id,
-                    &pending.server,
-                    &pending.tool,
-                    &pending.arguments,
-                    "background agent read-only policy",
-                );
-                self.state.ai.conversation.push(json!({
-                    "role": "tool",
-                    "tool_call_id": pending.id,
-                    "content": "Blocked: background agents may only run read-only tools."
-                }));
-                self.state.ai.entries.push(format!(
-                    "[background] blocked {}/{} [{}]",
-                    pending.server, pending.tool, pending.capability
-                ));
-            }
-            self.background_agent = false;
+        if !tool_allowed(&self.state.config.ai, &call.server, &call.tool) {
+            self.stop_background_with_error("background agent tool policy blocked the request");
+            return;
+        }
+        if call.capability != "read-only" {
             self.state.ai.busy = false;
-            self.notify("background agent stopped at a non-read-only tool");
-            self.save_ai_history();
+            self.state.ai.entries.push(format!(
+                "Approve background {}/{} [{}]? [y] yes [n] no",
+                call.server, call.tool, call.capability
+            ));
+            self.notify("background agent waiting for tool approval");
+            self.dirty = true;
             return;
         }
         self.allow_ai_tool();
+    }
+
+    fn stop_background_with_error(&mut self, message: &str) {
+        let pending_calls: Vec<AiToolCall> = self.state.ai.pending.drain(..).collect();
+        for pending in pending_calls {
+            super::audit::blocked(
+                &self.state,
+                &pending.id,
+                &pending.server,
+                &pending.tool,
+                &pending.arguments,
+                "background agent policy",
+            );
+            self.state.ai.conversation.push(json!({
+                "role": "tool",
+                "tool_call_id": pending.id,
+                "content": message
+            }));
+        }
+        self.background_agent = false;
+        self.state.ai.busy = false;
+        self.state
+            .ai
+            .entries
+            .push(format!("[background] stopped: {message}"));
+        self.notify(message);
+        self.save_ai_history();
     }
 
     fn finish_background(&mut self) {
@@ -437,6 +453,10 @@ impl App {
     }
 
     fn submit_panel_input(&mut self) {
+        if self.background_agent {
+            self.notify("background agent is active; approve or deny its pending tool");
+            return;
+        }
         if self.state.ai.busy {
             self.notify("AI request is still running");
             return;
@@ -1077,6 +1097,13 @@ impl App {
             .ai
             .entries
             .push("[tool] denied by user".to_string());
+        if self.background_agent {
+            self.background_agent = false;
+            self.state
+                .ai
+                .entries
+                .push("[background] stopped after denial".to_string());
+        }
         self.state.ai.busy = false;
         self.save_ai_history();
     }
