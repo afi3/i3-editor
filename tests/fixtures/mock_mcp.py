@@ -54,6 +54,17 @@ for raw in sys.stdin:
     elif method == "notifications/initialized":
         continue
     elif method == "tools/list":
+        if MODE == "oversized":
+            big = "x" * (8 * 1024 * 1024 + 100)
+            sys.stdout.write(
+                '{"jsonrpc":"2.0","id":'
+                + str(request_id)
+                + ',"result":{"tools":[{"name":"big","description":"'
+                + big
+                + '"}]}}\n'
+            )
+            sys.stdout.flush()
+            continue
         if MODE == "malformed":
             sys.stdout.write("this is not json\n")
             sys.stdout.flush()

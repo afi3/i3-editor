@@ -148,6 +148,11 @@ impl App {
             return;
         };
         self.mcp_trusted.insert(hash);
+        if let Err(error) = crate::config::save_mcp_trust(&self.mcp_trusted) {
+            self.notify(format!(
+                "MCP trust applied for this session, not saved: {error}"
+            ));
+        }
         self.launch_mcp(&server);
     }
 
@@ -166,6 +171,10 @@ impl App {
         let Some(server) = prompt.mcp_server else {
             return;
         };
+        if tool == "logs" {
+            self.show_mcp_logs(&server);
+            return;
+        }
         let mut args = PromptState::new(PromptKind::McpArgs);
         args.mcp_server = Some(server);
         args.mcp_tool = Some(tool);
@@ -262,6 +271,25 @@ impl App {
         self.fill_mcp_tools(&mut prompt);
         self.state.mode = InputMode::Prompt(prompt);
         self.notify(format!("starting MCP {server}"));
+    }
+
+    fn show_mcp_logs(&mut self, server: &str) {
+        let lines = self
+            .mcp
+            .as_ref()
+            .and_then(|mcp| mcp.logs(server))
+            .filter(|logs| !logs.is_empty())
+            .map(|logs| {
+                let mut lines = vec![format!("MCP logs: {server}"), String::new()];
+                lines.extend(logs.iter().cloned());
+                lines.push(String::new());
+                lines.push("Esc or q closes this overlay".to_string());
+                lines
+            })
+            .unwrap_or_else(|| vec![format!("MCP logs: {server}"), "no logs".to_string()]);
+        self.state.mcp_view = Some(HelpView { lines, scroll: 0 });
+        self.state.completions = None;
+        self.state.hover = None;
     }
 
     fn show_mcp_result(

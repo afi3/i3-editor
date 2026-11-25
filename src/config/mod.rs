@@ -4,7 +4,7 @@
 //! A broken section is replaced by its default and reported, so a typo never
 //! prevents the editor from starting.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -345,6 +345,65 @@ fn write_managed_lsp(managed: &LspConfig) -> std::io::Result<()> {
         return Err(std::io::Error::other("no config directory"));
     };
     let text = toml::to_string(managed).map_err(std::io::Error::other)?;
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent)?;
+    }
+    let temporary = path.with_extension("toml.tmp");
+    std::fs::write(&temporary, text)?;
+    std::fs::rename(&temporary, path)
+}
+
+#[derive(Default, Deserialize, Serialize)]
+struct McpTrustFile {
+    #[serde(default)]
+    trusted: Vec<String>,
+}
+
+pub fn mcp_trust_path() -> Option<PathBuf> {
+    config_dir().map(|dir| dir.join("mcp_trust.toml"))
+}
+
+pub fn load_mcp_trust() -> (HashSet<String>, Vec<String>) {
+    let Some(path) = mcp_trust_path() else {
+        return (HashSet::new(), Vec::new());
+    };
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return (HashSet::new(), Vec::new());
+        }
+        Err(error) => {
+            return (
+                HashSet::new(),
+                vec![format!("cannot read {}: {error}", path.display())],
+            );
+        }
+    };
+    match toml::from_str::<McpTrustFile>(&text) {
+        Ok(file) => (file.trusted.into_iter().collect(), Vec::new()),
+        Err(error) => (
+            HashSet::new(),
+            vec![format!(
+                "{} is not valid MCP trust TOML: {error}",
+                path.display()
+            )],
+        ),
+    }
+}
+
+fn render_mcp_trust(trusted: &HashSet<String>) -> String {
+    let mut values: Vec<String> = trusted.iter().cloned().collect();
+    values.sort_unstable();
+    toml::to_string(&McpTrustFile { trusted: values }).unwrap_or_default()
+}
+
+pub fn save_mcp_trust(trusted: &HashSet<String>) -> std::io::Result<()> {
+    let Some(path) = mcp_trust_path() else {
+        return Err(std::io::Error::other("no config directory"));
+    };
+    let text = render_mcp_trust(trusted);
     if let Some(parent) = path.parent()
         && !parent.as_os_str().is_empty()
     {
@@ -938,6 +997,14 @@ mod strict_tests {
         assert!(filename_matches("*.Dockerfile", "app.Dockerfile"));
         assert!(filename_matches("Containerfile", "containerfile"));
         assert!(!filename_matches("Dockerfile.*", "DockerfileX"));
+    }
+
+    #[test]
+    fn mcp_trust_config_round_trips() {
+        let trusted: HashSet<String> = ["hash-b".to_string(), "hash-a".to_string()].into();
+        let text = render_mcp_trust(&trusted);
+        let file: McpTrustFile = toml::from_str(&text).expect("parse");
+        assert_eq!(file.trusted.into_iter().collect::<HashSet<_>>(), trusted);
     }
 
     #[test]

@@ -363,9 +363,9 @@ JSON-RPC messages; `App::pump_mcp` drains them on the UI thread. `initialize`
 precedes `tools/list` and `tools/call`; pending requests carry timeouts, stderr
 is kept in a bounded per-server log, and a crashed server is removed once.
 Servers start only after the palette trust flow records the hash of command,
-args, cwd, and env for the session. Tool arguments are JSON, every call has a
-confirmation prompt, and results render in a read-only overlay with no automatic
-buffer or shell mutation.
+args, cwd, and env in `mcp_trust.toml`; a changed config prompts again. Tool
+arguments are JSON, every call has a confirmation prompt, and results and stderr
+logs render in read-only overlays with no automatic buffer or shell mutation.
 
 **File operations follow the focused surface.** `duplicate_file`, `copy_path`,
 and `reveal_in_terminal` take the explorer row when the explorer has focus;

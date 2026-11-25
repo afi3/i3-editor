@@ -230,6 +230,8 @@ impl App {
         };
         state.warnings.extend(key_warnings);
         state.warnings.extend(theme_warnings);
+        let (mcp_trusted, trust_warnings) = crate::config::load_mcp_trust();
+        state.warnings.extend(trust_warnings);
         if let Some(message) = capability_warning(enhanced) {
             state.warnings.insert(0, message);
         }
@@ -256,7 +258,7 @@ impl App {
             last_swap: std::time::Instant::now(),
             lsp: None,
             mcp: None,
-            mcp_trusted: std::collections::HashSet::new(),
+            mcp_trusted,
             plugins: None,
             block_anchor: None,
             git_status_entries: Vec::new(),

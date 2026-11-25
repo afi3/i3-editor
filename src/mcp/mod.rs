@@ -115,6 +115,8 @@ pub struct McpManager {
     servers: HashMap<String, Server>,
     failed: HashSet<String>,
     next_id: i64,
+    request_timeout: Duration,
+    initialize_timeout: Duration,
 }
 
 impl McpManager {
@@ -125,6 +127,8 @@ impl McpManager {
             servers: HashMap::new(),
             failed: HashSet::new(),
             next_id: 0,
+            request_timeout: REQUEST_TIMEOUT,
+            initialize_timeout: INITIALIZE_TIMEOUT,
         }
     }
 
@@ -170,6 +174,12 @@ impl McpManager {
             ReplyKind::CallTool,
             Some(tool.to_string()),
         )
+    }
+
+    #[cfg(test)]
+    fn set_timeouts(&mut self, request: Duration, initialize: Duration) {
+        self.request_timeout = request;
+        self.initialize_timeout = initialize;
     }
 
     pub fn restart(&mut self, configs: BTreeMap<String, McpServerConfig>, root: PathBuf) {
@@ -322,9 +332,9 @@ impl McpManager {
         if let Some(server) = self.servers.get_mut(name) {
             server.pending.retain(|_, pending| {
                 let timeout = if pending.kind == ReplyKind::Initialize {
-                    INITIALIZE_TIMEOUT
+                    self.initialize_timeout
                 } else {
-                    REQUEST_TIMEOUT
+                    self.request_timeout
                 };
                 let keep = now.duration_since(pending.sent) <= timeout;
                 if !keep {
@@ -716,6 +726,40 @@ mod tests {
         assert!(manager.failed("mock"));
         assert!(events.iter().any(
             |event| matches!(event, Event::Warning(message) if message.contains("server stopped"))
+        ));
+    }
+    #[test]
+    fn silent_server_times_out() {
+        if !python_available() {
+            eprintln!("skipping MCP test: python3 unavailable");
+            return;
+        }
+        let mut manager = mock("silent");
+        manager.set_timeouts(Duration::from_millis(50), Duration::from_millis(50));
+        manager.list_tools("mock").expect("start server");
+        let events = wait_for(
+            &mut manager,
+            |event| matches!(event, Event::Warning(message) if message.contains("timed out")),
+        );
+        assert!(events.iter().any(
+            |event| matches!(event, Event::Warning(message) if message.contains("timed out"))
+        ));
+    }
+
+    #[test]
+    fn oversized_server_output_is_reported() {
+        if !python_available() {
+            eprintln!("skipping MCP test: python3 unavailable");
+            return;
+        }
+        let mut manager = mock("oversized");
+        manager.list_tools("mock").expect("list tools");
+        let events = wait_for(
+            &mut manager,
+            |event| matches!(event, Event::Warning(message) if message.contains("too large")),
+        );
+        assert!(events.iter().any(
+            |event| matches!(event, Event::Warning(message) if message.contains("too large"))
         ));
     }
 }
