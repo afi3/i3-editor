@@ -914,8 +914,10 @@ and no-auto-apply boundaries.
   request handling are covered by mock tests.
 - [x] No harness path applies an unconfirmed write or edits a buffer implicitly.
 - [x] Background agents require approval before any destructive tool.
-- [x] Release version and tag are `0.2.1` / `v0.2.1`; four platform assets are
-  produced by the release workflow.
+- [x] Release version and tag are `0.2.1` / `v0.2.1`; the release workflow
+  published four platform assets plus checksums (run `45714031032`).
+- [x] Published aarch64 macOS asset passed its SHA-256 check and reports
+  `i3-editor 0.2.1`.
 
 ### Deferred to later v0.2.x
 
