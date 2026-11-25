@@ -175,10 +175,26 @@ impl App {
             self.show_mcp_logs(&server);
             return;
         }
+        let Some(tool_def) = self
+            .mcp
+            .as_ref()
+            .and_then(|mcp| mcp.tools(&server))
+            .and_then(|tools| tools.iter().find(|candidate| candidate.name == tool))
+            .cloned()
+        else {
+            self.notify(format!("MCP {server}: tool {tool} disappeared"));
+            return;
+        };
+        let fields = tool_def.arguments();
+        let values: Vec<String> = fields
+            .iter()
+            .map(|field| self.prefill_mcp_arg(&tool_def.name, field))
+            .collect();
         let mut args = PromptState::new(PromptKind::McpArgs);
         args.mcp_server = Some(server);
         args.mcp_tool = Some(tool);
-        args.set_input("{}");
+        args.mcp_fields = fields;
+        args.fields = values;
         self.state.mode = InputMode::Prompt(args);
     }
 
@@ -189,16 +205,24 @@ impl App {
         let Some(tool) = prompt.mcp_tool.clone() else {
             return;
         };
-        let text = prompt.fields.first().cloned().unwrap_or_default();
-        if let Err(error) = serde_json::from_str::<Value>(&text) {
-            self.notify(format!("invalid JSON arguments: {error}"));
-            let mut retry = PromptState::new(PromptKind::McpArgs);
-            retry.mcp_server = Some(server);
-            retry.mcp_tool = Some(tool);
-            retry.set_input(text);
-            self.state.mode = InputMode::Prompt(retry);
-            return;
-        }
+        let value = match build_mcp_arguments(
+            &prompt.mcp_fields,
+            &prompt.fields,
+            &self.state.explorer.root,
+        ) {
+            Ok(value) => value,
+            Err(error) => {
+                self.notify(error);
+                let mut retry = PromptState::new(PromptKind::McpArgs);
+                retry.mcp_server = Some(server);
+                retry.mcp_tool = Some(tool);
+                retry.mcp_fields = prompt.mcp_fields;
+                retry.fields = prompt.fields;
+                self.state.mode = InputMode::Prompt(retry);
+                return;
+            }
+        };
+        let text = serde_json::to_string(&value).unwrap_or_else(|_| "{}".to_string());
         let mut confirm = PromptState::new(PromptKind::McpConfirm);
         confirm.mcp_server = Some(server);
         confirm.mcp_tool = Some(tool);
@@ -228,6 +252,29 @@ impl App {
             self.notify(error);
         } else {
             self.notify(format!("calling {server}/{tool}"));
+        }
+    }
+
+    pub(crate) fn prefill_mcp_arg(&self, tool: &str, arg: &crate::mcp::ToolArg) -> String {
+        use crate::mcp::ArgKind;
+        if matches!(arg.kind, ArgKind::String)
+            && (arg.name == "path" || arg.name.ends_with("_path") || arg.name == "file")
+        {
+            let root = &self.state.explorer.root;
+            let active = self
+                .state
+                .active_document()
+                .and_then(|document| document.path.clone());
+            let path = if tool.starts_with("read") || tool.contains("info") {
+                active.unwrap_or_else(|| root.clone())
+            } else {
+                root.clone()
+            };
+            return path.to_string_lossy().into_owned();
+        }
+        match &arg.kind {
+            ArgKind::Enum(values) => values.first().cloned().unwrap_or_default(),
+            _ => String::new(),
         }
     }
 
@@ -320,5 +367,88 @@ impl App {
         self.state.mcp_view = Some(HelpView { lines, scroll: 0 });
         self.state.completions = None;
         self.state.hover = None;
+    }
+}
+
+fn build_mcp_arguments(
+    fields: &[crate::mcp::ToolArg],
+    values: &[String],
+    root: &std::path::Path,
+) -> Result<Value, String> {
+    use crate::mcp::ArgKind;
+    let mut object = serde_json::Map::new();
+    for (field, raw) in fields.iter().zip(values.iter()) {
+        let raw = raw.trim();
+        if raw.is_empty() {
+            if field.required {
+                return Err(format!("{} is required", field.name));
+            }
+            continue;
+        }
+        let value = match &field.kind {
+            ArgKind::String | ArgKind::Enum(_) => {
+                if (field.name == "path" || field.name.ends_with("_path") || field.name == "file")
+                    && !std::path::Path::new(raw).is_absolute()
+                {
+                    Value::String(root.join(raw).to_string_lossy().into_owned())
+                } else {
+                    Value::String(raw.to_string())
+                }
+            }
+            ArgKind::Integer => raw
+                .parse::<i64>()
+                .map(Value::from)
+                .map_err(|_| format!("{} must be an integer", field.name))?,
+            ArgKind::Number => raw
+                .parse::<f64>()
+                .ok()
+                .and_then(serde_json::Number::from_f64)
+                .map(Value::Number)
+                .ok_or_else(|| format!("{} must be a number", field.name))?,
+            ArgKind::Boolean => match raw.to_ascii_lowercase().as_str() {
+                "true" | "1" | "yes" => Value::Bool(true),
+                "false" | "0" | "no" => Value::Bool(false),
+                _ => return Err(format!("{} must be true or false", field.name)),
+            },
+            ArgKind::Json => serde_json::from_str(raw)
+                .map_err(|error| format!("{} must be valid JSON: {error}", field.name))?,
+        };
+        object.insert(field.name.clone(), value);
+    }
+    Ok(Value::Object(object))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mcp::{ArgKind, ToolArg};
+
+    #[test]
+    fn schema_arguments_build_typed_json_and_resolve_paths() {
+        let fields = vec![
+            ToolArg {
+                name: "path".to_string(),
+                description: String::new(),
+                kind: ArgKind::String,
+                required: true,
+            },
+            ToolArg {
+                name: "line".to_string(),
+                description: String::new(),
+                kind: ArgKind::Integer,
+                required: false,
+            },
+        ];
+        let value = build_mcp_arguments(
+            &fields,
+            &["src/main.rs".to_string(), "42".to_string()],
+            std::path::Path::new("/tmp/project"),
+        )
+        .expect("arguments");
+        assert_eq!(value["path"], "/tmp/project/src/main.rs");
+        assert_eq!(value["line"], 42);
+        assert!(
+            build_mcp_arguments(&fields, &["".to_string()], std::path::Path::new("/tmp")).is_err()
+        );
     }
 }

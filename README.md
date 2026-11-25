@@ -430,9 +430,12 @@ env = { TOKEN = "..." }
   hash and prompts again. Trusted hashes persist in
   `<config>/i3-editor/mcp_trust.toml`.
 - After trust, the server starts lazily and `tools/list` populates the tool menu.
-- Selecting a tool opens a JSON argument editor; `Enter` opens a per-call
-  confirmation. Nothing runs until the confirmation is accepted. The tool list
-  also has a `logs` row for the server's stderr ring.
+- Selecting a tool opens a form generated from its JSON schema: strings,
+  integers/numbers, booleans, enums, and a JSON fallback for nested values.
+  `path` fields are prefilled from the active file or workspace root. `Tab`
+  moves between fields; `Enter` opens a per-call confirmation. Nothing runs
+  until the confirmation is accepted. The tool list also has a `logs` row for
+  the server's stderr ring.
 - A tool result opens in a read-only overlay. It cannot edit a buffer or run a
   shell command automatically. `Esc` or `q` closes the overlay.
 - Only stdio transport is supported. HTTP/SSE, resources, prompts, and automatic

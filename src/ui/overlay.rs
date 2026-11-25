@@ -179,8 +179,8 @@ pub fn render_prompt(frame: &mut Frame, state: &AppState, prompt: &PromptState) 
         if row >= inner.y + inner.height {
             break;
         }
-        let label = field_label(prompt.kind, index);
-        let label_width = textutil::cells(label, tab_width, 0);
+        let label = field_label(prompt, index);
+        let label_width = textutil::cells(&label, tab_width, 0);
         let input_width = inner.width.saturating_sub(label_width);
         let buffer = frame.buffer_mut();
         buffer.set_stringn(
@@ -632,14 +632,19 @@ fn tail(text: &str, width: u16) -> String {
     out
 }
 
-fn field_label(kind: PromptKind, index: usize) -> &'static str {
-    match (kind, index) {
-        (PromptKind::Replace | PromptKind::ReplaceInFiles, 0) => "Find: ",
-        (PromptKind::Replace | PromptKind::ReplaceInFiles, 1) => "With: ",
-        (PromptKind::Find | PromptKind::FindInFiles, _) => "Find: ",
-        (PromptKind::GoToLine, _) => "Line: ",
-        (PromptKind::WorkspaceRoot, _) => "Root: ",
-        (PromptKind::CommandPalette, _) => "> ",
-        _ => "",
+fn field_label(prompt: &PromptState, index: usize) -> String {
+    if prompt.kind == PromptKind::McpArgs
+        && let Some(arg) = prompt.mcp_fields.get(index)
+    {
+        return format!("{}{}: ", arg.name, if arg.required { "*" } else { "" });
+    }
+    match (prompt.kind, index) {
+        (PromptKind::Replace | PromptKind::ReplaceInFiles, 0) => "Find: ".to_string(),
+        (PromptKind::Replace | PromptKind::ReplaceInFiles, 1) => "With: ".to_string(),
+        (PromptKind::Find | PromptKind::FindInFiles, _) => "Find: ".to_string(),
+        (PromptKind::GoToLine, _) => "Line: ".to_string(),
+        (PromptKind::WorkspaceRoot, _) => "Root: ".to_string(),
+        (PromptKind::CommandPalette, _) => "> ".to_string(),
+        _ => String::new(),
     }
 }

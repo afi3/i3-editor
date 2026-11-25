@@ -364,8 +364,10 @@ precedes `tools/list` and `tools/call`; pending requests carry timeouts, stderr
 is kept in a bounded per-server log, and a crashed server is removed once.
 Servers start only after the palette trust flow records the hash of command,
 args, cwd, and env in `mcp_trust.toml`; a changed config prompts again. Tool
-arguments are JSON, every call has a confirmation prompt, and results and stderr
-logs render in read-only overlays with no automatic buffer or shell mutation.
+arguments are rendered as typed fields from the tool's JSON schema (with a JSON
+fallback for nested values), every call has a confirmation prompt, and results
+and stderr logs render in read-only overlays with no automatic buffer or shell
+mutation.
 
 **File operations follow the focused surface.** `duplicate_file`, `copy_path`,
 and `reveal_in_terminal` take the explorer row when the explorer has focus;

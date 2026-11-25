@@ -32,11 +32,79 @@ pub struct McpServerConfig {
     pub env: BTreeMap<String, String>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ArgKind {
+    String,
+    Integer,
+    Number,
+    Boolean,
+    Enum(Vec<String>),
+    Json,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ToolArg {
+    pub name: String,
+    pub description: String,
+    pub kind: ArgKind,
+    pub required: bool,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Tool {
     pub name: String,
     pub description: String,
     pub input_schema: Value,
+}
+
+impl Tool {
+    pub fn arguments(&self) -> Vec<ToolArg> {
+        let required: Vec<&str> = self
+            .input_schema
+            .get("required")
+            .and_then(Value::as_array)
+            .map(|items| items.iter().filter_map(Value::as_str).collect())
+            .unwrap_or_default();
+        let Some(properties) = self
+            .input_schema
+            .get("properties")
+            .and_then(Value::as_object)
+        else {
+            return Vec::new();
+        };
+        properties
+            .iter()
+            .map(|(name, schema)| {
+                let description = schema
+                    .get("description")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string();
+                let kind = match schema.get("enum").and_then(Value::as_array) {
+                    Some(values) => ArgKind::Enum(
+                        values
+                            .iter()
+                            .filter_map(Value::as_str)
+                            .map(str::to_string)
+                            .collect(),
+                    ),
+                    None => match schema.get("type").and_then(Value::as_str) {
+                        Some("string") => ArgKind::String,
+                        Some("integer") => ArgKind::Integer,
+                        Some("number") => ArgKind::Number,
+                        Some("boolean") => ArgKind::Boolean,
+                        _ => ArgKind::Json,
+                    },
+                };
+                ToolArg {
+                    name: name.clone(),
+                    description,
+                    kind,
+                    required: required.contains(&name.as_str()),
+                }
+            })
+            .collect()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -673,10 +741,11 @@ mod tests {
                 _ => None,
             })
             .expect("tools event");
-        assert_eq!(tools.len(), 2);
+        assert_eq!(tools.len(), 3);
         assert_eq!(tools[0].name, "echo");
         assert_eq!(tools[1].name, "add");
-        assert_eq!(manager.tools("mock").expect("stored tools").len(), 2);
+        assert_eq!(tools[2].name, "read_text_file");
+        assert_eq!(manager.tools("mock").expect("stored tools").len(), 3);
 
         manager
             .call_tool("mock", "echo", json!({"text": "hello"}))
@@ -692,6 +761,51 @@ mod tests {
             })
             .expect("tool result");
         assert_eq!(result, vec![ToolContent::Text("hello".to_string())]);
+    }
+
+    #[test]
+    fn tool_schema_becomes_required_and_typed_arguments() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "File path"},
+                "line": {"type": "integer"},
+                "mode": {"type": "string", "enum": ["read", "write"]},
+                "force": {"type": "boolean"}
+            },
+            "required": ["path"]
+        });
+        let tool = Tool {
+            name: "demo".to_string(),
+            description: String::new(),
+            input_schema: schema,
+        };
+        let args = tool.arguments();
+        assert_eq!(args.len(), 4);
+        let path = args.iter().find(|arg| arg.name == "path").expect("path");
+        assert_eq!(path.kind, ArgKind::String);
+        assert!(path.required);
+        assert!(
+            !args
+                .iter()
+                .find(|arg| arg.name == "line")
+                .expect("line")
+                .required
+        );
+        assert_eq!(
+            args.iter()
+                .find(|arg| arg.name == "mode")
+                .expect("mode")
+                .kind,
+            ArgKind::Enum(vec!["read".to_string(), "write".to_string()])
+        );
+        assert_eq!(
+            args.iter()
+                .find(|arg| arg.name == "force")
+                .expect("force")
+                .kind,
+            ArgKind::Boolean
+        );
     }
 
     #[test]

@@ -190,7 +190,9 @@ impl PromptKind {
             | PromptKind::QuitConfirm
             | PromptKind::Overwrite
             | PromptKind::ExternalChange
-            | PromptKind::Recovery => 0,
+            | PromptKind::Recovery
+            | PromptKind::McpTrust
+            | PromptKind::McpConfirm => 0,
             _ => 1,
         }
     }
@@ -260,6 +262,7 @@ pub struct PromptState {
     pub mcp_server: Option<String>,
     pub mcp_tool: Option<String>,
     pub mcp_arguments: Option<String>,
+    pub mcp_fields: Vec<crate::mcp::ToolArg>,
 }
 
 impl PromptState {
@@ -280,6 +283,7 @@ impl PromptState {
             mcp_server: None,
             mcp_tool: None,
             mcp_arguments: None,
+            mcp_fields: Vec::new(),
         }
     }
 

@@ -2195,6 +2195,28 @@ fn mcp_command_opens_a_server_menu() {
 }
 
 #[test]
+fn mcp_path_prefill_uses_active_file_for_reads_and_root_for_listing() {
+    use crate::mcp::{ArgKind, ToolArg};
+
+    let (app, dir) = fixture("x\n");
+    let path = ToolArg {
+        name: "path".to_string(),
+        description: String::new(),
+        kind: ArgKind::String,
+        required: true,
+    };
+    assert_eq!(
+        std::fs::canonicalize(app.prefill_mcp_arg("read_text_file", &path)).expect("read path"),
+        std::fs::canonicalize(dir.join("note.txt")).expect("canonical file")
+    );
+    assert_eq!(
+        std::fs::canonicalize(app.prefill_mcp_arg("list_directory", &path)).expect("dir path"),
+        std::fs::canonicalize(&dir).expect("canonical dir")
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn mcp_trust_tools_call_and_result_flow() {
     use crate::input::PromptKind;
     use std::collections::BTreeMap;
@@ -2274,7 +2296,7 @@ fn mcp_trust_tools_call_and_result_flow() {
     let InputMode::Prompt(prompt) = &mut app.state.mode else {
         panic!("arguments prompt missing")
     };
-    prompt.fields[0] = "{\"text\":\"hello\"}".to_string();
+    prompt.fields[0] = "hello".to_string();
     prompt.cursor = prompt.fields[0].chars().count();
     app.submit_prompt().expect("arguments");
     let InputMode::Prompt(prompt) = &mut app.state.mode else {

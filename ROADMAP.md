@@ -817,7 +817,8 @@ or background agent in this release.
 - [x] Mock stdio MCP server fixture for deterministic tests.
 - [x] `mcp` palette menu with server/tool lists and a scrollable result overlay.
 - [x] Trust prompt with config-hash invalidation and persistent trust hashes.
-- [x] JSON argument editor, per-call confirmation, and server log view.
+- [x] Schema-driven argument form (typed fields, required markers, JSON
+  fallback), path prefill, per-call confirmation, and server log view.
 - [x] Workspace-root restart and shutdown cleanup.
 - [x] README and this roadmap updated; architecture update next.
 
@@ -826,7 +827,8 @@ request timeouts, stderr/log ring, crash reporting, and `tests/fixtures/mock_mcp
 with normal, malformed, crash, silent-timeout, and oversized modes. Config
 loading, the `mcp` palette menu, persistent trust hashes, the JSON argument
 editor, per-call confirmation, server logs, and the read-only result overlay
-now work. The suite is 394 (387 unit + 6 CLI + 1 PTY). A manual ignored test
+now work, with schema-driven argument forms and path prefill. The suite is 397
+(390 unit + 6 CLI + 1 PTY). A manual ignored test
 also passed against `@modelcontextprotocol/server-filesystem`: 14 tools listed,
 `list_directory` returned `hello.txt`, and the server shut down cleanly.
 
@@ -864,4 +866,4 @@ cargo clippy --all-targets --all-features
 cargo run -- --dump-keymap
 ```
 
-Last recorded run: `cargo test` → 394 passed (387 unit + 6 CLI process + 1 PTY smoke), `cargo clippy` → 0 warnings.
+Last recorded run: `cargo test` → 397 passed (390 unit + 6 CLI process + 1 PTY smoke), `cargo clippy` → 0 warnings.

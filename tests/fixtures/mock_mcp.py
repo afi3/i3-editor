@@ -94,6 +94,15 @@ for raw in sys.stdin:
                                 },
                             },
                         },
+                        {
+                            "name": "read_text_file",
+                            "description": "Read a text file",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {"path": {"type": "string"}},
+                                "required": ["path"],
+                            },
+                        },
                     ]
                 },
             }
@@ -126,6 +135,19 @@ for raw in sys.stdin:
                                 "type": "text",
                                 "text": str(arguments.get("a", 0) + arguments.get("b", 0)),
                             }
+                        ],
+                        "isError": False,
+                    },
+                }
+            )
+        elif name == "read_text_file":
+            send(
+                {
+                    "jsonrpc": "2.0",
+                    "id": request_id,
+                    "result": {
+                        "content": [
+                            {"type": "text", "text": str(arguments.get("path", ""))}
                         ],
                         "isError": False,
                     },
