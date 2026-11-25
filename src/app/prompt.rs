@@ -273,6 +273,18 @@ impl App {
             self.submit_ai_background(prompt);
             return Ok(());
         }
+        if prompt.kind == PromptKind::AiObjectiveAdd {
+            self.submit_ai_objective_add(prompt);
+            return Ok(());
+        }
+        if prompt.kind == PromptKind::AiObjectives {
+            self.submit_ai_objective(prompt);
+            return Ok(());
+        }
+        if prompt.kind == PromptKind::AiContextFiles {
+            self.submit_ai_context_file(prompt);
+            return Ok(());
+        }
         self.submit_regular_query(prompt)
     }
 

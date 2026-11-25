@@ -61,6 +61,7 @@ impl App {
             Command::Mcp => self.open_mcp(),
             Command::McpAdd => self.open_mcp_add(),
             Command::McpResources => self.open_mcp_resources(),
+            Command::McpResourceTemplates => self.open_mcp_resource_templates(),
             Command::McpPrompts => self.open_mcp_prompts(),
             Command::AiChat
             | Command::AiPanel
@@ -74,7 +75,11 @@ impl App {
             | Command::AiAttachSelection
             | Command::AiClearContext
             | Command::AiUndoEdit
-            | Command::AiBackground => {
+            | Command::AiBackground
+            | Command::AiObjectiveAdd
+            | Command::AiObjectives
+            | Command::AiIndexProject
+            | Command::AiContextFiles => {
                 self.dispatch_ai(command);
                 return Ok(None);
             }
@@ -84,6 +89,13 @@ impl App {
     }
 
     fn dispatch_ai(&mut self, command: Command) {
+        if self.dispatch_ai_panel(command.clone()) {
+            return;
+        }
+        self.dispatch_ai_workflow(command);
+    }
+
+    fn dispatch_ai_panel(&mut self, command: Command) -> bool {
         match command {
             Command::AiChat => self.open_ai(),
             Command::AiPanel => self.toggle_ai_panel(),
@@ -93,11 +105,22 @@ impl App {
             Command::AiNarrower => self.resize_ai(-5),
             Command::AiScrollLeft => self.scroll_ai_horizontal(-4),
             Command::AiScrollRight => self.scroll_ai_horizontal(4),
+            _ => return false,
+        }
+        true
+    }
+
+    fn dispatch_ai_workflow(&mut self, command: Command) {
+        match command {
             Command::AiAttachFile => self.attach_ai_file(),
             Command::AiAttachSelection => self.attach_ai_selection(),
             Command::AiClearContext => self.clear_ai_context(),
             Command::AiUndoEdit => self.undo_ai_edit(),
             Command::AiBackground => self.open_ai_background(),
+            Command::AiObjectiveAdd => self.open_ai_objective_add(),
+            Command::AiObjectives => self.open_ai_objectives(),
+            Command::AiIndexProject => self.index_ai_context(),
+            Command::AiContextFiles => self.open_ai_context_files(),
             _ => {}
         }
     }

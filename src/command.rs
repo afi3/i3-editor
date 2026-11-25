@@ -78,6 +78,7 @@ pub enum Command {
     LspUninstall,
     McpAdd,
     McpResources,
+    McpResourceTemplates,
     McpPrompts,
     AiChat,
     AiPanel,
@@ -92,6 +93,10 @@ pub enum Command {
     AiClearContext,
     AiUndoEdit,
     AiBackground,
+    AiObjectiveAdd,
+    AiObjectives,
+    AiIndexProject,
+    AiContextFiles,
     GitStatus,
     GitDiff,
     GitLog,
@@ -243,6 +248,10 @@ impl Command {
     }
 
     fn ai_spec(&self) -> Option<(&'static str, &'static str)> {
+        self.ai_spec_panel().or_else(|| self.ai_spec_workflow())
+    }
+
+    fn ai_spec_panel(&self) -> Option<(&'static str, &'static str)> {
         Some(match self {
             Command::AiChat => ("ai_chat", "Open and focus the AI panel"),
             Command::AiPanel => ("ai_panel", "Show or hide the AI panel"),
@@ -252,6 +261,12 @@ impl Command {
             Command::AiNarrower => ("ai_narrower", "Narrow the AI panel"),
             Command::AiScrollLeft => ("ai_scroll_left", "Scroll the AI transcript left"),
             Command::AiScrollRight => ("ai_scroll_right", "Scroll the AI transcript right"),
+            _ => return None,
+        })
+    }
+
+    fn ai_spec_workflow(&self) -> Option<(&'static str, &'static str)> {
+        Some(match self {
             Command::AiAttachFile => (
                 "ai_attach_file",
                 "Attach the active file to the next AI prompt",
@@ -263,6 +278,12 @@ impl Command {
             Command::AiClearContext => ("ai_clear_context", "Clear pending AI attachments"),
             Command::AiUndoEdit => ("ai_undo_edit", "Undo the last native AI edit"),
             Command::AiBackground => ("ai_background", "Start a read-only background agent"),
+            Command::AiObjectiveAdd => ("ai_objective_add", "Add a persistent agent objective"),
+            Command::AiObjectives => ("ai_objectives", "List and run agent objectives"),
+            Command::AiIndexProject => ("ai_index_project", "Build the workspace metadata index"),
+            Command::AiContextFiles => {
+                ("ai_context_files", "Choose an indexed file for AI context")
+            }
             _ => return None,
         })
     }
@@ -281,6 +302,9 @@ impl Command {
             ),
             Command::McpAdd => ("mcp_add", "Add a configured MCP server"),
             Command::McpResources => ("mcp_resources", "List MCP resources"),
+            Command::McpResourceTemplates => {
+                ("mcp_resource_templates", "List MCP resource templates")
+            }
             Command::McpPrompts => ("mcp_prompts", "List MCP prompts"),
             Command::AiChat
             | Command::AiPanel
@@ -294,7 +318,11 @@ impl Command {
             | Command::AiAttachSelection
             | Command::AiClearContext
             | Command::AiUndoEdit
-            | Command::AiBackground => return self.ai_spec(),
+            | Command::AiBackground
+            | Command::AiObjectiveAdd
+            | Command::AiObjectives
+            | Command::AiIndexProject
+            | Command::AiContextFiles => return self.ai_spec(),
             Command::LspUninstall => (
                 "lsp_uninstall",
                 "Remove the installed language server for the active file",
@@ -521,6 +549,7 @@ impl Command {
             Command::LspUninstall,
             Command::McpAdd,
             Command::McpResources,
+            Command::McpResourceTemplates,
             Command::McpPrompts,
             Command::AiChat,
             Command::AiPanel,
@@ -535,6 +564,10 @@ impl Command {
             Command::AiClearContext,
             Command::AiUndoEdit,
             Command::AiBackground,
+            Command::AiObjectiveAdd,
+            Command::AiObjectives,
+            Command::AiIndexProject,
+            Command::AiContextFiles,
             Command::GitStatus,
             Command::GitDiff,
             Command::GitLog,
@@ -671,6 +704,7 @@ mod tests {
             Command::LspUninstall,
             Command::McpAdd,
             Command::McpResources,
+            Command::McpResourceTemplates,
             Command::McpPrompts,
             Command::AiChat,
             Command::AiPanel,
@@ -685,6 +719,10 @@ mod tests {
             Command::AiClearContext,
             Command::AiUndoEdit,
             Command::AiBackground,
+            Command::AiObjectiveAdd,
+            Command::AiObjectives,
+            Command::AiIndexProject,
+            Command::AiContextFiles,
             Command::GitStatus,
             Command::GitDiff,
             Command::GitLog,

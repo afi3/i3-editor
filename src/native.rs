@@ -368,6 +368,11 @@ pub fn resolve_path(root: &Path, raw: &str) -> Result<PathBuf, String> {
     Ok(path)
 }
 
+pub(crate) fn read_source(root: &Path, raw: &str) -> Result<String, String> {
+    let path = resolve_path(root, raw)?;
+    read_text(&path)
+}
+
 pub fn read_file(root: &Path, arguments: &Value) -> Result<String, String> {
     let raw = string_arg(arguments, "path")?;
     let path = resolve_path(root, raw)?;

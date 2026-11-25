@@ -273,6 +273,9 @@ impl App {
             }));
         }
         self.state.ai.busy = false;
+        if self.background_agent {
+            self.finish_objective("blocked");
+        }
         self.background_agent = false;
         self.state.ai.entries.push("[cancelled]".to_string());
         self.save_ai_history();
@@ -299,6 +302,10 @@ impl App {
 
     pub(crate) fn submit_ai_background(&mut self, prompt: PromptState) {
         let task = prompt.fields.first().cloned().unwrap_or_default();
+        self.start_background_task(task);
+    }
+
+    fn start_background_task(&mut self, task: String) {
         if task.trim().is_empty() {
             self.notify("background task is empty");
             return;
@@ -311,11 +318,112 @@ impl App {
             .ai
             .entries
             .push("[background] started; only read-only tools run automatically".to_string());
-        self.open_ai_question(task);
+        self.start_ai_question(task);
     }
 
-    fn open_ai_question(&mut self, question: String) {
-        self.start_ai_question(question);
+    pub(crate) fn index_ai_context(&mut self) {
+        let index = crate::context_index::build(&self.state.explorer.root);
+        let count = index.files.len();
+        if let Err(error) = crate::context_index::save(&index) {
+            self.notify(format!("context index not saved: {error}"));
+            return;
+        }
+        self.notify(format!("context index: {count} files"));
+        self.dirty = true;
+    }
+
+    pub(crate) fn open_ai_context_files(&mut self) {
+        let Some(index) = crate::context_index::load() else {
+            self.notify("build the context index first with ai_index_project");
+            return;
+        };
+        let mut prompt = PromptState::new(PromptKind::AiContextFiles);
+        prompt.set_candidates(index.files.iter().map(|entry| entry.path.clone()).collect());
+        self.state.mode = InputMode::Prompt(prompt);
+        self.dirty = true;
+    }
+
+    pub(crate) fn submit_ai_context_file(&mut self, prompt: PromptState) {
+        let Some(path) = prompt.selected_candidate() else {
+            return;
+        };
+        let text = match crate::native::read_source(&self.state.explorer.root, path) {
+            Ok(text) => text,
+            Err(error) => {
+                self.notify(error);
+                return;
+            }
+        };
+        let text = crate::ai::truncate_text(&text, self.state.config.ai.max_tool_output_chars);
+        self.state.mode = InputMode::Normal;
+        self.attach_ai_context(format!("{path} (indexed file)"), text);
+    }
+
+    pub(crate) fn open_ai_objective_add(&mut self) {
+        self.state.mode = InputMode::Prompt(PromptState::new(PromptKind::AiObjectiveAdd));
+        self.dirty = true;
+    }
+
+    pub(crate) fn submit_ai_objective_add(&mut self, prompt: PromptState) {
+        let text = prompt.fields.first().cloned().unwrap_or_default();
+        if text.trim().is_empty() {
+            self.notify("objective is empty");
+            return;
+        }
+        self.objectives.add(text.trim().to_string());
+        let _ = crate::objectives::save(&self.objectives);
+        self.state.mode = InputMode::Normal;
+        self.notify("agent objective saved");
+        self.dirty = true;
+    }
+
+    pub(crate) fn open_ai_objectives(&mut self) {
+        let candidates = self
+            .objectives
+            .objectives
+            .iter()
+            .map(|objective| format!("{} [{}] {}", objective.id, objective.status, objective.text))
+            .collect();
+        let mut prompt = PromptState::new(PromptKind::AiObjectives);
+        prompt.candidates = candidates;
+        self.state.mode = InputMode::Prompt(prompt);
+        self.dirty = true;
+    }
+
+    pub(crate) fn submit_ai_objective(&mut self, prompt: PromptState) {
+        let Some(candidate) = prompt.selected_candidate() else {
+            return;
+        };
+        let Some(id) = candidate
+            .split_whitespace()
+            .next()
+            .and_then(|id| id.parse::<u64>().ok())
+        else {
+            return;
+        };
+        let Some(objective) = self.objectives.get(id).cloned() else {
+            return;
+        };
+        if !self.state.config.ai.background_agents {
+            self.notify("enable [ai] background_agents first");
+            return;
+        }
+        if self.background_agent || self.state.ai.busy {
+            self.notify("an AI turn is already running");
+            return;
+        }
+        self.state.mode = InputMode::Normal;
+        self.active_objective = Some(id);
+        self.objectives.set_status(id, "running");
+        let _ = crate::objectives::save(&self.objectives);
+        self.start_background_task(objective.text);
+    }
+
+    fn finish_objective(&mut self, status: &str) {
+        if let Some(id) = self.active_objective.take() {
+            self.objectives.set_status(id, status);
+            let _ = crate::objectives::save(&self.objectives);
+        }
     }
 
     fn auto_allow_background_tool(&mut self) {
@@ -327,7 +435,17 @@ impl App {
             self.stop_background_with_error("background agent tool policy blocked the request");
             return;
         }
-        if call.capability != "read-only" {
+        if call.capability != "read-only"
+            && !self
+                .state
+                .config
+                .ai
+                .background_auto_tools
+                .iter()
+                .any(|pattern| {
+                    tool_pattern_matches(pattern, &format!("{}/{}", call.server, call.tool))
+                })
+        {
             self.state.ai.busy = false;
             self.state.ai.entries.push(format!(
                 "Approve background {}/{} [{}]? [y] yes [n] no",
@@ -358,6 +476,7 @@ impl App {
             }));
         }
         self.background_agent = false;
+        self.finish_objective("blocked");
         self.state.ai.busy = false;
         self.state
             .ai
@@ -372,6 +491,7 @@ impl App {
             return;
         }
         self.background_agent = false;
+        self.finish_objective("done");
         self.state
             .ai
             .entries
@@ -660,6 +780,9 @@ impl App {
         match result {
             Ok(reply) => self.finish_ai_reply(reply, false),
             Err(error) => {
+                if self.background_agent {
+                    self.finish_objective("blocked");
+                }
                 self.background_agent = false;
                 self.state.ai.entries.push(format!("[error] {error}"));
             }
@@ -693,6 +816,9 @@ impl App {
                 crate::ai::StreamEvent::Error(error) => {
                     self.ai_stream = None;
                     self.ai_streamed = false;
+                    if self.background_agent {
+                        self.finish_objective("blocked");
+                    }
                     self.background_agent = false;
                     self.state.ai.busy = false;
                     self.remove_thinking_entry();
@@ -1109,6 +1235,7 @@ impl App {
             .push("[tool] denied by user".to_string());
         if self.background_agent {
             self.background_agent = false;
+            self.finish_objective("blocked");
             self.state
                 .ai
                 .entries

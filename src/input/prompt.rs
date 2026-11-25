@@ -47,11 +47,15 @@ pub enum PromptKind {
     McpAdd,
     McpAddPath,
     McpResources,
+    McpResourceTemplates,
     McpResourceList,
     McpPrompts,
     McpPromptList,
     McpSampling,
     AiBackground,
+    AiObjectiveAdd,
+    AiObjectives,
+    AiContextFiles,
 }
 
 /// Grouping used by the prompt setup and submit code, so neither needs one
@@ -85,6 +89,7 @@ impl PromptKind {
                 | PromptKind::McpAdd
                 | PromptKind::McpAddPath
                 | PromptKind::McpResources
+                | PromptKind::McpResourceTemplates
                 | PromptKind::McpResourceList
                 | PromptKind::McpPrompts
                 | PromptKind::McpPromptList
@@ -111,6 +116,9 @@ impl PromptKind {
                 | PromptKind::CommitMessage
                 | PromptKind::SelectWorkspace
                 | PromptKind::AiBackground
+                | PromptKind::AiObjectiveAdd
+                | PromptKind::AiObjectives
+                | PromptKind::AiContextFiles
         )
     }
 
@@ -142,6 +150,7 @@ impl PromptKind {
     fn query_title(self) -> &'static str {
         self.core_query_title()
             .or_else(|| self.mcp_query_title())
+            .or_else(|| self.ai_query_title())
             .unwrap_or("")
     }
 
@@ -159,7 +168,16 @@ impl PromptKind {
             PromptKind::Conflicts => "Merge Conflicts",
             PromptKind::CommitMessage => "Commit Message",
             PromptKind::SelectWorkspace => "Workspace",
+            _ => return None,
+        })
+    }
+
+    fn ai_query_title(self) -> Option<&'static str> {
+        Some(match self {
             PromptKind::AiBackground => "Background Agent Task",
+            PromptKind::AiObjectiveAdd => "Add Agent Objective",
+            PromptKind::AiObjectives => "Agent Objectives",
+            PromptKind::AiContextFiles => "Indexed Context Files",
             _ => return None,
         })
     }
@@ -174,6 +192,7 @@ impl PromptKind {
             PromptKind::McpAdd => "Add MCP Server",
             PromptKind::McpAddPath => "MCP Server Directory",
             PromptKind::McpResources => "MCP Resource Servers",
+            PromptKind::McpResourceTemplates => "MCP Resource Template Servers",
             PromptKind::McpResourceList => "MCP Resources",
             PromptKind::McpPrompts => "MCP Prompt Servers",
             PromptKind::McpPromptList => "MCP Prompts",

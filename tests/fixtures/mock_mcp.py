@@ -152,6 +152,23 @@ for raw in sys.stdin:
         if next_cursor:
             result["nextCursor"] = next_cursor
         send({"jsonrpc": "2.0", "id": request_id, "result": result})
+    elif method == "resources/templates/list":
+        send(
+            {
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "result": {
+                    "resourceTemplates": [
+                        {
+                            "uriTemplate": "mock://item/{id}",
+                            "name": "Item",
+                            "description": "Parameterized mock resource",
+                            "mimeType": "text/plain",
+                        }
+                    ]
+                },
+            }
+        )
     elif method == "resources/read":
         send(
             {

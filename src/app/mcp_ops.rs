@@ -38,6 +38,13 @@ impl App {
         self.dirty = true;
     }
 
+    pub(crate) fn open_mcp_resource_templates(&mut self) {
+        let mut prompt = PromptState::new(PromptKind::McpResourceTemplates);
+        self.fill_mcp_servers(&mut prompt);
+        self.state.mode = InputMode::Prompt(prompt);
+        self.dirty = true;
+    }
+
     pub(crate) fn open_mcp_prompts(&mut self) {
         let mut prompt = PromptState::new(PromptKind::McpPrompts);
         self.fill_mcp_servers(&mut prompt);
@@ -190,6 +197,28 @@ impl App {
                 content,
                 mime_type,
             } => self.show_mcp_resource(&server, &uri, &content, &mime_type),
+            crate::mcp::Event::ResourceTemplates { server, templates } => {
+                let mut lines = vec![format!("MCP resource templates: {server}"), String::new()];
+                if templates.is_empty() {
+                    lines.push("no resource templates".to_string());
+                } else {
+                    for template in templates {
+                        lines.push(format!(
+                            "{} — {}{}",
+                            template.uri_template,
+                            template.name,
+                            if template.description.is_empty() {
+                                String::new()
+                            } else {
+                                format!(" — {}", template.description)
+                            }
+                        ));
+                    }
+                }
+                lines.push(String::new());
+                lines.push("Esc or q closes this overlay".to_string());
+                self.state.mcp_view = Some(HelpView { lines, scroll: 0 });
+            }
             crate::mcp::Event::Prompts { server, prompts } => {
                 self.update_prompt_prompt(&server, &prompts);
             }
@@ -457,6 +486,7 @@ impl App {
             PromptKind::McpAdd => self.submit_mcp_add(prompt),
             PromptKind::McpAddPath => self.submit_mcp_add_path(prompt),
             PromptKind::McpResources => self.submit_mcp_resources(prompt),
+            PromptKind::McpResourceTemplates => self.submit_mcp_resource_templates(prompt),
             PromptKind::McpResourceList => self.submit_mcp_resource_list(prompt),
             PromptKind::McpPrompts => self.submit_mcp_prompts(prompt),
             PromptKind::McpPromptList => self.submit_mcp_prompt_list(prompt),
@@ -482,6 +512,24 @@ impl App {
         let mut list = PromptState::new(PromptKind::McpResourceList);
         list.mcp_server = Some(server);
         self.state.mode = InputMode::Prompt(list);
+    }
+
+    pub(crate) fn submit_mcp_resource_templates(&mut self, prompt: PromptState) {
+        let Some(server) = Self::selected_server(&prompt) else {
+            return;
+        };
+        if !self.mcp_trusted(&server) {
+            self.notify(format!(
+                "trust MCP {server} before listing resource templates"
+            ));
+            return;
+        }
+        self.state.mode = InputMode::Normal;
+        if let Some(manager) = self.mcp.as_mut()
+            && let Err(error) = manager.list_resource_templates(&server)
+        {
+            self.notify(error);
+        }
     }
 
     pub(crate) fn submit_mcp_resource_list(&mut self, prompt: PromptState) {

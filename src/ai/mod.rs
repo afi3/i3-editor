@@ -94,6 +94,58 @@ pub(crate) struct PreparedRequest {
     pub body_file: tempfile::NamedTempFile,
 }
 
+fn resolve_api_key(config: &AiConfig) -> Result<String, String> {
+    let service = config.keyring_service.trim();
+    let account = config.keyring_account.trim();
+    if !service.is_empty() || !account.is_empty() {
+        if service.is_empty() || account.is_empty() {
+            return Err("AI keyring_service and keyring_account must both be set".to_string());
+        }
+        return keyring_lookup(service, account);
+    }
+    if !config.api_key.trim().is_empty() {
+        return Ok(config.api_key.trim().to_string());
+    }
+    Ok(std::env::var(&config.api_key_env).unwrap_or_default())
+}
+
+fn keyring_lookup(service: &str, account: &str) -> Result<String, String> {
+    #[cfg(target_os = "macos")]
+    let mut command = {
+        let mut command = Command::new("security");
+        command.args(["find-generic-password", "-s", service, "-a", account, "-w"]);
+        command
+    };
+    #[cfg(target_os = "linux")]
+    let mut command = {
+        let mut command = Command::new("secret-tool");
+        command.args(["lookup", "service", service, "account", account]);
+        command
+    };
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        let _ = (service, account);
+        return Err("OS keyring lookup is unsupported on this platform".to_string());
+    }
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    {
+        let output = command
+            .output()
+            .map_err(|error| format!("keyring lookup: {error}"))?;
+        if !output.status.success() {
+            return Err(format!(
+                "keyring lookup failed: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            ));
+        }
+        let key = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if key.is_empty() {
+            return Err("keyring returned an empty key".to_string());
+        }
+        Ok(key)
+    }
+}
+
 pub(crate) fn prepare_request(
     config: &AiConfig,
     messages: &[Value],
@@ -122,11 +174,7 @@ pub(crate) fn prepare_request(
     body_file
         .write_all(&body_text)
         .map_err(|error| error.to_string())?;
-    let key = if config.api_key.trim().is_empty() {
-        std::env::var(&config.api_key_env).unwrap_or_default()
-    } else {
-        config.api_key.trim().to_string()
-    };
+    let key = resolve_api_key(config)?;
     let mut curl_config = String::new();
     curl_config.push_str(&format!("url = {}\n", quote(&url)));
     curl_config.push_str("request = \"POST\"\n");

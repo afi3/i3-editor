@@ -10,9 +10,10 @@ verified before the next one started.
   Git depth.
 - `v0.2.x` covers MCP and AI features. `v0.2.0` shipped the stdio MCP client;
   `v0.2.1` ships the bounded agent harness, native tools, HTTP MCP, resources,
-  prompts, sampling, and approval-gated background agents. Richer planning and
-  persistent objectives remain for later `v0.2.x`. Do not tag `v0.3.0` until
-  that work lands.
+  prompts, sampling, and approval-gated background agents. Persistent
+  objectives, keyring lookup, metadata context indexing, and write allowlists
+  are in the follow-up `main` work; richer dependency planning remains later.
+  Do not tag `v0.3.0` until that work lands.
 
 ## Phase 1 — Terminal foundation and pane skeleton: done
 
@@ -919,15 +920,16 @@ and no-auto-apply boundaries.
 - [x] Actual provider usage and optional session cost metering in the panel title.
 - [x] Rich Markdown blocks and inline styling in the AI transcript.
 - [x] Follow MCP resource and prompt pagination cursors.
+- [x] Add persistent objectives, OS keyring lookup, metadata context index, and write allowlists.
+- [x] Add MCP resource templates and pagination.
 - [x] Published aarch64 macOS asset passed its SHA-256 check and reports
   `i3-editor 0.2.1`.
 
 ### Deferred to later v0.2.x
 
-- Rich persistent agent planning and objectives.
-- HTTP/server-initiated SSE sampling and MCP resource templates.
+- HTTP/server-initiated SSE sampling.
 - Table column alignment and richer Markdown extensions.
-- API key/keyring management, context indexing, and autonomous write policies.
+- Richer objective dependency planning and automatic work queues.
 
 Risk: MCP servers are arbitrary code and model output is untrusted. Trust hashes,
 explicit tool confirmation, capability gating, context/tool budgets, audits,
@@ -943,4 +945,4 @@ cargo clippy --all-targets --all-features
 cargo run -- --dump-keymap
 ```
 
-Last recorded run: `cargo test` → 443 passed (436 unit + 6 CLI process + 1 PTY smoke), `cargo clippy` → 0 warnings.
+Last recorded run: `cargo test` → 445 passed (438 unit + 6 CLI process + 1 PTY smoke), `cargo clippy` → 0 warnings.

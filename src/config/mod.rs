@@ -146,6 +146,12 @@ pub struct AiConfig {
     pub input_cost_per_million: f64,
     /// Optional output price in USD per million completion tokens.
     pub output_cost_per_million: f64,
+    /// OS keyring service name; empty disables keyring lookup.
+    pub keyring_service: String,
+    /// OS keyring account name.
+    pub keyring_account: String,
+    /// Tools auto-approved for background agents; empty keeps confirmation.
+    pub background_auto_tools: Vec<String>,
 }
 
 impl Default for AiConfig {
@@ -170,6 +176,9 @@ impl Default for AiConfig {
             background_agents: false,
             input_cost_per_million: 0.0,
             output_cost_per_million: 0.0,
+            keyring_service: String::new(),
+            keyring_account: String::new(),
+            background_auto_tools: Vec::new(),
         }
     }
 }
@@ -771,6 +780,9 @@ const AI_KEYS: &[&str] = &[
     "background_agents",
     "input_cost_per_million",
     "output_cost_per_million",
+    "keyring_service",
+    "keyring_account",
+    "background_auto_tools",
 ];
 const LUA_KEYS: &[&str] = &["enabled", "allow_file", "allow_process", "time_budget_ms"];
 const KEYS_KEYS: &[&str] = &["preset", "global", "editing", "explorer"];

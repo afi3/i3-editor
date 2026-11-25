@@ -134,6 +134,14 @@ pub struct Resource {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ResourceTemplate {
+    pub uri_template: String,
+    pub name: String,
+    pub description: String,
+    pub mime_type: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Prompt {
     pub name: String,
     pub description: String,
@@ -168,6 +176,10 @@ pub enum Event {
         content: String,
         mime_type: String,
     },
+    ResourceTemplates {
+        server: String,
+        templates: Vec<ResourceTemplate>,
+    },
     Prompts {
         server: String,
         prompts: Vec<Prompt>,
@@ -196,6 +208,7 @@ enum ReplyKind {
     CallTool,
     ResourcesList,
     ResourceRead,
+    ResourceTemplatesList,
     PromptsList,
     PromptGet,
 }
@@ -355,6 +368,16 @@ impl McpManager {
             "resources/list",
             json!({"cursor": cursor}),
             ReplyKind::ResourcesList,
+            None,
+        )
+    }
+
+    pub fn list_resource_templates(&mut self, server: &str) -> Result<(), String> {
+        self.request(
+            server,
+            "resources/templates/list",
+            json!({}),
+            ReplyKind::ResourceTemplatesList,
             None,
         )
     }
@@ -653,6 +676,12 @@ impl McpManager {
             ReplyKind::ResourcesList => self.handle_resource_reply(name, None, result, events),
             ReplyKind::ResourceRead => {
                 self.handle_resource_reply(name, pending.tool, result, events)
+            }
+            ReplyKind::ResourceTemplatesList => {
+                events.push(Event::ResourceTemplates {
+                    server: name.to_string(),
+                    templates: parse_resource_templates(result),
+                });
             }
             ReplyKind::PromptsList => self.handle_prompt_reply(name, None, result, events),
             ReplyKind::PromptGet => self.handle_prompt_reply(name, pending.tool, result, events),
@@ -1175,6 +1204,39 @@ fn next_cursor(result: &Value) -> Option<String> {
         .and_then(Value::as_str)
         .filter(|cursor| !cursor.is_empty())
         .map(str::to_string)
+}
+
+fn parse_resource_templates(result: &Value) -> Vec<ResourceTemplate> {
+    result
+        .get("resourceTemplates")
+        .and_then(Value::as_array)
+        .map(|templates| {
+            templates
+                .iter()
+                .filter_map(|template| {
+                    let uri_template = template.get("uriTemplate")?.as_str()?.to_string();
+                    Some(ResourceTemplate {
+                        uri_template,
+                        name: template
+                            .get("name")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_string(),
+                        description: template
+                            .get("description")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_string(),
+                        mime_type: template
+                            .get("mimeType")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_string(),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn parse_resources(result: &Value) -> Vec<Resource> {
