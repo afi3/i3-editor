@@ -436,9 +436,10 @@ env = { TOKEN = "..." }
 - Selecting a tool opens a form generated from its JSON schema: strings,
   integers/numbers, booleans, enums, and a JSON fallback for nested values.
   `path` fields are prefilled from the active file or workspace root. `Tab`
-  moves between fields; `Enter` opens a per-call confirmation. Nothing runs
-  until the confirmation is accepted. The tool list also has a `logs` row for
-  the server's stderr ring.
+  moves between fields; `Enter` opens a per-call confirmation. Cancelling trust
+  never spawns the server; cancelling a call sends no request. Recent tools are
+  sorted first and persisted in `mcp_recent.toml`. The tool list also has a
+  `logs` row for the server's stderr ring.
 - A tool result opens in a read-only overlay. It cannot edit a buffer or run a
   shell command automatically. `Esc` or `q` closes the overlay.
 - Only stdio transport is supported. HTTP/SSE, resources, prompts, and automatic

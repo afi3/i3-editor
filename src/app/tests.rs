@@ -2260,6 +2260,40 @@ fn mcp_path_prefill_uses_active_file_for_reads_and_root_for_listing() {
 }
 
 #[test]
+fn mcp_denying_trust_does_not_spawn_the_server() {
+    use std::collections::BTreeMap;
+
+    let (mut app, dir) = fixture("x\n");
+    let config = crate::mcp::McpServerConfig {
+        command: "definitely-not-a-real-mcp-server".to_string(),
+        ..Default::default()
+    };
+    app.state
+        .config
+        .mcp
+        .servers
+        .insert("blocked".to_string(), config.clone());
+    app.mcp = Some(crate::mcp::McpManager::new(
+        BTreeMap::from([("blocked".to_string(), config)]),
+        dir.clone(),
+    ));
+    app.dispatch(Command::Mcp).expect("mcp");
+    let InputMode::Prompt(prompt) = &mut app.state.mode else {
+        panic!("MCP menu missing")
+    };
+    prompt.select_candidate("blocked — trust required");
+    app.submit_prompt().expect("select");
+    let InputMode::Prompt(prompt) = &mut app.state.mode else {
+        panic!("trust prompt missing")
+    };
+    prompt.select_candidate("Cancel");
+    app.submit_prompt().expect("cancel trust");
+    assert!(!app.mcp.as_ref().expect("mcp").is_running("blocked"));
+    assert!(app.state.ui.message.contains("cancelled"));
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn mcp_trust_tools_call_and_result_flow() {
     use crate::input::PromptKind;
     use std::collections::BTreeMap;
@@ -2304,6 +2338,10 @@ fn mcp_trust_tools_call_and_result_flow() {
         panic!("trust prompt missing")
     };
     assert_eq!(prompt.kind, PromptKind::McpTrust);
+    assert!(
+        !app.mcp.as_ref().expect("mcp").is_running("mock"),
+        "server must not start before trust"
+    );
     let trust = prompt
         .candidates
         .iter()
@@ -2346,6 +2384,48 @@ fn mcp_trust_tools_call_and_result_flow() {
         panic!("confirm prompt missing")
     };
     assert_eq!(prompt.kind, PromptKind::McpConfirm);
+    prompt.select_candidate("Cancel");
+    app.submit_prompt().expect("cancel call");
+    assert!(app.state.ui.message.contains("cancelled"));
+    for _ in 0..10 {
+        app.pump_mcp();
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(
+        !app.mcp
+            .as_ref()
+            .expect("mcp")
+            .logs("mock")
+            .is_some_and(|logs| logs.iter().any(|line| line.contains("mock call echo"))),
+        "cancelled call must not reach the server"
+    );
+
+    app.dispatch(Command::Mcp).expect("mcp again");
+    let InputMode::Prompt(prompt) = &mut app.state.mode else {
+        panic!("MCP menu missing")
+    };
+    prompt.select_candidate("mock — trusted");
+    app.submit_prompt().expect("select trusted server");
+    let InputMode::Prompt(prompt) = &mut app.state.mode else {
+        panic!("tools prompt missing")
+    };
+    let echo = prompt
+        .candidates
+        .iter()
+        .find(|candidate| candidate.starts_with("echo — "))
+        .cloned()
+        .expect("echo tool");
+    prompt.select_candidate(&echo);
+    app.submit_prompt().expect("select tool again");
+    let InputMode::Prompt(prompt) = &mut app.state.mode else {
+        panic!("arguments prompt missing")
+    };
+    prompt.fields[0] = "hello".to_string();
+    prompt.cursor = prompt.fields[0].chars().count();
+    app.submit_prompt().expect("arguments again");
+    let InputMode::Prompt(prompt) = &mut app.state.mode else {
+        panic!("confirm prompt missing")
+    };
     prompt.select_candidate("Call tool");
     app.submit_prompt().expect("call");
     let deadline = Instant::now() + Duration::from_secs(5);
@@ -2359,6 +2439,7 @@ fn mcp_trust_tools_call_and_result_flow() {
         "{:?}",
         view.lines
     );
+    assert_eq!(text(&app), "x\n", "MCP result must not edit the buffer");
     std::fs::remove_dir_all(&dir).ok();
 }
 

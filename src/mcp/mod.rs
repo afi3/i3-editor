@@ -212,6 +212,10 @@ impl McpManager {
         !self.configs.is_empty()
     }
 
+    pub fn is_running(&self, server: &str) -> bool {
+        self.servers.contains_key(server)
+    }
+
     pub fn names(&self) -> Vec<&str> {
         self.configs.keys().map(String::as_str).collect()
     }

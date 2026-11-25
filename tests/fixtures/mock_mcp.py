@@ -111,6 +111,7 @@ for raw in sys.stdin:
         params = request.get("params") or {}
         name = params.get("name")
         arguments = params.get("arguments") or {}
+        print(f"mock call {name}", file=sys.stderr, flush=True)
         if name == "echo":
             send(
                 {

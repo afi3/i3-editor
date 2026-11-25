@@ -782,8 +782,8 @@ or background agent in this release.
 
 ### Agreed behavior
 
-- One palette command: `mcp`, opening a menu for `servers`, `tools`, `call`, and
-  `logs`.
+- `mcp` opens the server/tool/log menu; `mcp_add` provides the guided setup
+  wizard for the built-in filesystem and everything templates.
 - Transport is stdio JSON-RPC 2.0 with newline-delimited messages, not LSP
   `Content-Length` framing.
 - Servers start lazily on first use and are killed on exit or workspace-root
@@ -794,10 +794,11 @@ or background agent in this release.
 - A server trust prompt appears before the first spawn. The trusted identity is
   the hash of command, args, cwd, and env; changing any of them requires trust
   again.
-- Tool calls require confirmation and show server, tool, and JSON arguments.
-  A tool result opens in a read-only overlay; it never edits a buffer or runs a
-  shell command implicitly.
-- No installer or registry; users provide the server command.
+- Tool calls use a schema-driven form with typed fields and path prefill, then a
+  per-call confirmation. Results and stderr logs open read-only and never edit a
+  buffer or run a shell command implicitly.
+- The wizard writes managed `mcp.toml` entries; there is no remote registry or
+  automatic package installer.
 
 ### Protocol and lifecycle
 
@@ -821,7 +822,7 @@ or background agent in this release.
   fallback), path prefill, per-call confirmation, and server log view.
 - [x] `mcp_add` filesystem/everything wizard and persistent recent tools.
 - [x] Workspace-root restart and shutdown cleanup.
-- [x] README and this roadmap updated; architecture update next.
+- [x] README, ARCHITECTURE, and this roadmap updated.
 
 Core landed in `src/mcp`: initialize handshake, `tools/list`, `tools/call`,
 request timeouts, stderr/log ring, crash reporting, and `tests/fixtures/mock_mcp.py`
@@ -829,21 +830,21 @@ with normal, malformed, crash, silent-timeout, and oversized modes. Config
 loading, the `mcp` palette menu, persistent trust hashes, the JSON argument
 editor, per-call confirmation, server logs, and the read-only result overlay
 now work, with schema-driven argument forms, path prefill, the `mcp_add` wizard,
-and recent tools. The suite is 399 (392 unit + 6 CLI + 1 PTY). A manual ignored test
+and recent tools. The suite is 400 (393 unit + 6 CLI + 1 PTY). A manual ignored test
 also passed against `@modelcontextprotocol/server-filesystem`: 14 tools listed,
 `list_directory` returned `hello.txt`, and the server shut down cleanly.
 
 ### Acceptance
 
-- A mock server initializes, lists tools, and returns a tool result in the
+- [x] A mock server initializes, lists tools, and returns a tool result in the
   read-only overlay.
-- Denying trust prevents spawn; denying a call sends no request.
-- Malformed output, timeout, oversized output, and crash are reported without
+- [x] Denying trust prevents spawn; denying a call sends no request.
+- [x] Malformed output, timeout, oversized output, and crash are reported without
   blocking the editor.
-- No tool result can mutate an editor buffer in v0.2.0.
-- `cargo test` (including mock MCP tests), `cargo fmt --check`,
+- [x] No tool result can mutate an editor buffer in v0.2.0.
+- [x] `cargo test` (including mock MCP tests), `cargo fmt --check`,
   `cargo clippy --all-targets --all-features`, MSRV 1.91, audit, and gate pass.
-- `v0.2.0` is tagged only after the checklist and acceptance pass.
+- [ ] `v0.2.0` is tagged only after final release review.
 
 ### Deferred to v0.2.x
 
@@ -867,4 +868,4 @@ cargo clippy --all-targets --all-features
 cargo run -- --dump-keymap
 ```
 
-Last recorded run: `cargo test` → 399 passed (392 unit + 6 CLI process + 1 PTY smoke), `cargo clippy` → 0 warnings.
+Last recorded run: `cargo test` → 400 passed (393 unit + 6 CLI process + 1 PTY smoke), `cargo clippy` → 0 warnings.
