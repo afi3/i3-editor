@@ -8,10 +8,9 @@ verified before the next one started.
 - `v0.1.x` is the current hardening and feature-completion line: release
   engineering, correctness, daily-driver operations, performance, polish, and
   Git depth.
-- `v0.2.x` is reserved for MCP and AI features. `v0.2.0` is the stdio MCP
-  client; AI assistant work starts only after that client is stable. Do not tag
-  `v0.2.0` until the MCP acceptance checklist below passes; other feature work
-  stays inside `v0.1.x`.
+- `v0.2.x` covers MCP and AI features. `v0.2.0` ships the stdio MCP client;
+  AI assistant work follows in later `v0.2.x` releases. Do not tag `v0.3.0`
+  until that work lands.
 
 ## Phase 1 — Terminal foundation and pane skeleton: done
 
@@ -774,7 +773,12 @@ milestone. Release workflow run `45413315109` built and published all four
 targets; the aarch64 macOS asset passed its SHA-256 check, reported
 `i3-editor 0.1.9`, and a v0.1.8 binary self-updated to v0.1.9 successfully.
 
-## Planned v0.2.0 — MCP client (stdio only)
+## Release v0.2.0 — shipped
+
+Shipped as `v0.2.0` on 2026-11-25. The stdio MCP client, guided setup wizard,
+persistent trust and recent tools, schema-driven tool forms, logs, and failure
+handling are now the release baseline. AI chat and model providers remain
+deferred to later `v0.2.x`.
 
 Scope is deliberately narrow: connect to configured MCP servers and let the user
 list and call tools explicitly. There is no chat, model provider, automatic edit,
@@ -844,7 +848,7 @@ also passed against `@modelcontextprotocol/server-filesystem`: 14 tools listed,
 - [x] No tool result can mutate an editor buffer in v0.2.0.
 - [x] `cargo test` (including mock MCP tests), `cargo fmt --check`,
   `cargo clippy --all-targets --all-features`, MSRV 1.91, audit, and gate pass.
-- [ ] `v0.2.0` is tagged only after final release review.
+- [x] `v0.2.0` tagged after final release review.
 
 ### Deferred to v0.2.x
 
@@ -857,6 +861,12 @@ also passed against `@modelcontextprotocol/server-filesystem`: 14 tools listed,
 Risk: MCP servers are arbitrary code and return untrusted text. The trust hash,
 explicit per-call confirmation, sanitized env, read-only results, and no
 auto-apply are the containment boundary for this release.
+
+Release record: `cargo fmt --check`, `cargo test` (400), and
+`cargo clippy --all-targets --all-features` are clean; `cargo audit` reports no
+vulnerabilities and `forgeguard gate --changed` reports no errors or warnings.
+Version `0.2.0`, tag `v0.2.0`, and the four platform assets are the release
+milestone.
 
 ## Verification commands
 
