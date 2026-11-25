@@ -68,7 +68,14 @@ pub fn ask(config: &AiConfig, prompt: &str) -> Result<String, String> {
     curl_config.push_str(&format!("max-time = {}\n", config.timeout_secs.max(1)));
 
     let mut child = Command::new("curl")
-        .args(["--config", "-", "--silent", "--show-error", "--fail"])
+        .args([
+            "--config",
+            "-",
+            "--silent",
+            "--show-error",
+            "--write-out",
+            "\n__I3_AI_STATUS__%{http_code}",
+        ])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -86,8 +93,25 @@ pub fn ask(config: &AiConfig, prompt: &str) -> Result<String, String> {
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(format!("AI request failed: {}", stderr.trim()));
     }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let Some((body, status)) = stdout.rsplit_once("__I3_AI_STATUS__") else {
+        return Err("AI response has no HTTP status".to_string());
+    };
+    let status = status.trim().parse::<u16>().unwrap_or(0);
+    if !(200..300).contains(&status) {
+        let message = serde_json::from_str::<Value>(body.trim())
+            .ok()
+            .and_then(|value| {
+                value
+                    .pointer("/error/message")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            })
+            .unwrap_or_else(|| body.trim().to_string());
+        return Err(format!("AI request failed ({status}): {message}"));
+    }
     let value: Value =
-        serde_json::from_slice(&output.stdout).map_err(|error| format!("AI response: {error}"))?;
+        serde_json::from_str(body.trim()).map_err(|error| format!("AI response: {error}"))?;
     value
         .pointer("/choices/0/message/content")
         .and_then(Value::as_str)
@@ -142,6 +166,33 @@ mod tests {
         };
         let reply = ask(&config, "hello").expect("reply");
         assert_eq!(reply, "hello from mock");
+        server.join().expect("server");
+    }
+
+    #[test]
+    fn reports_the_rate_limit_response_body() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
+        let address = listener.local_addr().expect("address");
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept");
+            let mut request = [0u8; 8192];
+            let _ = stream.read(&mut request).expect("read");
+            let body = r#"{"error":{"code":429,"message":"quota exceeded","status":"RESOURCE_EXHAUSTED"}}"#;
+            let response = format!(
+                "HTTP/1.1 429 Too Many Requests\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            stream.write_all(response.as_bytes()).expect("write");
+        });
+        let config = AiConfig {
+            base_url: format!("http://{address}/v1"),
+            model: "mock-model".to_string(),
+            api_key_env: "I3_EDITOR_TEST_AI_KEY".to_string(),
+            timeout_secs: 5,
+        };
+        let error = ask(&config, "hello").expect_err("429");
+        assert!(error.contains("429"), "{error}");
+        assert!(error.contains("quota exceeded"), "{error}");
         server.join().expect("server");
     }
 

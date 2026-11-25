@@ -881,8 +881,9 @@ targets; the aarch64 macOS asset passed its SHA-256 check, reported
 - No streaming, file context, tool loop, or API-key persistence yet.
 
 Verification: tests cover the OpenAI-compatible request/response path with a
-local mock HTTP endpoint, config parsing, and the palette prompt. Full suite:
-404 (397 unit + 6 CLI + 1 PTY), with the real MCP server test ignored.
+local mock HTTP endpoint, config parsing, the HTTP error body, and the palette
+prompt. Full suite: 405 (398 unit + 6 CLI + 1 PTY), with the real MCP server
+test ignored.
 
 ## Verification commands
 
@@ -894,4 +895,4 @@ cargo clippy --all-targets --all-features
 cargo run -- --dump-keymap
 ```
 
-Last recorded run: `cargo test` → 404 passed (397 unit + 6 CLI process + 1 PTY smoke), `cargo clippy` → 0 warnings.
+Last recorded run: `cargo test` → 405 passed (398 unit + 6 CLI process + 1 PTY smoke), `cargo clippy` → 0 warnings.
