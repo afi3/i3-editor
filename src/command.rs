@@ -40,6 +40,7 @@ pub enum Command {
     Palette,
     Messages,
     Help,
+    Mcp,
     GoToLinePrompt,
     FindPrompt,
     FindInFiles,
@@ -279,6 +280,7 @@ impl Command {
             Command::Palette => ("command_palette", "Run a command"),
             Command::Messages => ("messages", "Show startup warnings"),
             Command::Help => ("help", "Show keybindings"),
+            Command::Mcp => ("mcp", "Show MCP servers and status"),
             _ => return None,
         })
     }
@@ -421,6 +423,7 @@ impl Command {
             Command::ToggleExplorer,
             Command::Messages,
             Command::Help,
+            Command::Mcp,
             Command::QuickOpen,
             Command::Palette,
             Command::Messages,
@@ -554,6 +557,7 @@ mod tests {
             Command::ToggleExplorer,
             Command::Messages,
             Command::Help,
+            Command::Mcp,
             Command::QuickOpen,
             Command::Palette,
             Command::Messages,
@@ -669,6 +673,7 @@ mod tests {
         assert!(names.contains(&"select_theme"));
         assert!(names.contains(&"select_workspace"));
         assert!(names.contains(&"lsp_uninstall"));
+        assert!(names.contains(&"mcp"));
         assert!(
             !names
                 .iter()

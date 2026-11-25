@@ -553,6 +553,7 @@ mod tests {
             git_marks: HashMap::new(),
             git_diff: None,
             help: None,
+            mcp_view: None,
             hunks: None,
             plugin_status: Vec::new(),
             fullscreen: None,

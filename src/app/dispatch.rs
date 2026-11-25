@@ -58,6 +58,7 @@ impl App {
             Command::CloseDocument => self.close_document()?,
             Command::ToggleExplorer => self.toggle_explorer(),
             Command::Help => self.open_help(),
+            Command::Mcp => self.open_mcp(),
             other => return Ok(Some(other)),
         }
         Ok(None)

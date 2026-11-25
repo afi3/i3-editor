@@ -12,6 +12,7 @@ pub mod git_ops;
 pub mod help;
 pub mod lines;
 pub mod lsp_ops;
+pub mod mcp_ops;
 pub mod mouse;
 pub mod outline;
 pub mod plugin_ops;
@@ -57,6 +58,7 @@ impl App {
             swap_dir: None,
             last_swap: std::time::Instant::now(),
             lsp: None,
+            mcp: None,
             plugins: None,
             block_anchor: None,
             git_status_entries: Vec::new(),
@@ -131,6 +133,8 @@ pub struct App {
     pub(crate) last_swap: std::time::Instant,
     /// Language servers for open documents; `None` in headless fixtures.
     pub(crate) lsp: Option<crate::lsp::LspManager>,
+    /// MCP servers configured for this workspace.
+    pub(crate) mcp: Option<crate::mcp::McpManager>,
     /// Alt-drag block selection: pane, anchor line, anchor char column.
     pub(crate) block_anchor: Option<(crate::state::PaneId, usize, usize)>,
     /// Lua plugins; `None` when disabled or unavailable.
@@ -212,6 +216,7 @@ impl App {
             git_marks: std::collections::HashMap::new(),
             git_diff: None,
             help: None,
+            mcp_view: None,
             hunks: None,
             plugin_status: Vec::new(),
             fullscreen: None,
@@ -247,6 +252,7 @@ impl App {
             swap_dir: None,
             last_swap: std::time::Instant::now(),
             lsp: None,
+            mcp: None,
             plugins: None,
             block_anchor: None,
             git_status_entries: Vec::new(),
@@ -265,6 +271,10 @@ impl App {
         }
         app.lsp = Some(crate::lsp::LspManager::new(
             &app.state.config.lsp,
+            app.state.explorer.root.clone(),
+        ));
+        app.mcp = Some(crate::mcp::McpManager::new(
+            app.state.config.mcp.servers.clone(),
             app.state.explorer.root.clone(),
         ));
         if app.state.config.lua.enabled
@@ -306,6 +316,12 @@ impl App {
         self.quick_open_files = None;
         self.state.project_search = None;
         self.restart_lsp();
+        if let Some(mcp) = self.mcp.as_mut() {
+            mcp.restart(
+                self.state.config.mcp.servers.clone(),
+                self.state.explorer.root.clone(),
+            );
+        }
         self.apply_document_indents();
         Ok(())
     }
@@ -347,6 +363,7 @@ impl App {
             self.pump_watcher();
             self.pump_project_search();
             self.pump_lsp();
+            self.pump_mcp();
             self.pump_lsp_install();
             self.refresh_git_if_due();
             self.autosave_swaps();
@@ -469,6 +486,9 @@ impl App {
         }
         if self.state.mode.is_prompt() {
             self.handle_prompt_key(combo);
+            return;
+        }
+        if self.handle_mcp_key(combo) {
             return;
         }
         if self.handle_help_key(combo) {

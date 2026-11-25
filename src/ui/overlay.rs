@@ -466,6 +466,42 @@ pub fn render_help(frame: &mut Frame, state: &AppState) {
     frame.render_widget(Paragraph::new(rows).block(block), rect);
 }
 
+pub fn render_mcp(frame: &mut Frame, state: &AppState) {
+    render_read_only(frame, state, state.mcp_view.as_ref(), " MCP ");
+}
+
+fn render_read_only(
+    frame: &mut Frame,
+    state: &AppState,
+    view: Option<&crate::state::HelpView>,
+    title: &str,
+) {
+    let Some(view) = view else {
+        return;
+    };
+    let area = frame.area();
+    let width = ((u32::from(area.width) * 80 / 100) as u16).clamp(40, 110);
+    let width = width.min(area.width.max(1));
+    let height = area.height.saturating_sub(4).max(3);
+    let x = area.x + area.width.saturating_sub(width) / 2;
+    let y = area.y + area.height.saturating_sub(height) / 2;
+    let rect = Rect::new(x, y, width, height);
+    frame.render_widget(Clear, rect);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(state.theme.prompt_border))
+        .title(title);
+    let inner = block.inner(rect);
+    let rows: Vec<Line> = view
+        .lines
+        .iter()
+        .skip(view.scroll)
+        .take(inner.height as usize)
+        .map(|line| Line::from(Span::styled(line.clone(), state.theme.base())))
+        .collect();
+    frame.render_widget(Paragraph::new(rows).block(block), rect);
+}
+
 pub fn render_hunks(frame: &mut Frame, state: &AppState) {
     let Some(picker) = &state.hunks else {
         return;

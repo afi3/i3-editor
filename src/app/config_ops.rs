@@ -30,6 +30,12 @@ impl App {
         if lsp_changed {
             self.restart_lsp();
         }
+        if let Some(mcp) = self.mcp.as_mut() {
+            mcp.restart(
+                self.state.config.mcp.servers.clone(),
+                self.state.explorer.root.clone(),
+            );
+        }
         self.apply_document_indents();
         self.state.ui.message = if warnings.is_empty() {
             "config reloaded".to_string()

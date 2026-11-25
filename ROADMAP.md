@@ -813,7 +813,7 @@ or background agent in this release.
 ### Delivery checklist
 
 - [x] MCP JSON-RPC framing, request ids, timeouts, and server lifecycle.
-- [ ] Config schema and validation for `[mcp.<name>]`.
+- [x] Config schema and validation for `[mcp.<name>]`.
 - [x] Mock stdio MCP server fixture for deterministic tests.
 - [ ] `mcp` palette menu with server/tool lists and a scrollable result/log view.
 - [ ] Trust prompt with config-hash invalidation.
@@ -823,8 +823,9 @@ or background agent in this release.
 
 Core landed in `src/mcp`: initialize handshake, `tools/list`, `tools/call`,
 request timeouts, stderr/log ring, crash reporting, and `tests/fixtures/mock_mcp.py`
-with normal, malformed, and crash modes. Three MCP tests bring the suite to 388
-(381 unit + 6 CLI + 1 PTY).
+with normal, malformed, and crash modes. Config loading (`[mcp.<name>]`) and a
+read-only `mcp` palette overlay now show configured servers; no server is
+started until the trust slice. The suite is 390 (383 unit + 6 CLI + 1 PTY).
 
 ### Acceptance
 
@@ -860,4 +861,4 @@ cargo clippy --all-targets --all-features
 cargo run -- --dump-keymap
 ```
 
-Last recorded run: `cargo test` → 388 passed (381 unit + 6 CLI process + 1 PTY smoke), `cargo clippy` → 0 warnings.
+Last recorded run: `cargo test` → 390 passed (383 unit + 6 CLI process + 1 PTY smoke), `cargo clippy` → 0 warnings.

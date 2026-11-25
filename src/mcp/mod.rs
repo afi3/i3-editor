@@ -12,6 +12,7 @@ use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
 
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 pub const PROTOCOL_VERSION: &str = "2025-06-18";
@@ -21,7 +22,8 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 const INITIALIZE_TIMEOUT: Duration = Duration::from_secs(60);
 const LOG_LINES: usize = 200;
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(default)]
 pub struct McpServerConfig {
     pub command: String,
     pub args: Vec<String>,

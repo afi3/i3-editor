@@ -64,6 +64,7 @@ fn fixture(text: &str) -> (App, PathBuf) {
         git_marks: std::collections::HashMap::new(),
         git_diff: None,
         help: None,
+        mcp_view: None,
         hunks: None,
         plugin_status: Vec::new(),
         fullscreen: None,
@@ -2163,6 +2164,30 @@ fn palette_lists_and_switches_workspaces() {
     prompt.select_candidate(&first);
     app.submit_prompt().expect("switch");
     assert_eq!(app.state.workspaces.active, 0);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn mcp_command_shows_configured_servers_and_closes() {
+    use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    let (mut app, dir) = fixture("x\n");
+    app.state.config.mcp.servers.insert(
+        "filesystem".to_string(),
+        crate::mcp::McpServerConfig {
+            command: "npx".to_string(),
+            args: vec!["server".to_string()],
+            ..Default::default()
+        },
+    );
+    app.dispatch(Command::Mcp).expect("mcp");
+    let view = app.state.mcp_view.as_ref().expect("mcp view");
+    assert!(view.lines.iter().any(|line| line.contains("filesystem")));
+    assert!(view.lines.iter().any(|line| line.contains("npx server")));
+    assert!(view.lines.iter().any(|line| line.contains("not started")));
+
+    app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    assert!(app.state.mcp_view.is_none());
     std::fs::remove_dir_all(&dir).ok();
 }
 

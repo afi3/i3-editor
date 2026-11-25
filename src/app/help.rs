@@ -52,23 +52,52 @@ impl App {
         let Some(help) = self.state.help.as_mut() else {
             return false;
         };
-        let last = help.lines.len().saturating_sub(1);
-        let mut close = false;
-        match combo.code {
-            KeyCode::Up => help.scroll = help.scroll.saturating_sub(1),
-            KeyCode::Down => help.scroll = (help.scroll + 1).min(last),
-            KeyCode::PageUp => help.scroll = help.scroll.saturating_sub(20),
-            KeyCode::PageDown => help.scroll = (help.scroll + 20).min(last),
-            KeyCode::Home => help.scroll = 0,
-            KeyCode::End => help.scroll = last,
-            KeyCode::Esc | KeyCode::Char('q') => close = true,
-            _ => {}
-        }
-        if close {
+        if read_only_key(help, combo) {
             self.state.help = None;
         }
         true
     }
+}
+
+pub(crate) trait ScrollView {
+    fn line_count(&self) -> usize;
+    fn scroll_mut(&mut self) -> &mut usize;
+}
+
+impl ScrollView for HelpView {
+    fn line_count(&self) -> usize {
+        self.lines.len()
+    }
+
+    fn scroll_mut(&mut self) -> &mut usize {
+        &mut self.scroll
+    }
+}
+
+impl ScrollView for crate::state::DiffView {
+    fn line_count(&self) -> usize {
+        self.lines.len()
+    }
+
+    fn scroll_mut(&mut self) -> &mut usize {
+        &mut self.scroll
+    }
+}
+
+pub(crate) fn read_only_key<V: ScrollView>(view: &mut V, combo: KeyCombo) -> bool {
+    let last = view.line_count().saturating_sub(1);
+    let scroll = view.scroll_mut();
+    match combo.code {
+        KeyCode::Up => *scroll = scroll.saturating_sub(1),
+        KeyCode::Down => *scroll = (*scroll + 1).min(last),
+        KeyCode::PageUp => *scroll = scroll.saturating_sub(20),
+        KeyCode::PageDown => *scroll = (*scroll + 20).min(last),
+        KeyCode::Home => *scroll = 0,
+        KeyCode::End => *scroll = last,
+        KeyCode::Esc | KeyCode::Char('q') => return true,
+        _ => {}
+    }
+    false
 }
 
 fn append_bindings(

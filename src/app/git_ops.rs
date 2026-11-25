@@ -343,21 +343,11 @@ impl App {
     /// Keys while the read-only diff overlay is open: scroll, Esc/q closes, and
     /// every other key is consumed so the view stays read-only.
     pub(crate) fn handle_diff_key(&mut self, combo: crate::input::KeyCombo) -> bool {
-        use ratatui::crossterm::event::KeyCode;
-
         let Some(view) = &mut self.state.git_diff else {
             return false;
         };
-        let last = view.lines.len().saturating_sub(1);
-        match combo.code {
-            KeyCode::Up => view.scroll = view.scroll.saturating_sub(1),
-            KeyCode::Down => view.scroll = (view.scroll + 1).min(last),
-            KeyCode::PageUp => view.scroll = view.scroll.saturating_sub(20),
-            KeyCode::PageDown => view.scroll = (view.scroll + 20).min(last),
-            KeyCode::Home => view.scroll = 0,
-            KeyCode::End => view.scroll = last,
-            KeyCode::Esc | KeyCode::Char('q') => self.state.git_diff = None,
-            _ => {}
+        if super::help::read_only_key(view, combo) {
+            self.state.git_diff = None;
         }
         true
     }

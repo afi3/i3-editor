@@ -18,6 +18,7 @@ pub struct AppConfig {
     pub terminal: TerminalConfig,
     pub keys: KeysConfig,
     pub lsp: LspConfig,
+    pub mcp: McpConfig,
     pub git: GitConfig,
     pub lua: LuaConfig,
 }
@@ -95,6 +96,14 @@ pub struct LspServerConfig {
     /// Exact file names for servers such as Dockerfile.
     #[serde(default)]
     pub filenames: Vec<String>,
+}
+
+/// MCP servers share the same installer/config shape as language servers.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct McpConfig {
+    #[serde(flatten)]
+    pub servers: BTreeMap<String, crate::mcp::McpServerConfig>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -390,13 +399,14 @@ pub fn load_from(path: &Path) -> (AppConfig, Vec<String>) {
         path: path.to_path_buf(),
         text: text.clone(),
     };
-    const SECTIONS: [&str; 8] = [
+    const SECTIONS: [&str; 9] = [
         "editor",
         "explorer",
         "appearance",
         "terminal",
         "keys",
         "lsp",
+        "mcp",
         "git",
         "lua",
     ];
@@ -448,6 +458,7 @@ pub fn load_from(path: &Path) -> (AppConfig, Vec<String>) {
     );
     take_section(&value, "keys", &mut config.keys, &source, &mut warnings);
     take_section(&value, "lsp", &mut config.lsp, &source, &mut warnings);
+    take_section(&value, "mcp", &mut config.mcp, &source, &mut warnings);
     take_section(&value, "git", &mut config.git, &source, &mut warnings);
     take_section(&value, "lua", &mut config.lua, &source, &mut warnings);
     config.keys.source = Some(source);
@@ -567,6 +578,26 @@ mod tests {
         let (config, warnings) = load_from(&path);
         assert_eq!(warnings.len(), 1, "{warnings:?}");
         assert_eq!(config.editor.tab_size, 4);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn mcp_servers_are_read_from_nested_tables() {
+        let dir = std::env::temp_dir().join(format!("i3-config-mcp-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let path = dir.join("config.toml");
+        std::fs::write(
+            &path,
+            "[mcp.filesystem]\ncommand = \"npx\"\nargs = [\"-y\", \"server\"]\ncwd = \"/tmp\"\nenv = { TOKEN = \"x\" }\n",
+        )
+        .expect("write");
+        let (config, warnings) = load_from(&path);
+        assert!(warnings.is_empty(), "{warnings:?}");
+        let server = config.mcp.servers.get("filesystem").expect("mcp server");
+        assert_eq!(server.command, "npx");
+        assert_eq!(server.args, vec!["-y".to_string(), "server".to_string()]);
+        assert_eq!(server.cwd.as_deref(), Some(std::path::Path::new("/tmp")));
+        assert_eq!(server.env.get("TOKEN").map(String::as_str), Some("x"));
         std::fs::remove_dir_all(&dir).ok();
     }
 
