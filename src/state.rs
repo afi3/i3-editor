@@ -346,6 +346,8 @@ pub struct AppState {
     pub help: Option<HelpView>,
     /// Read-only MCP status overlay.
     pub mcp_view: Option<HelpView>,
+    /// Read-only AI response overlay.
+    pub ai_view: Option<HelpView>,
     /// Partial-staging overlay.
     pub hunks: Option<HunkPicker>,
     /// Statusline strings produced by Lua plugins.

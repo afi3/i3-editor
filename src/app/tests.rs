@@ -65,6 +65,7 @@ fn fixture(text: &str) -> (App, PathBuf) {
         git_diff: None,
         help: None,
         mcp_view: None,
+        ai_view: None,
         hunks: None,
         plugin_status: Vec::new(),
         fullscreen: None,
@@ -2164,6 +2165,26 @@ fn palette_lists_and_switches_workspaces() {
     prompt.select_candidate(&first);
     app.submit_prompt().expect("switch");
     assert_eq!(app.state.workspaces.active, 0);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn ai_chat_command_opens_a_prompt_and_rejects_empty_input() {
+    use crate::input::PromptKind;
+
+    let (mut app, dir) = fixture("x\n");
+    app.dispatch(Command::AiChat).expect("ai_chat");
+    let InputMode::Prompt(prompt) = &mut app.state.mode else {
+        panic!("AI prompt missing")
+    };
+    assert_eq!(prompt.kind, PromptKind::AiChat);
+    app.submit_prompt().expect("empty prompt");
+    assert!(app.ai_task.is_none());
+    assert!(app.state.ui.message.contains("empty"));
+    app.handle_key(ratatui::crossterm::event::KeyEvent::new(
+        ratatui::crossterm::event::KeyCode::Esc,
+        ratatui::crossterm::event::KeyModifiers::NONE,
+    ));
     std::fs::remove_dir_all(&dir).ok();
 }
 

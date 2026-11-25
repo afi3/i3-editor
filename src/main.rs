@@ -1,5 +1,6 @@
 //! i3-editor: a keyboard-first terminal editor.
 
+mod ai;
 mod app;
 mod cli;
 mod clipboard;

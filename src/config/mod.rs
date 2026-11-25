@@ -19,6 +19,7 @@ pub struct AppConfig {
     pub keys: KeysConfig,
     pub lsp: LspConfig,
     pub mcp: McpConfig,
+    pub ai: AiConfig,
     pub git: GitConfig,
     pub lua: LuaConfig,
 }
@@ -104,6 +105,28 @@ pub struct LspServerConfig {
 pub struct McpConfig {
     #[serde(flatten)]
     pub servers: BTreeMap<String, crate::mcp::McpServerConfig>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(default)]
+pub struct AiConfig {
+    /// OpenAI-compatible API root, without `/chat/completions`.
+    pub base_url: String,
+    pub model: String,
+    /// Environment variable holding the API key; empty means unauthenticated.
+    pub api_key_env: String,
+    pub timeout_secs: u64,
+}
+
+impl Default for AiConfig {
+    fn default() -> Self {
+        Self {
+            base_url: "https://api.openai.com/v1".to_string(),
+            model: "gpt-4o-mini".to_string(),
+            api_key_env: "OPENAI_API_KEY".to_string(),
+            timeout_secs: 60,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -581,7 +604,7 @@ pub fn load_from(path: &Path) -> (AppConfig, Vec<String>) {
         path: path.to_path_buf(),
         text: text.clone(),
     };
-    const SECTIONS: [&str; 9] = [
+    const SECTIONS: [&str; 10] = [
         "editor",
         "explorer",
         "appearance",
@@ -589,6 +612,7 @@ pub fn load_from(path: &Path) -> (AppConfig, Vec<String>) {
         "keys",
         "lsp",
         "mcp",
+        "ai",
         "git",
         "lua",
     ];
@@ -610,6 +634,7 @@ pub fn load_from(path: &Path) -> (AppConfig, Vec<String>) {
         ("terminal", TERMINAL_KEYS),
         ("keys", KEYS_KEYS),
         ("git", GIT_KEYS),
+        ("ai", AI_KEYS),
         ("lua", LUA_KEYS),
     ] {
         warn_unknown_keys(&value, name, keys, &source, &mut warnings);
@@ -641,6 +666,7 @@ pub fn load_from(path: &Path) -> (AppConfig, Vec<String>) {
     take_section(&value, "keys", &mut config.keys, &source, &mut warnings);
     take_section(&value, "lsp", &mut config.lsp, &source, &mut warnings);
     take_section(&value, "mcp", &mut config.mcp, &source, &mut warnings);
+    take_section(&value, "ai", &mut config.ai, &source, &mut warnings);
     take_section(&value, "git", &mut config.git, &source, &mut warnings);
     take_section(&value, "lua", &mut config.lua, &source, &mut warnings);
     config.keys.source = Some(source);
@@ -651,6 +677,7 @@ pub fn load_from(path: &Path) -> (AppConfig, Vec<String>) {
     config.explorer.width = config.explorer.width.clamp(5, 50);
     config.terminal.height = config.terminal.height.clamp(3, 60);
     config.terminal.scrollback = config.terminal.scrollback.clamp(100, 100_000);
+    config.ai.timeout_secs = config.ai.timeout_secs.clamp(1, 600);
     (config, warnings)
 }
 
@@ -670,6 +697,7 @@ const APPEARANCE_KEYS: &[&str] = &[
 ];
 const TERMINAL_KEYS: &[&str] = &["height", "shell", "scrollback"];
 const GIT_KEYS: &[&str] = &["binary"];
+const AI_KEYS: &[&str] = &["base_url", "model", "api_key_env", "timeout_secs"];
 const LUA_KEYS: &[&str] = &["enabled", "allow_file", "allow_process", "time_budget_ms"];
 const KEYS_KEYS: &[&str] = &["preset", "global", "editing", "explorer"];
 
@@ -760,6 +788,25 @@ mod tests {
         let (config, warnings) = load_from(&path);
         assert_eq!(warnings.len(), 1, "{warnings:?}");
         assert_eq!(config.editor.tab_size, 4);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn ai_config_is_read_and_timeout_is_clamped() {
+        let dir = std::env::temp_dir().join(format!("i3-config-ai-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let path = dir.join("config.toml");
+        std::fs::write(
+            &path,
+            "[ai]\nbase_url = \"http://localhost:11434/v1\"\nmodel = \"local\"\napi_key_env = \"LOCAL_KEY\"\ntimeout_secs = 9999\n",
+        )
+        .expect("write");
+        let (config, warnings) = load_from(&path);
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(config.ai.base_url, "http://localhost:11434/v1");
+        assert_eq!(config.ai.model, "local");
+        assert_eq!(config.ai.api_key_env, "LOCAL_KEY");
+        assert_eq!(config.ai.timeout_secs, 600);
         std::fs::remove_dir_all(&dir).ok();
     }
 

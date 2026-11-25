@@ -258,6 +258,7 @@ pub fn render(frame: &mut Frame, state: &AppState) {
     overlay::render_popups(frame, state);
     overlay::render_help(frame, state);
     overlay::render_mcp(frame, state);
+    overlay::render_ai(frame, state);
     overlay::render_hunks(frame, state);
     if let InputMode::Prompt(prompt) = &state.mode {
         overlay::render_prompt(frame, state, prompt);
@@ -451,6 +452,7 @@ mod tests {
             git_diff: None,
             help: None,
             mcp_view: None,
+            ai_view: None,
             hunks: None,
             plugin_status: Vec::new(),
             fullscreen: None,

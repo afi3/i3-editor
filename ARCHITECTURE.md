@@ -370,6 +370,13 @@ and stderr logs render in read-only overlays with no automatic buffer or shell
 mutation. `mcp_add` writes managed server entries to `mcp.toml`; recent tool
 choices are kept in `mcp_recent.toml` and sorted first.
 
+**The AI assistant is a one-shot worker, not a runtime.** `ai::ask` writes the
+prompt JSON to a private temporary file and runs `curl --config -`, keeping the
+API key out of argv while reusing the existing TLS/network dependency. The
+worker returns through a channel; `App::pump_ai` renders the answer or error in
+a read-only overlay. No project context is attached and no response can mutate
+an editor buffer in this slice.
+
 **File operations follow the focused surface.** `duplicate_file`, `copy_path`,
 and `reveal_in_terminal` take the explorer row when the explorer has focus;
 otherwise the active document's path wins, with the explorer row as fallback.

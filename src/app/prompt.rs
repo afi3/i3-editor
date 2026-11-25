@@ -266,6 +266,10 @@ impl App {
             self.submit_mcp_prompt(prompt);
             return Ok(());
         }
+        if prompt.kind == PromptKind::AiChat {
+            self.submit_ai(prompt);
+            return Ok(());
+        }
         self.submit_regular_query(prompt)
     }
 

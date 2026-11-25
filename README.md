@@ -454,6 +454,27 @@ cargo test real_filesystem_mcp_server -- --ignored
 It requires Node/npm and downloads `@modelcontextprotocol/server-filesystem`;
 CI uses the local mock server instead.
 
+### AI assistant
+
+The assistant is a one-shot OpenAI-compatible chat client. It does not stream,
+send project context automatically, or edit buffers.
+
+```toml
+[ai]
+base_url = "https://api.openai.com/v1"
+model = "gpt-4o-mini"
+api_key_env = "OPENAI_API_KEY"
+timeout_secs = 60
+```
+
+- `F1` → `ai_chat` opens an `Ask:` prompt. `Enter` sends the typed question.
+- The API key is read from `api_key_env`; leave it empty for a local
+  OpenAI-compatible server without authentication.
+- The response opens in a read-only `AI` overlay. `Esc`/`q` closes it.
+- Requests are non-streaming and do not include the active file unless you paste
+  it into the prompt. Tool calls, context indexing, and automatic edits are not
+  part of this slice.
+
 ### Git
 
 Git runs through the configured binary (`[git] binary`, default `git`); there is
@@ -804,6 +825,12 @@ extensions = ["rs"]        # optional; empty means the table name
 [mcp.filesystem]           # configured only; F1 > mcp starts after trust
 command = "npx"
 args = ["-y", "@modelcontextprotocol/server-filesystem", "."]
+
+[ai]
+base_url = "https://api.openai.com/v1"
+model = "gpt-4o-mini"
+api_key_env = "OPENAI_API_KEY"
+timeout_secs = 60
 
 [git]
 binary = "git"             # executable used for every git command

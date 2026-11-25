@@ -870,6 +870,20 @@ milestone. Release workflow run `45569634048` built and published all four
 targets; the aarch64 macOS asset passed its SHA-256 check, reported
 `i3-editor 0.2.0`, and a v0.1.9 binary self-updated to v0.2.0 successfully.
 
+## Unreleased v0.2.1 — AI assistant (one-shot)
+
+- `[ai]` config: OpenAI-compatible `base_url`, `model`, `api_key_env`, and
+  clamped `timeout_secs`.
+- `F1` → `ai_chat` opens an `Ask:` prompt; the answer renders in a read-only
+  overlay.
+- Requests run in a worker thread through `curl`, send the typed prompt only,
+  and never edit a buffer.
+- No streaming, file context, tool loop, or API-key persistence yet.
+
+Verification: tests cover the OpenAI-compatible request/response path with a
+local mock HTTP endpoint, config parsing, and the palette prompt. Full suite:
+404 (397 unit + 6 CLI + 1 PTY), with the real MCP server test ignored.
+
 ## Verification commands
 
 ```bash
@@ -880,4 +894,4 @@ cargo clippy --all-targets --all-features
 cargo run -- --dump-keymap
 ```
 
-Last recorded run: `cargo test` → 400 passed (393 unit + 6 CLI process + 1 PTY smoke), `cargo clippy` → 0 warnings.
+Last recorded run: `cargo test` → 404 passed (397 unit + 6 CLI process + 1 PTY smoke), `cargo clippy` → 0 warnings.

@@ -1,5 +1,6 @@
 //! Application coordinator: event loop, key routing, pane lifecycle.
 
+pub mod ai_ops;
 pub mod comment;
 pub mod config_ops;
 pub mod conflict_ops;
@@ -59,6 +60,7 @@ impl App {
             last_swap: std::time::Instant::now(),
             lsp: None,
             mcp: None,
+            ai_task: None,
             mcp_trusted: std::collections::HashSet::new(),
             mcp_recent: std::collections::BTreeMap::new(),
             persist_mcp_state: false,
@@ -138,6 +140,8 @@ pub struct App {
     pub(crate) lsp: Option<crate::lsp::LspManager>,
     /// MCP servers configured for this workspace.
     pub(crate) mcp: Option<crate::mcp::McpManager>,
+    /// Running AI request, if any.
+    pub(crate) ai_task: Option<crate::ai::Task>,
     /// Trusted MCP server config hashes for this session.
     pub(crate) mcp_trusted: std::collections::HashSet<String>,
     /// Recent MCP tool names per server.
@@ -226,6 +230,7 @@ impl App {
             git_diff: None,
             help: None,
             mcp_view: None,
+            ai_view: None,
             hunks: None,
             plugin_status: Vec::new(),
             fullscreen: None,
@@ -266,6 +271,7 @@ impl App {
             last_swap: std::time::Instant::now(),
             lsp: None,
             mcp: None,
+            ai_task: None,
             mcp_trusted,
             mcp_recent,
             persist_mcp_state: true,
@@ -380,6 +386,7 @@ impl App {
             self.pump_project_search();
             self.pump_lsp();
             self.pump_mcp();
+            self.pump_ai();
             self.pump_lsp_install();
             self.refresh_git_if_due();
             self.autosave_swaps();
@@ -463,7 +470,7 @@ impl App {
     }
 
     fn frame_timeout(&self) -> Duration {
-        if self.lsp_install.is_some() {
+        if self.lsp_install.is_some() || self.ai_task.is_some() {
             return Duration::from_millis(100);
         }
         if !self.state.terminals.is_empty() {
@@ -504,22 +511,7 @@ impl App {
             self.handle_prompt_key(combo);
             return;
         }
-        if self.handle_mcp_key(combo) {
-            return;
-        }
-        if self.handle_help_key(combo) {
-            return;
-        }
-        if self.handle_hunk_key(combo) {
-            return;
-        }
-        if self.handle_diff_key(combo) {
-            return;
-        }
-        if self.handle_completion_key(combo) {
-            return;
-        }
-        if self.handle_hover_key(combo) {
+        if self.handle_read_only_overlay_key(combo) || self.handle_popup_key(combo) {
             return;
         }
         if matches!(self.state.focus, Focus::Shell) {
@@ -567,6 +559,18 @@ impl App {
             let result = self.insert_typed_char(ch);
             self.finish(result);
         }
+    }
+
+    fn handle_read_only_overlay_key(&mut self, combo: KeyCombo) -> bool {
+        self.handle_mcp_key(combo)
+            || self.handle_ai_key(combo)
+            || self.handle_help_key(combo)
+            || self.handle_hunk_key(combo)
+            || self.handle_diff_key(combo)
+    }
+
+    fn handle_popup_key(&mut self, combo: KeyCombo) -> bool {
+        self.handle_completion_key(combo) || self.handle_hover_key(combo)
     }
 
     pub(crate) fn finish(&mut self, result: Result<()>) {

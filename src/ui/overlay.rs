@@ -470,6 +470,10 @@ pub fn render_mcp(frame: &mut Frame, state: &AppState) {
     render_read_only(frame, state, state.mcp_view.as_ref(), " MCP ");
 }
 
+pub fn render_ai(frame: &mut Frame, state: &AppState) {
+    render_read_only(frame, state, state.ai_view.as_ref(), " AI ");
+}
+
 fn render_read_only(
     frame: &mut Frame,
     state: &AppState,
@@ -645,6 +649,7 @@ fn field_label(prompt: &PromptState, index: usize) -> String {
         (PromptKind::GoToLine, _) => "Line: ".to_string(),
         (PromptKind::WorkspaceRoot, _) => "Root: ".to_string(),
         (PromptKind::McpAddPath, _) => "Directory: ".to_string(),
+        (PromptKind::AiChat, _) => "Ask: ".to_string(),
         (PromptKind::CommandPalette, _) => "> ".to_string(),
         _ => String::new(),
     }

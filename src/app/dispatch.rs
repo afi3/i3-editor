@@ -60,6 +60,7 @@ impl App {
             Command::Help => self.open_help(),
             Command::Mcp => self.open_mcp(),
             Command::McpAdd => self.open_mcp_add(),
+            Command::AiChat => self.open_ai(),
             other => return Ok(Some(other)),
         }
         Ok(None)
