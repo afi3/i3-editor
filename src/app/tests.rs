@@ -2744,6 +2744,65 @@ fn ai_input_accepts_shift_enter_newlines_and_enter_submits() {
 }
 
 #[test]
+fn background_agent_auto_runs_read_only_tools_and_finishes() {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::time::{Duration, Instant};
+
+    let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
+    let address = listener.local_addr().expect("address");
+    let server = std::thread::spawn(move || {
+        let bodies = [
+            r#"{"choices":[{"message":{"role":"assistant","content":null,"tool_calls":[{"id":"read-1","type":"function","function":{"name":"native__read_file","arguments":"{\"path\":\"note.txt\"}"}}]}}]}"#,
+            r#"{"choices":[{"message":{"content":"background done"}}]}"#,
+        ];
+        for body in bodies {
+            let (mut stream, _) = listener.accept().expect("accept");
+            let mut request = [0u8; 8192];
+            let _ = stream.read(&mut request).expect("read");
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            stream.write_all(response.as_bytes()).expect("write");
+        }
+    });
+    let (mut app, dir) = fixture("x\n");
+    let mut config = crate::ai::test_config(format!("http://{address}/v1"));
+    config.stream = false;
+    config.background_agents = true;
+    app.state.config.ai = config;
+    app.dispatch(Command::AiBackground)
+        .expect("background prompt");
+    let InputMode::Prompt(prompt) = &mut app.state.mode else {
+        panic!("background prompt missing")
+    };
+    prompt.fields[0] = "inspect the file".to_string();
+    app.submit_prompt().expect("start background");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline && app.background_agent {
+        app.pump_ai();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(!app.background_agent, "{:?}", app.state.ai.entries);
+    assert!(app.state.ai.conversation.iter().any(|message| {
+        message["role"] == "tool"
+            && message["content"]
+                .as_str()
+                .is_some_and(|text| text.contains("snapshot:"))
+    }));
+    assert!(
+        app.state
+            .ai
+            .entries
+            .iter()
+            .any(|line| line.contains("background done"))
+    );
+    server.join().expect("server");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn ai_panel_commands_copy_clear_resize_and_scroll() {
     let (mut app, dir) = fixture("x\n");
     app.dispatch(Command::AiChat).expect("ai panel");

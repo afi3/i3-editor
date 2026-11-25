@@ -4,9 +4,9 @@ use ratatui::crossterm::event::KeyCode;
 use serde_json::{Value, json};
 
 use crate::command::Command;
-use crate::input::KeyCombo;
+use crate::input::{KeyCombo, PromptKind, PromptState};
 use crate::mcp::ToolContent;
-use crate::state::{AiToolCall, AiWaiting};
+use crate::state::{AiToolCall, AiWaiting, InputMode};
 
 use super::App;
 
@@ -273,9 +273,95 @@ impl App {
             }));
         }
         self.state.ai.busy = false;
+        self.background_agent = false;
         self.state.ai.entries.push("[cancelled]".to_string());
         self.save_ai_history();
         self.dirty = true;
+    }
+
+    pub(crate) fn open_ai_background(&mut self) {
+        if !self.state.config.ai.background_agents {
+            self.notify("enable [ai] background_agents first");
+            return;
+        }
+        if self.state.ai.busy || self.ai_task.is_some() || self.ai_stream.is_some() {
+            self.notify("an AI turn is already running");
+            return;
+        }
+        self.state.mode = InputMode::Prompt(PromptState::new(PromptKind::AiBackground));
+        self.notify("background agent: read-only tools only");
+        self.dirty = true;
+    }
+
+    pub(crate) fn submit_ai_background(&mut self, prompt: PromptState) {
+        let task = prompt.fields.first().cloned().unwrap_or_default();
+        if task.trim().is_empty() {
+            self.notify("background task is empty");
+            return;
+        }
+        self.state.mode = InputMode::Normal;
+        self.background_agent = true;
+        self.state.ai.visible = false;
+        self.state.ai.focused = false;
+        self.state
+            .ai
+            .entries
+            .push("[background] started; only read-only tools run automatically".to_string());
+        self.open_ai_question(task);
+    }
+
+    fn open_ai_question(&mut self, question: String) {
+        self.start_ai_question(question);
+    }
+
+    fn auto_allow_background_tool(&mut self) {
+        let Some(call) = self.state.ai.pending.front().cloned() else {
+            self.finish_background();
+            return;
+        };
+        if call.capability != "read-only"
+            || !tool_allowed(&self.state.config.ai, &call.server, &call.tool)
+        {
+            let pending_calls: Vec<AiToolCall> = self.state.ai.pending.drain(..).collect();
+            for pending in pending_calls {
+                super::audit::blocked(
+                    &self.state,
+                    &pending.id,
+                    &pending.server,
+                    &pending.tool,
+                    &pending.arguments,
+                    "background agent read-only policy",
+                );
+                self.state.ai.conversation.push(json!({
+                    "role": "tool",
+                    "tool_call_id": pending.id,
+                    "content": "Blocked: background agents may only run read-only tools."
+                }));
+                self.state.ai.entries.push(format!(
+                    "[background] blocked {}/{} [{}]",
+                    pending.server, pending.tool, pending.capability
+                ));
+            }
+            self.background_agent = false;
+            self.state.ai.busy = false;
+            self.notify("background agent stopped at a non-read-only tool");
+            self.save_ai_history();
+            return;
+        }
+        self.allow_ai_tool();
+    }
+
+    fn finish_background(&mut self) {
+        if !self.background_agent {
+            return;
+        }
+        self.background_agent = false;
+        self.state
+            .ai
+            .entries
+            .push("[background] finished".to_string());
+        self.notify("background agent finished");
+        self.save_ai_history();
     }
 
     pub(crate) fn attach_ai_file(&mut self) {
@@ -553,7 +639,10 @@ impl App {
         self.remove_thinking_entry();
         match result {
             Ok(reply) => self.finish_ai_reply(reply, false),
-            Err(error) => self.state.ai.entries.push(format!("[error] {error}")),
+            Err(error) => {
+                self.background_agent = false;
+                self.state.ai.entries.push(format!("[error] {error}"));
+            }
         }
         self.dirty = true;
     }
@@ -584,6 +673,7 @@ impl App {
                 crate::ai::StreamEvent::Error(error) => {
                     self.ai_stream = None;
                     self.ai_streamed = false;
+                    self.background_agent = false;
                     self.state.ai.busy = false;
                     self.remove_thinking_entry();
                     self.state.ai.entries.push(format!("[error] {error}"));
@@ -684,7 +774,11 @@ impl App {
                 arguments: call.arguments,
             });
         }
-        if let Some(call) = self.state.ai.pending.front() {
+        if self.state.ai.pending.is_empty() {
+            self.finish_background();
+        } else if self.background_agent {
+            self.auto_allow_background_tool();
+        } else if let Some(call) = self.state.ai.pending.front() {
             self.state.ai.entries.push(format!(
                 "Allow {}/{} [{}]? [y] yes  [n] no",
                 call.server, call.tool, call.capability
@@ -1021,14 +1115,18 @@ impl App {
             if is_error { " error" } else { "" },
             text
         ));
-        if let Some(call) = self.state.ai.pending.front() {
+        if self.state.ai.pending.is_empty() {
+            self.start_ai_request();
+        } else if self.background_agent {
+            self.state.ai.busy = true;
+            self.auto_allow_background_tool();
+        } else {
+            let call = self.state.ai.pending.front().expect("pending tool");
             self.state.ai.entries.push(format!(
                 "Allow {}/{} [{}]? [y] yes  [n] no",
                 call.server, call.tool, call.capability
             ));
             self.state.ai.busy = false;
-        } else {
-            self.start_ai_request();
         }
         self.save_ai_history();
         self.dirty = true;

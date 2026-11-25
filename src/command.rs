@@ -91,6 +91,7 @@ pub enum Command {
     AiAttachSelection,
     AiClearContext,
     AiUndoEdit,
+    AiBackground,
     GitStatus,
     GitDiff,
     GitLog,
@@ -261,6 +262,7 @@ impl Command {
             ),
             Command::AiClearContext => ("ai_clear_context", "Clear pending AI attachments"),
             Command::AiUndoEdit => ("ai_undo_edit", "Undo the last native AI edit"),
+            Command::AiBackground => ("ai_background", "Start a read-only background agent"),
             _ => return None,
         })
     }
@@ -291,7 +293,8 @@ impl Command {
             | Command::AiAttachFile
             | Command::AiAttachSelection
             | Command::AiClearContext
-            | Command::AiUndoEdit => return self.ai_spec(),
+            | Command::AiUndoEdit
+            | Command::AiBackground => return self.ai_spec(),
             Command::LspUninstall => (
                 "lsp_uninstall",
                 "Remove the installed language server for the active file",
@@ -531,6 +534,7 @@ impl Command {
             Command::AiAttachSelection,
             Command::AiClearContext,
             Command::AiUndoEdit,
+            Command::AiBackground,
             Command::GitStatus,
             Command::GitDiff,
             Command::GitLog,
@@ -680,6 +684,7 @@ mod tests {
             Command::AiAttachSelection,
             Command::AiClearContext,
             Command::AiUndoEdit,
+            Command::AiBackground,
             Command::GitStatus,
             Command::GitDiff,
             Command::GitLog,

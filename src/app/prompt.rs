@@ -269,6 +269,10 @@ impl App {
             self.submit_mcp_prompt(prompt);
             return Ok(());
         }
+        if prompt.kind == PromptKind::AiBackground {
+            self.submit_ai_background(prompt);
+            return Ok(());
+        }
         self.submit_regular_query(prompt)
     }
 

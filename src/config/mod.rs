@@ -140,6 +140,8 @@ pub struct AiConfig {
     pub stream: bool,
     /// Keep the transcript and conversation across restarts.
     pub persist_history: bool,
+    /// Allow the explicit background-agent command.
+    pub background_agents: bool,
 }
 
 impl Default for AiConfig {
@@ -161,6 +163,7 @@ impl Default for AiConfig {
             panel_width: 20,
             stream: true,
             persist_history: false,
+            background_agents: false,
         }
     }
 }
@@ -757,6 +760,7 @@ const AI_KEYS: &[&str] = &[
     "panel_width",
     "stream",
     "persist_history",
+    "background_agents",
 ];
 const LUA_KEYS: &[&str] = &["enabled", "allow_file", "allow_process", "time_budget_ms"];
 const KEYS_KEYS: &[&str] = &["preset", "global", "editing", "explorer"];

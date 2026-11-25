@@ -483,6 +483,7 @@ api_key = ""                     # optional local override; prefer the env var
 timeout_secs = 60
 stream = true                    # SSE token streaming
 persist_history = false          # opt in to ai_history.json
+background_agents = false        # opt in to read-only background tasks
 max_context_tokens = 16000       # prompt budget; old turns are dropped
 max_tool_output_chars = 20000    # one MCP result kept in history
 max_history_turns = 24
@@ -582,6 +583,10 @@ same turn. Cancelling the AI turn kills a running check; non-Rust edits skip it.
   arrive; set `stream = false` to use the non-streaming path. The active file is
   not attached unless you paste it into the prompt. Context indexing and
   automatic edits are not part of this slice.
+- `ai_background` starts a background agent after `background_agents = true`.
+  It runs only read-only native/MCP tools automatically; the first write or
+  destructive tool stops the agent and is recorded as blocked. It never opens,
+  writes, or applies a file implicitly.
 - With `persist_history = true`, the transcript and conversation are saved to
   `<config>/i3-editor/ai_history.json` and restored at the next start.
   `ai_clear` removes both the visible history and that file. Tool output and
@@ -946,6 +951,7 @@ api_key = ""
 timeout_secs = 60
 stream = true
 persist_history = false
+background_agents = false
 max_context_tokens = 16000
 max_tool_output_chars = 20000
 max_history_turns = 24

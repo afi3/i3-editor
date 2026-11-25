@@ -73,7 +73,8 @@ impl App {
             | Command::AiAttachFile
             | Command::AiAttachSelection
             | Command::AiClearContext
-            | Command::AiUndoEdit => {
+            | Command::AiUndoEdit
+            | Command::AiBackground => {
                 self.dispatch_ai(command);
                 return Ok(None);
             }
@@ -96,6 +97,7 @@ impl App {
             Command::AiAttachSelection => self.attach_ai_selection(),
             Command::AiClearContext => self.clear_ai_context(),
             Command::AiUndoEdit => self.undo_ai_edit(),
+            Command::AiBackground => self.open_ai_background(),
             _ => {}
         }
     }

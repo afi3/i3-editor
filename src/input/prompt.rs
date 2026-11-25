@@ -51,6 +51,7 @@ pub enum PromptKind {
     McpPrompts,
     McpPromptList,
     McpSampling,
+    AiBackground,
 }
 
 /// Grouping used by the prompt setup and submit code, so neither needs one
@@ -109,6 +110,7 @@ impl PromptKind {
                 | PromptKind::Conflicts
                 | PromptKind::CommitMessage
                 | PromptKind::SelectWorkspace
+                | PromptKind::AiBackground
         )
     }
 
@@ -157,6 +159,7 @@ impl PromptKind {
             PromptKind::Conflicts => "Merge Conflicts",
             PromptKind::CommitMessage => "Commit Message",
             PromptKind::SelectWorkspace => "Workspace",
+            PromptKind::AiBackground => "Background Agent Task",
             _ => return None,
         })
     }

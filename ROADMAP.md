@@ -946,6 +946,7 @@ user's explicit choice.
 - [x] Add HTTP MCP transport with JSON/SSE responses and session headers.
 - [x] Add MCP resources and prompts list/read menus.
 - [x] Add consent-gated MCP sampling over stdio.
+- [x] Add opt-in read-only background agents with automatic destructive-tool refusal.
 
 ### Acceptance
 
@@ -964,7 +965,7 @@ user's explicit choice.
 - v0.2.2: explicit file/selection context.
 - v0.2.3: diff previews, confirmed `native/edit_file`/`native/write_file`, and
   snapshot-safe undo are implemented.
-- Later: autonomous background agents.
+- Later: richer autonomous planning and persistent agent objectives.
 
 Risk: model output can request a dangerous MCP tool or contain prompt injection.
 The loop must keep trust, per-call confirmation, step limits, sanitized env,
@@ -980,4 +981,4 @@ cargo clippy --all-targets --all-features
 cargo run -- --dump-keymap
 ```
 
-Last recorded run: `cargo test` → 439 passed (432 unit + 6 CLI process + 1 PTY smoke), `cargo clippy` → 0 warnings.
+Last recorded run: `cargo test` → 440 passed (433 unit + 6 CLI process + 1 PTY smoke), `cargo clippy` → 0 warnings.
