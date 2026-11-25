@@ -9,8 +9,8 @@ verified before the next one started.
   engineering, correctness, daily-driver operations, performance, polish, and
   Git depth.
 - `v0.2.x` covers MCP and AI features. `v0.2.0` ships the stdio MCP client;
-  AI assistant work follows in later `v0.2.x` releases. Do not tag `v0.3.0`
-  until that work lands.
+  `v0.2.1` is the read-only agent harness; context/streaming and editing actions
+  follow in later `v0.2.x` releases. Do not tag `v0.3.0` until that work lands.
 
 ## Phase 1 — Terminal foundation and pane skeleton: done
 
@@ -870,20 +870,80 @@ milestone. Release workflow run `45569634048` built and published all four
 targets; the aarch64 macOS asset passed its SHA-256 check, reported
 `i3-editor 0.2.0`, and a v0.1.9 binary self-updated to v0.2.0 successfully.
 
-## Unreleased v0.2.1 — AI assistant (one-shot)
+## Unreleased v0.2.1 — agent harness (no auto-apply)
 
-- `[ai]` config: OpenAI-compatible `base_url`, `model`, `api_key_env`, and
-  clamped `timeout_secs`.
-- `F1` → `ai_chat` opens an `Ask:` prompt; the answer renders in a read-only
-  overlay.
-- Requests run in a worker thread through `curl`, send the typed prompt only,
-  and never edit a buffer.
-- No streaming, file context, tool loop, or API-key persistence yet.
+The one-shot AI baseline is already on `main`: `[ai]` provider config, a worker
+thread using `curl`, `ai_chat`, HTTP error bodies, and a read-only response
+overlay. This release turns that request into a bounded multi-turn tool loop
+against configured MCP servers.
 
-Verification: tests cover the OpenAI-compatible request/response path with a
-local mock HTTP endpoint, config parsing, the HTTP error body, and the palette
-prompt. Full suite: 405 (398 unit + 6 CLI + 1 PTY), with the real MCP server
-test ignored.
+"Read-only" here means the harness never edits an editor buffer, opens a file,
+or applies a patch. Every MCP tool call still passes the trust gate and the
+per-call confirmation prompt; MCP tools with their own side effects remain the
+user's explicit choice.
+
+### Scope
+
+- `ai_chat` becomes a chat transcript instead of a single response overlay.
+- Send the configured MCP tools (`name`, `description`, `inputSchema`) with the
+  model request.
+- Parse OpenAI-compatible `tool_calls`, show the requested server/tool/arguments,
+  require confirmation, execute through `McpManager`, and append the tool result.
+- Continue the model turn with tool results until it returns text, the user
+  cancels, or the loop reaches the step limit.
+- Session-only chat history; no transcript persistence yet.
+- No auto-edit, diff apply, background agent, or context indexing.
+
+### Harness rules
+
+- A normal `ai_chat` prompt starts a conversation; `Enter` sends the next user
+  message.
+- A tool call is shown before execution. Declining it ends the current turn with
+  a visible "tool call denied" result.
+- Maximum 8 model round trips per user turn; the limit is reported, not silently
+  truncated.
+- MCP trust and per-call confirmation remain mandatory. The harness cannot bypass
+  them.
+- Tool output is untrusted data appended to the transcript, never interpreted as
+  a new instruction or applied to a buffer.
+- API failures, 429 responses, malformed tool calls, MCP timeouts, and server
+  crashes stop the turn with a visible error.
+- `Esc` cancels the active turn; `q`/`Esc` closes a finished transcript view.
+
+### Delivery checklist
+
+- [x] One-shot OpenAI-compatible request and response overlay.
+- [x] MCP tools/list, schema form, trust, confirmation, and read-only results.
+- [ ] Extend the provider request with MCP tool definitions.
+- [ ] Parse tool calls and multi-turn assistant/tool messages.
+- [ ] Add a transcript view with user, assistant, tool-call, and result entries.
+- [ ] Wire tool confirmation and denial into the harness loop.
+- [ ] Enforce the 8-step cap and cancellation.
+- [ ] Extend the mock HTTP endpoint with tool-call and malformed-call sequences.
+- [ ] Extend the mock MCP server or use the existing mock for harness tests.
+- [ ] Test denial, cap, API failure, tool timeout, and no-buffer-mutation paths.
+- [ ] Update README, ARCHITECTURE, and this roadmap.
+
+### Acceptance
+
+- A mock model requests `list_directory`, the user confirms, the mock MCP result
+  returns to the model, and the final text appears in the transcript.
+- Denying the tool call ends the turn without invoking MCP.
+- The ninth model round trip is refused with a clear message.
+- A 429/API error and a malformed tool call are shown without blocking input.
+- No harness path mutates an editor buffer, opens a file, or applies a patch.
+- Full suite, fmt, clippy, MSRV 1.91, audit, and gate pass.
+
+### Deferred to v0.2.2 / v0.2.3
+
+- v0.2.2: streaming responses, persistent chat history, explicit file/selection
+  context.
+- v0.2.3: diff preview, apply/undo, and explicit write-tool workflows.
+- Later: MCP HTTP/SSE, resources/prompts/sampling, autonomous background agents.
+
+Risk: model output can request a dangerous MCP tool or contain prompt injection.
+The loop must keep trust, per-call confirmation, step limits, sanitized env,
+read-only editor results, and no auto-apply as hard boundaries.
 
 ## Verification commands
 
