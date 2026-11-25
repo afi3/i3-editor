@@ -14,6 +14,7 @@ mod git;
 mod input;
 mod lsp;
 mod lsp_install;
+mod mcp;
 mod plugins;
 mod project_search;
 mod recovery;

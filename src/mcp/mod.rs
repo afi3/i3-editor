@@ -1,0 +1,710 @@
+//! MCP client core: stdio JSON-RPC transport, lifecycle, and tool calls.
+//!
+//! MCP uses newline-delimited JSON-RPC 2.0 messages over stdio. This module
+//! deliberately has no UI or permission policy yet; the next slice wires the
+//! `mcp` menu and trust prompts to these primitives.
+#![allow(dead_code)]
+
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::io::{BufRead, BufReader, Write};
+use std::path::{Path, PathBuf};
+use std::process::{Child, ChildStdin, Command, Stdio};
+use std::sync::mpsc::{self, Receiver};
+use std::time::{Duration, Instant};
+
+use serde_json::{Value, json};
+
+pub const PROTOCOL_VERSION: &str = "2025-06-18";
+
+const MAX_MESSAGE_BYTES: usize = 8 << 20;
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
+const INITIALIZE_TIMEOUT: Duration = Duration::from_secs(60);
+const LOG_LINES: usize = 200;
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct McpServerConfig {
+    pub command: String,
+    pub args: Vec<String>,
+    pub cwd: Option<PathBuf>,
+    pub env: BTreeMap<String, String>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Tool {
+    pub name: String,
+    pub description: String,
+    pub input_schema: Value,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum ToolContent {
+    Text(String),
+    Other(Value),
+}
+
+#[derive(Debug)]
+pub enum Event {
+    Tools {
+        server: String,
+        tools: Vec<Tool>,
+    },
+    ToolResult {
+        server: String,
+        tool: String,
+        content: Vec<ToolContent>,
+        is_error: bool,
+    },
+    Log {
+        server: String,
+        line: String,
+    },
+    Warning(String),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ReplyKind {
+    Initialize,
+    ToolsList,
+    CallTool,
+}
+
+struct Pending {
+    kind: ReplyKind,
+    tool: Option<String>,
+    sent: Instant,
+}
+
+struct Queued {
+    method: &'static str,
+    params: Value,
+    kind: ReplyKind,
+    tool: Option<String>,
+}
+
+enum Incoming {
+    Line(String),
+    Stderr(String),
+    ProtocolError(String),
+    Closed,
+}
+
+struct Server {
+    child: Child,
+    writer: ChildStdin,
+    incoming: Receiver<Incoming>,
+    initialized: bool,
+    pending: HashMap<i64, Pending>,
+    queued: VecDeque<Queued>,
+    tools: Vec<Tool>,
+    logs: VecDeque<String>,
+}
+
+impl Drop for Server {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+pub struct McpManager {
+    configs: BTreeMap<String, McpServerConfig>,
+    root: PathBuf,
+    servers: HashMap<String, Server>,
+    failed: HashSet<String>,
+    next_id: i64,
+}
+
+impl McpManager {
+    pub fn new(configs: BTreeMap<String, McpServerConfig>, root: PathBuf) -> Self {
+        Self {
+            configs,
+            root,
+            servers: HashMap::new(),
+            failed: HashSet::new(),
+            next_id: 0,
+        }
+    }
+
+    pub fn is_configured(&self) -> bool {
+        !self.configs.is_empty()
+    }
+
+    pub fn names(&self) -> Vec<&str> {
+        self.configs.keys().map(String::as_str).collect()
+    }
+
+    pub fn tools(&self, server: &str) -> Option<&[Tool]> {
+        self.servers
+            .get(server)
+            .map(|server| server.tools.as_slice())
+    }
+
+    pub fn logs(&self, server: &str) -> Option<&VecDeque<String>> {
+        self.servers.get(server).map(|server| &server.logs)
+    }
+
+    pub fn failed(&self, server: &str) -> bool {
+        self.failed.contains(server)
+    }
+
+    pub fn list_tools(&mut self, server: &str) -> Result<(), String> {
+        self.request(server, "tools/list", json!({}), ReplyKind::ToolsList, None)
+    }
+
+    pub fn call_tool(&mut self, server: &str, tool: &str, arguments: Value) -> Result<(), String> {
+        self.request(
+            server,
+            "tools/call",
+            json!({"name": tool, "arguments": arguments}),
+            ReplyKind::CallTool,
+            Some(tool.to_string()),
+        )
+    }
+
+    pub fn restart(&mut self, configs: BTreeMap<String, McpServerConfig>, root: PathBuf) {
+        self.servers.clear();
+        self.failed.clear();
+        self.configs = configs;
+        self.root = root;
+    }
+
+    pub fn pump(&mut self) -> Vec<Event> {
+        let names: Vec<String> = self.servers.keys().cloned().collect();
+        let mut events = Vec::new();
+        for name in names {
+            self.pump_server(&name, &mut events);
+        }
+        events
+    }
+
+    fn request(
+        &mut self,
+        name: &str,
+        method: &'static str,
+        params: Value,
+        kind: ReplyKind,
+        tool: Option<String>,
+    ) -> Result<(), String> {
+        if !self.servers.contains_key(name) {
+            self.start(name)?;
+        }
+        let initialized = self
+            .servers
+            .get(name)
+            .is_some_and(|server| server.initialized);
+        if !initialized {
+            if let Some(server) = self.servers.get_mut(name) {
+                server.queued.push_back(Queued {
+                    method,
+                    params,
+                    kind,
+                    tool,
+                });
+            }
+            return Ok(());
+        }
+        let id = self.next_id();
+        let write = {
+            let Some(server) = self.servers.get_mut(name) else {
+                return Err(format!("MCP {name}: server disappeared"));
+            };
+            let write = write_request(&mut server.writer, id, method, params);
+            if write.is_ok() {
+                server.pending.insert(
+                    id,
+                    Pending {
+                        kind,
+                        tool,
+                        sent: Instant::now(),
+                    },
+                );
+            }
+            write
+        };
+        if let Err(error) = write {
+            self.servers.remove(name);
+            self.failed.insert(name.to_string());
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    fn start(&mut self, name: &str) -> Result<(), String> {
+        if self.servers.contains_key(name) {
+            return Ok(());
+        }
+        if self.failed.contains(name) {
+            return Err(format!("MCP {name}: server previously failed"));
+        }
+        let config = self
+            .configs
+            .get(name)
+            .cloned()
+            .ok_or_else(|| format!("MCP {name}: no configuration"))?;
+        let mut server = spawn_server(name, &config, &self.root)?;
+        let id = self.next_id();
+        if let Err(error) = write_request(&mut server.writer, id, "initialize", initialize_params())
+        {
+            let _ = server.child.kill();
+            let _ = server.child.wait();
+            self.failed.insert(name.to_string());
+            return Err(error);
+        }
+        server.pending.insert(
+            id,
+            Pending {
+                kind: ReplyKind::Initialize,
+                tool: None,
+                sent: Instant::now(),
+            },
+        );
+        self.servers.insert(name.to_string(), server);
+        Ok(())
+    }
+
+    fn next_id(&mut self) -> i64 {
+        self.next_id += 1;
+        self.next_id
+    }
+
+    fn pump_server(&mut self, name: &str, events: &mut Vec<Event>) {
+        let mut messages = Vec::new();
+        if let Some(server) = self.servers.get(name) {
+            while let Ok(message) = server.incoming.try_recv() {
+                messages.push(message);
+            }
+        }
+        let mut closed = false;
+        for message in messages {
+            match message {
+                Incoming::Line(line) => self.handle_line(name, &line, events),
+                Incoming::Stderr(line) => {
+                    if let Some(server) = self.servers.get_mut(name) {
+                        server.logs.push_back(line.clone());
+                        if server.logs.len() > LOG_LINES {
+                            server.logs.pop_front();
+                        }
+                    }
+                    events.push(Event::Log {
+                        server: name.to_string(),
+                        line,
+                    });
+                }
+                Incoming::ProtocolError(message) => {
+                    events.push(Event::Warning(format!("MCP {name}: {message}")));
+                    closed = true;
+                }
+                Incoming::Closed => closed = true,
+            }
+        }
+        self.expire_pending(name, events);
+        if closed {
+            self.servers.remove(name);
+            self.failed.insert(name.to_string());
+            events.push(Event::Warning(format!("MCP {name}: server stopped")));
+        }
+    }
+
+    fn expire_pending(&mut self, name: &str, events: &mut Vec<Event>) {
+        let now = Instant::now();
+        let mut expired = Vec::new();
+        if let Some(server) = self.servers.get_mut(name) {
+            server.pending.retain(|_, pending| {
+                let timeout = if pending.kind == ReplyKind::Initialize {
+                    INITIALIZE_TIMEOUT
+                } else {
+                    REQUEST_TIMEOUT
+                };
+                let keep = now.duration_since(pending.sent) <= timeout;
+                if !keep {
+                    expired.push(pending.kind);
+                }
+                keep
+            });
+        }
+        for kind in expired {
+            let _ = kind;
+            events.push(Event::Warning(format!("MCP {name}: request timed out")));
+        }
+    }
+
+    fn handle_line(&mut self, name: &str, line: &str, events: &mut Vec<Event>) {
+        if line.len() > MAX_MESSAGE_BYTES {
+            events.push(Event::Warning(format!("MCP {name}: response too large")));
+            return;
+        }
+        let value: Value = match serde_json::from_str(line) {
+            Ok(value) => value,
+            Err(error) => {
+                events.push(Event::Warning(format!("MCP {name}: invalid JSON: {error}")));
+                return;
+            }
+        };
+        if let Some(id) = value.get("id").and_then(Value::as_i64) {
+            let Some(pending) = self
+                .servers
+                .get_mut(name)
+                .and_then(|server| server.pending.remove(&id))
+            else {
+                return;
+            };
+            if let Some(error) = value.get("error") {
+                let message = error
+                    .get("message")
+                    .and_then(Value::as_str)
+                    .unwrap_or("request failed");
+                events.push(Event::Warning(format!("MCP {name}: {message}")));
+                return;
+            }
+            let result = value.get("result").cloned().unwrap_or(Value::Null);
+            match pending.kind {
+                ReplyKind::Initialize => self.finish_initialize(name, events),
+                ReplyKind::ToolsList => {
+                    let tools = parse_tools(&result);
+                    if let Some(server) = self.servers.get_mut(name) {
+                        server.tools = tools.clone();
+                    }
+                    events.push(Event::Tools {
+                        server: name.to_string(),
+                        tools,
+                    });
+                }
+                ReplyKind::CallTool => {
+                    let (content, is_error) = parse_tool_result(&result);
+                    events.push(Event::ToolResult {
+                        server: name.to_string(),
+                        tool: pending.tool.unwrap_or_default(),
+                        content,
+                        is_error,
+                    });
+                }
+            }
+            return;
+        }
+        if value.get("method").and_then(Value::as_str) == Some("notifications/tools/list_changed") {
+            events.push(Event::Warning(format!(
+                "MCP {name}: tool list changed; refresh tools"
+            )));
+        }
+    }
+
+    fn finish_initialize(&mut self, name: &str, events: &mut Vec<Event>) {
+        let queued = {
+            let Some(server) = self.servers.get_mut(name) else {
+                return;
+            };
+            server.initialized = true;
+            if let Err(error) = write_notification(&mut server.writer, "notifications/initialized")
+            {
+                events.push(Event::Warning(format!("MCP {name}: {error}")));
+            }
+            std::mem::take(&mut server.queued)
+        };
+        for request in queued {
+            if let Err(error) = self.request(
+                name,
+                request.method,
+                request.params,
+                request.kind,
+                request.tool,
+            ) {
+                events.push(Event::Warning(error));
+            }
+        }
+    }
+}
+
+fn spawn_server(name: &str, config: &McpServerConfig, root: &Path) -> Result<Server, String> {
+    let mut command = Command::new(&config.command);
+    command
+        .args(&config.args)
+        .current_dir(config.cwd.as_deref().unwrap_or(root))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .env_clear();
+    for key in ["PATH", "HOME", "TMPDIR", "LANG", "LC_ALL"] {
+        if let Some(value) = std::env::var_os(key) {
+            command.env(key, value);
+        }
+    }
+    command.envs(&config.env);
+    let mut child = command
+        .spawn()
+        .map_err(|error| format!("MCP {name}: cannot start {}: {error}", config.command))?;
+    let writer = child
+        .stdin
+        .take()
+        .ok_or_else(|| format!("MCP {name}: no stdin"))?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| format!("MCP {name}: no stdout"))?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| format!("MCP {name}: no stderr"))?;
+    let (tx, incoming) = mpsc::channel();
+    let stdout_tx = tx.clone();
+    std::thread::spawn(move || {
+        let mut reader = BufReader::new(stdout);
+        let mut line = String::new();
+        loop {
+            line.clear();
+            match reader.read_line(&mut line) {
+                Ok(0) => break,
+                Ok(_) if line.len() > MAX_MESSAGE_BYTES => {
+                    let _ = stdout_tx.send(Incoming::ProtocolError("message too large".into()));
+                    break;
+                }
+                Ok(_) => {
+                    if stdout_tx.send(Incoming::Line(line.clone())).is_err() {
+                        break;
+                    }
+                }
+                Err(error) => {
+                    let _ = stdout_tx.send(Incoming::ProtocolError(error.to_string()));
+                    break;
+                }
+            }
+        }
+        let _ = stdout_tx.send(Incoming::Closed);
+    });
+    std::thread::spawn(move || {
+        for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+            if tx.send(Incoming::Stderr(line)).is_err() {
+                break;
+            }
+        }
+    });
+    Ok(Server {
+        child,
+        writer,
+        incoming,
+        initialized: false,
+        pending: HashMap::new(),
+        queued: VecDeque::new(),
+        tools: Vec::new(),
+        logs: VecDeque::new(),
+    })
+}
+
+fn initialize_params() -> Value {
+    json!({
+        "protocolVersion": PROTOCOL_VERSION,
+        "capabilities": {},
+        "clientInfo": {
+            "name": "i3-editor",
+            "version": env!("CARGO_PKG_VERSION")
+        }
+    })
+}
+
+fn write_request(
+    writer: &mut ChildStdin,
+    id: i64,
+    method: &str,
+    params: Value,
+) -> Result<(), String> {
+    write_message(
+        writer,
+        &json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}),
+    )
+}
+
+fn write_notification(writer: &mut ChildStdin, method: &str) -> Result<(), String> {
+    write_message(writer, &json!({"jsonrpc": "2.0", "method": method}))
+}
+
+fn write_message(writer: &mut ChildStdin, message: &Value) -> Result<(), String> {
+    let mut text = serde_json::to_string(message).map_err(|error| error.to_string())?;
+    text.push('\n');
+    writer
+        .write_all(text.as_bytes())
+        .and_then(|_| writer.flush())
+        .map_err(|error| error.to_string())
+}
+
+fn parse_tools(result: &Value) -> Vec<Tool> {
+    result
+        .get("tools")
+        .and_then(Value::as_array)
+        .map(|tools| {
+            tools
+                .iter()
+                .filter_map(|tool| {
+                    let name = tool.get("name")?.as_str()?.to_string();
+                    Some(Tool {
+                        name,
+                        description: tool
+                            .get("description")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_string(),
+                        input_schema: tool
+                            .get("inputSchema")
+                            .cloned()
+                            .unwrap_or_else(|| json!({})),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn parse_tool_result(result: &Value) -> (Vec<ToolContent>, bool) {
+    let content = result
+        .get("content")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .map(|item| {
+                    if item.get("type").and_then(Value::as_str) == Some("text") {
+                        ToolContent::Text(
+                            item.get("text")
+                                .and_then(Value::as_str)
+                                .unwrap_or_default()
+                                .to_string(),
+                        )
+                    } else {
+                        ToolContent::Other(item.clone())
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let is_error = result
+        .get("isError")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    (content, is_error)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn mock(mode: &str) -> McpManager {
+        let script = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("fixtures")
+            .join("mock_mcp.py");
+        let mut env = BTreeMap::new();
+        env.insert("MOCK_MCP_MODE".to_string(), mode.to_string());
+        let config = McpServerConfig {
+            command: "python3".to_string(),
+            args: vec![script.to_string_lossy().into_owned()],
+            cwd: None,
+            env,
+        };
+        McpManager::new(
+            BTreeMap::from([("mock".to_string(), config)]),
+            std::env::temp_dir(),
+        )
+    }
+
+    fn python_available() -> bool {
+        Command::new("python3")
+            .arg("--version")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .is_ok()
+    }
+
+    fn wait_for<F>(manager: &mut McpManager, mut predicate: F) -> Vec<Event>
+    where
+        F: FnMut(&Event) -> bool,
+    {
+        let deadline = Instant::now() + Duration::from_secs(8);
+        let mut seen = Vec::new();
+        let mut pending = VecDeque::new();
+        while Instant::now() < deadline {
+            if let Some(event) = pending.pop_front() {
+                if predicate(&event) {
+                    seen.push(event);
+                    return seen;
+                }
+                seen.push(event);
+                continue;
+            }
+            pending.extend(manager.pump());
+            if pending.is_empty() {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+        panic!("timed out waiting for MCP event; seen {seen:?}");
+    }
+
+    #[test]
+    fn initialize_lists_tools_and_calls_one() {
+        if !python_available() {
+            eprintln!("skipping MCP test: python3 unavailable");
+            return;
+        }
+        let mut manager = mock("normal");
+        manager.list_tools("mock").expect("list tools");
+        let events = wait_for(&mut manager, |event| matches!(event, Event::Tools { .. }));
+        let tools = events
+            .iter()
+            .find_map(|event| match event {
+                Event::Tools { tools, .. } => Some(tools.clone()),
+                _ => None,
+            })
+            .expect("tools event");
+        assert_eq!(tools.len(), 2);
+        assert_eq!(tools[0].name, "echo");
+        assert_eq!(tools[1].name, "add");
+        assert_eq!(manager.tools("mock").expect("stored tools").len(), 2);
+
+        manager
+            .call_tool("mock", "echo", json!({"text": "hello"}))
+            .expect("call tool");
+        let events = wait_for(&mut manager, |event| {
+            matches!(event, Event::ToolResult { .. })
+        });
+        let result = events
+            .iter()
+            .find_map(|event| match event {
+                Event::ToolResult { content, .. } => Some(content.clone()),
+                _ => None,
+            })
+            .expect("tool result");
+        assert_eq!(result, vec![ToolContent::Text("hello".to_string())]);
+    }
+
+    #[test]
+    fn malformed_server_output_is_reported_without_hanging() {
+        if !python_available() {
+            eprintln!("skipping MCP test: python3 unavailable");
+            return;
+        }
+        let mut manager = mock("malformed");
+        manager.list_tools("mock").expect("list tools");
+        let events = wait_for(
+            &mut manager,
+            |event| matches!(event, Event::Warning(message) if message.contains("invalid JSON")),
+        );
+        assert!(events.iter().any(
+            |event| matches!(event, Event::Warning(message) if message.contains("invalid JSON"))
+        ));
+    }
+
+    #[test]
+    fn crashed_server_is_reported_once() {
+        if !python_available() {
+            eprintln!("skipping MCP test: python3 unavailable");
+            return;
+        }
+        let mut manager = mock("crash");
+        manager.list_tools("mock").expect("start server");
+        let events = wait_for(
+            &mut manager,
+            |event| matches!(event, Event::Warning(message) if message.contains("server stopped")),
+        );
+        assert!(manager.failed("mock"));
+        assert!(events.iter().any(
+            |event| matches!(event, Event::Warning(message) if message.contains("server stopped"))
+        ));
+    }
+}
