@@ -357,9 +357,35 @@ fn push_markdown_line(
         push_styled(rows, spans, width);
         return;
     }
+    let leading = text.len() - text.trim_start_matches(' ').len();
+    let trimmed = &text[leading..];
+    if let Some(text) = trimmed.strip_prefix("- [ ] ") {
+        let mut spans = vec![Span::styled(
+            format!("{}☐ ", " ".repeat(leading)),
+            base.fg(state.theme.explorer_dir),
+        )];
+        spans.extend(inline_spans(state, text, base));
+        push_styled(rows, spans, width);
+        return;
+    }
+    if let Some(text) = trimmed
+        .strip_prefix("- [x] ")
+        .or_else(|| trimmed.strip_prefix("- [X] "))
+    {
+        let mut spans = vec![Span::styled(
+            format!("{}☑ ", " ".repeat(leading)),
+            base.fg(state.theme.explorer_dir),
+        )];
+        spans.extend(inline_spans(state, text, base));
+        push_styled(rows, spans, width);
+        return;
+    }
     for marker in ["- ", "* ", "+ "] {
-        if let Some(text) = text.strip_prefix(marker) {
-            let mut spans = vec![Span::styled("• ", base.fg(state.theme.explorer_dir))];
+        if let Some(text) = trimmed.strip_prefix(marker) {
+            let mut spans = vec![Span::styled(
+                format!("{}• ", " ".repeat(leading)),
+                base.fg(state.theme.explorer_dir),
+            )];
             spans.extend(inline_spans(state, text, base));
             push_styled(rows, spans, width);
             return;
@@ -411,6 +437,19 @@ fn inline_spans(state: &AppState, text: &str, base: Style) -> Vec<Span<'static>>
             let value: String = chars[index + 1..index + 1 + end].iter().collect();
             spans.push(Span::styled(value, base.fg(state.theme.syntax.string)));
             index += end + 2;
+            continue;
+        }
+        if chars[index] == '~'
+            && chars.get(index + 1) == Some(&'~')
+            && let Some(end) = find_marker(&chars, index + 2, "~~")
+        {
+            push_text(&mut spans, &mut buffer, base);
+            let value: String = chars[index + 2..end].iter().collect();
+            spans.push(Span::styled(
+                value,
+                base.add_modifier(Modifier::CROSSED_OUT),
+            ));
+            index = end + 2;
             continue;
         }
         if chars[index] == '*'

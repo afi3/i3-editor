@@ -456,10 +456,11 @@ url = "https://example.test/mcp"
   shell command automatically. `Esc` or `q` closes the overlay.
 - HTTP transport posts JSON-RPC requests to `url`, accepts JSON or SSE
   responses, and forwards an `Mcp-Session-Id` returned by the server.
-- With `allow_sampling = true` on a stdio server, `sampling/createMessage`
-  requests are shown for consent, answered through the configured AI provider,
-  and sent back to the server. Sampling is not advertised for HTTP, which would
-  require a server-initiated SSE stream.
+- With `allow_sampling = true`, `sampling/createMessage` requests from stdio
+  servers and HTTP servers with a server-initiated SSE stream are shown for
+  consent, answered through the configured AI provider, and sent back to the
+  server. The HTTP stream opens after initialization only when sampling is
+  enabled.
 
 Manual real-server check:
 
@@ -543,8 +544,9 @@ panel_width = 20                 # percent of terminal width
   conversation tokens against the configured budget plus actual provider
   prompt/completion usage; if input/output pricing
   is configured, it also shows an estimated session cost. Headings, lists,
-  blockquotes, aligned tables, fenced/inline code, bold/italic text, links, and
-  user turns get Markdown styling;
+  blockquotes, aligned tables, task lists, nested lists, strikethrough,
+  fenced/inline code, bold/italic text, links, and user turns get Markdown
+  styling;
   long transcript lines wrap inside the panel, and `Ctrl+Left`/`Ctrl+Right`
   scrolls horizontally when needed.
 - The default provider is OpenRouter (`https://openrouter.ai/api/v1`,
@@ -604,8 +606,10 @@ same turn. Cancelling the AI turn kills a running check; non-Rust edits skip it.
   one as a background task. Objectives live in `agent_objectives.json` with
   `pending/running/done/blocked` status. With `agent_auto_queue = true`,
   `ai_queue_objectives` runs pending objectives sequentially and stops on the
-  first blocked result. `ai_objective_link` stores dependencies using
-  `objective-id: dependency-id,dependency-id`.
+  first blocked result. Queue activity is persisted, so a later
+  `ai_queue_objectives` can continue pending work after restart.
+  `ai_objective_link` stores dependencies using
+  `objective-id: dependency-id,dependency-id` and rejects cycles.
 - `ai_index_project` builds a path+size-only workspace index. `ai_context_files`
   lets you explicitly choose an indexed file and attach its contents to the
   next prompt; the index itself never stores file contents.

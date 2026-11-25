@@ -275,6 +275,8 @@ impl App {
         self.state.ai.busy = false;
         if self.background_agent {
             self.objective_queue = false;
+            self.objectives.queue_active = false;
+            let _ = crate::objectives::save(&self.objectives);
             self.finish_objective("blocked");
         }
         self.background_agent = false;
@@ -388,6 +390,8 @@ impl App {
             return;
         }
         self.objective_queue = true;
+        self.objectives.queue_active = true;
+        let _ = crate::objectives::save(&self.objectives);
         self.run_next_objective();
     }
 
@@ -407,6 +411,8 @@ impl App {
             .cloned();
         let Some(objective) = next else {
             self.objective_queue = false;
+            self.objectives.queue_active = false;
+            let _ = crate::objectives::save(&self.objectives);
             let waiting = self
                 .objectives
                 .objectives
@@ -450,6 +456,10 @@ impl App {
             self.notify("dependency ids must be numbers");
             return;
         };
+        if self.objectives.has_cycle(id, &deps) {
+            self.notify("objective dependency cycle");
+            return;
+        }
         if let Some(objective) = self
             .objectives
             .objectives
@@ -575,6 +585,8 @@ impl App {
         }
         self.background_agent = false;
         self.objective_queue = false;
+        self.objectives.queue_active = false;
+        let _ = crate::objectives::save(&self.objectives);
         self.finish_objective("blocked");
         self.state.ai.busy = false;
         self.state
@@ -599,6 +611,9 @@ impl App {
         self.save_ai_history();
         if self.objective_queue {
             self.run_next_objective();
+        } else {
+            self.objectives.queue_active = false;
+            let _ = crate::objectives::save(&self.objectives);
         }
     }
 
@@ -1340,6 +1355,8 @@ impl App {
         if self.background_agent {
             self.background_agent = false;
             self.objective_queue = false;
+            self.objectives.queue_active = false;
+            let _ = crate::objectives::save(&self.objectives);
             self.finish_objective("blocked");
             self.state
                 .ai

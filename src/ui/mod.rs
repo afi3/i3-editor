@@ -635,6 +635,9 @@ mod tests {
             "| name | value |".to_string(),
             "| --- | --- |".to_string(),
             "| alpha | 1 |".to_string(),
+            "- [x] done task".to_string(),
+            "  - nested item".to_string(),
+            "~~struck~~".to_string(),
         ];
         let screen = draw(&mut state, 100, 24);
         assert!(screen.contains("Heading"), "{screen}");
@@ -644,6 +647,9 @@ mod tests {
         assert!(screen.contains("quoted"), "{screen}");
         assert!(screen.contains("ordered"), "{screen}");
         assert!(screen.contains("alpha"), "{screen}");
+        assert!(screen.contains("done task"), "{screen}");
+        assert!(screen.contains("nested item"), "{screen}");
+        assert!(screen.contains("struck"), "{screen}");
         std::fs::remove_dir_all(&dir).ok();
     }
 

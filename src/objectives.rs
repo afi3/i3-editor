@@ -22,6 +22,8 @@ pub struct Store {
     pub next_id: u64,
     #[serde(default)]
     pub objectives: Vec<Objective>,
+    #[serde(default)]
+    pub queue_active: bool,
 }
 
 fn default_version() -> u8 {
@@ -34,6 +36,7 @@ impl Default for Store {
             version: VERSION,
             next_id: 0,
             objectives: Vec::new(),
+            queue_active: false,
         }
     }
 }
@@ -64,6 +67,23 @@ impl Store {
 
     pub fn get(&self, id: u64) -> Option<&Objective> {
         self.objectives.iter().find(|objective| objective.id == id)
+    }
+
+    pub fn has_cycle(&self, id: u64, dependencies: &[u64]) -> bool {
+        let mut stack = dependencies.to_vec();
+        let mut seen = std::collections::HashSet::new();
+        while let Some(dependency) = stack.pop() {
+            if dependency == id {
+                return true;
+            }
+            if !seen.insert(dependency) {
+                continue;
+            }
+            if let Some(objective) = self.get(dependency) {
+                stack.extend(objective.depends_on.iter().copied());
+            }
+        }
+        false
     }
 }
 

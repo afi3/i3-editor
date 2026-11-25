@@ -9,6 +9,7 @@ use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -244,6 +245,29 @@ enum Transport {
     },
 }
 
+struct HttpStream {
+    cancel: Arc<AtomicBool>,
+    child: Arc<Mutex<Option<Child>>>,
+}
+
+impl HttpStream {
+    fn cancel(&self) {
+        self.cancel.store(true, Ordering::Relaxed);
+        if let Ok(mut child) = self.child.lock()
+            && let Some(mut child) = child.take()
+        {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+}
+
+impl Drop for HttpStream {
+    fn drop(&mut self) {
+        self.cancel();
+    }
+}
+
 struct Server {
     transport: Transport,
     sender: Sender<Incoming>,
@@ -256,6 +280,7 @@ struct Server {
     prompts: Vec<Prompt>,
     resource_pages: usize,
     prompt_pages: usize,
+    http_stream: Option<HttpStream>,
     tools_loaded: bool,
     logs: VecDeque<String>,
 }
@@ -265,6 +290,9 @@ impl Drop for Server {
         if let Transport::Stdio { child, .. } = &mut self.transport {
             let _ = child.kill();
             let _ = child.wait();
+        }
+        if let Some(stream) = self.http_stream.take() {
+            stream.cancel();
         }
     }
 }
@@ -461,10 +489,15 @@ impl McpManager {
         };
         match &mut server.transport {
             Transport::Stdio { writer, .. } => write_message(writer, &value),
-            Transport::Http { .. } => Err(
-                "HTTP server-initiated requests require an SSE stream and are unsupported"
-                    .to_string(),
-            ),
+            Transport::Http { url, session } => {
+                spawn_http_payload(
+                    url.clone(),
+                    Arc::clone(session),
+                    server.sender.clone(),
+                    value,
+                );
+                Ok(())
+            }
         }
     }
 
@@ -576,7 +609,7 @@ impl McpManager {
             &mut server,
             id,
             "initialize",
-            initialize_params(config.allow_sampling && config.url.is_none()),
+            initialize_params(config.allow_sampling),
         ) {
             self.failed.insert(name.to_string());
             return Err(error);
@@ -801,7 +834,7 @@ impl McpManager {
             let allowed = self
                 .configs
                 .get(name)
-                .is_some_and(|config| config.allow_sampling && config.url.is_none());
+                .is_some_and(|config| config.allow_sampling);
             if allowed {
                 events.push(Event::Sampling {
                     server: name.to_string(),
@@ -868,6 +901,18 @@ impl McpManager {
             if let Err(error) = send_notification(server, "notifications/initialized") {
                 events.push(Event::Warning(format!("MCP {name}: {error}")));
             }
+            if let Transport::Http { url, session } = &server.transport
+                && self
+                    .configs
+                    .get(name)
+                    .is_some_and(|config| config.allow_sampling)
+            {
+                server.http_stream = Some(spawn_http_stream(
+                    url.clone(),
+                    Arc::clone(session),
+                    server.sender.clone(),
+                ));
+            }
             std::mem::take(&mut server.queued)
         };
         for request in queued {
@@ -908,6 +953,7 @@ fn spawn_http_server(url: &str) -> Server {
         prompts: Vec::new(),
         resource_pages: 0,
         prompt_pages: 0,
+        http_stream: None,
         tools_loaded: false,
         logs: VecDeque::new(),
     }
@@ -1034,6 +1080,122 @@ fn spawn_http_request(
         if let Err(error) = handle_http_response(&raw, id, &session, &sender) {
             let _ = sender.send(Incoming::ProtocolError(error));
         }
+    });
+}
+
+fn spawn_http_stream(
+    url: String,
+    session: Arc<Mutex<Option<String>>>,
+    sender: Sender<Incoming>,
+) -> HttpStream {
+    let cancel = Arc::new(AtomicBool::new(false));
+    let child_slot = Arc::new(Mutex::new(None));
+    let worker_cancel = Arc::clone(&cancel);
+    let worker_child = Arc::clone(&child_slot);
+    std::thread::spawn(move || {
+        let session = session.lock().ok().and_then(|session| session.clone());
+        let mut config = format!("url = {}\nrequest = \"GET\"\n", quote_curl(&url));
+        config.push_str("header = \"Accept: text/event-stream\"\n");
+        if let Some(session) = session {
+            config.push_str(&format!(
+                "header = {}\n",
+                quote_curl(&format!("Mcp-Session-Id: {session}"))
+            ));
+        }
+        config.push_str("max-time = 3600\n");
+        let mut child = match Command::new("curl")
+            .args(["--config", "-", "--silent", "--show-error", "--no-buffer"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+        {
+            Ok(child) => child,
+            Err(error) => {
+                let _ = sender.send(Incoming::ProtocolError(format!("HTTP SSE: {error}")));
+                return;
+            }
+        };
+        if let Some(mut stdin) = child.stdin.take()
+            && stdin.write_all(config.as_bytes()).is_err()
+        {
+            let _ = child.kill();
+            let _ = child.wait();
+            return;
+        }
+        let Some(stdout) = child.stdout.take() else {
+            return;
+        };
+        if let Ok(mut slot) = worker_child.lock() {
+            *slot = Some(child);
+        }
+        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+            if worker_cancel.load(Ordering::Relaxed) {
+                break;
+            }
+            let Some(data) = line.strip_prefix("data:") else {
+                continue;
+            };
+            let data = data.trim();
+            if data.starts_with('{') {
+                let _ = sender.send(Incoming::Line(data.to_string()));
+            }
+        }
+    });
+    HttpStream {
+        cancel,
+        child: child_slot,
+    }
+}
+
+fn spawn_http_payload(
+    url: String,
+    session: Arc<Mutex<Option<String>>>,
+    sender: Sender<Incoming>,
+    body: Value,
+) {
+    std::thread::spawn(move || {
+        let file = match tempfile::NamedTempFile::new().and_then(|mut file| {
+            file.write_all(body.to_string().as_bytes())?;
+            Ok(file)
+        }) {
+            Ok(file) => file,
+            Err(error) => {
+                let _ = sender.send(Incoming::ProtocolError(format!("HTTP response: {error}")));
+                return;
+            }
+        };
+        let session = session.lock().ok().and_then(|session| session.clone());
+        let mut config = format!("url = {}\nrequest = \"POST\"\n", quote_curl(&url));
+        config.push_str("header = \"Content-Type: application/json\"\n");
+        if let Some(session) = session {
+            config.push_str(&format!(
+                "header = {}\n",
+                quote_curl(&format!("Mcp-Session-Id: {session}"))
+            ));
+        }
+        config.push_str(&format!(
+            "data-binary = {}\n",
+            quote_curl(&format!("@{}", file.path().to_string_lossy()))
+        ));
+        config.push_str("max-time = 60\n");
+        let mut child = match Command::new("curl")
+            .args(["--config", "-", "--silent", "--show-error"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+        {
+            Ok(child) => child,
+            Err(error) => {
+                let _ = sender.send(Incoming::ProtocolError(format!("HTTP response: {error}")));
+                return;
+            }
+        };
+        if let Some(mut stdin) = child.stdin.take() {
+            let _ = stdin.write_all(config.as_bytes());
+        }
+        let _ = child.wait();
     });
 }
 
@@ -1167,6 +1329,7 @@ fn spawn_server(name: &str, config: &McpServerConfig, root: &Path) -> Result<Ser
         prompts: Vec::new(),
         resource_pages: 0,
         prompt_pages: 0,
+        http_stream: None,
         tools_loaded: false,
         logs: VecDeque::new(),
     })
