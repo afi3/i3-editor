@@ -1,6 +1,6 @@
 //! MCP menu, trust prompt, tool calls, and result overlay.
 
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::input::{KeyCombo, PromptKind, PromptState};
 use crate::mcp::ToolContent;
@@ -109,6 +109,7 @@ impl App {
             cwd: None,
             env: Default::default(),
             url: None,
+            allow_sampling: false,
         };
         self.state
             .config
@@ -150,38 +151,7 @@ impl App {
         }
         let mut refresh_tools = false;
         for event in events {
-            match event {
-                crate::mcp::Event::Warning(message) => self.handle_mcp_warning(message),
-                crate::mcp::Event::Tools { .. } => refresh_tools = true,
-                crate::mcp::Event::ToolResult {
-                    server,
-                    tool,
-                    content,
-                    is_error,
-                } => self.handle_mcp_tool_result(&server, &tool, &content, is_error),
-                crate::mcp::Event::Resources { server, resources } => {
-                    self.update_resource_prompt(&server, &resources);
-                }
-                crate::mcp::Event::Resource {
-                    server,
-                    uri,
-                    content,
-                    mime_type,
-                } => {
-                    self.show_mcp_resource(&server, &uri, &content, &mime_type);
-                }
-                crate::mcp::Event::Prompts { server, prompts } => {
-                    self.update_prompt_prompt(&server, &prompts);
-                }
-                crate::mcp::Event::Prompt {
-                    server,
-                    name,
-                    content,
-                } => {
-                    self.show_mcp_prompt(&server, &name, &content);
-                }
-                crate::mcp::Event::Log { .. } => {}
-            }
+            refresh_tools |= self.handle_mcp_event(event);
         }
         self.dirty = true;
         if refresh_tools {
@@ -201,12 +171,138 @@ impl App {
         }
     }
 
+    fn handle_mcp_event(&mut self, event: crate::mcp::Event) -> bool {
+        match event {
+            crate::mcp::Event::Warning(message) => self.handle_mcp_warning(message),
+            crate::mcp::Event::Tools { .. } => return true,
+            crate::mcp::Event::ToolResult {
+                server,
+                tool,
+                content,
+                is_error,
+            } => self.handle_mcp_tool_result(&server, &tool, &content, is_error),
+            crate::mcp::Event::Resources { server, resources } => {
+                self.update_resource_prompt(&server, &resources);
+            }
+            crate::mcp::Event::Resource {
+                server,
+                uri,
+                content,
+                mime_type,
+            } => self.show_mcp_resource(&server, &uri, &content, &mime_type),
+            crate::mcp::Event::Prompts { server, prompts } => {
+                self.update_prompt_prompt(&server, &prompts);
+            }
+            crate::mcp::Event::Prompt {
+                server,
+                name,
+                content,
+            } => self.show_mcp_prompt(&server, &name, &content),
+            crate::mcp::Event::Sampling { server, id, params } => {
+                self.open_mcp_sampling(server, id, params);
+            }
+            crate::mcp::Event::Log { .. } => {}
+        }
+        false
+    }
+
     fn selected_server(prompt: &PromptState) -> Option<String> {
         prompt
             .selected_candidate()
             .and_then(|candidate| candidate.split(" — ").next())
             .filter(|name| !name.is_empty() && *name != "No MCP servers configured")
             .map(str::to_string)
+    }
+
+    fn open_mcp_sampling(&mut self, server: String, id: i64, params: Value) {
+        if self.sampling_request.is_some() {
+            if let Some(manager) = self.mcp.as_mut() {
+                let _ = manager.respond_error(&server, id, "another sampling request is active");
+            }
+            return;
+        }
+        self.sampling_request = Some((server.clone(), id, params.clone()));
+        let preview = params
+            .get("messages")
+            .and_then(Value::as_array)
+            .and_then(|messages| messages.first())
+            .and_then(|message| message.pointer("/content/text"))
+            .and_then(Value::as_str)
+            .unwrap_or("(no prompt text)");
+        let preview: String = preview.chars().take(100).collect();
+        let mut prompt = PromptState::new(PromptKind::McpSampling);
+        prompt.mcp_server = Some(server.clone());
+        prompt.set_candidates(vec![
+            format!("Allow sampling from {server} — {preview}"),
+            "Deny".to_string(),
+        ]);
+        self.state.mode = InputMode::Prompt(prompt);
+        self.dirty = true;
+    }
+
+    fn submit_mcp_sampling(&mut self, prompt: PromptState) {
+        let allowed = prompt
+            .selected_candidate()
+            .is_some_and(|candidate| candidate.starts_with("Allow sampling"));
+        let Some((server, id, params)) = self.sampling_request.clone() else {
+            return;
+        };
+        if !allowed {
+            self.sampling_request = None;
+            if let Some(manager) = self.mcp.as_mut() {
+                let _ = manager.respond_error(&server, id, "sampling denied by user");
+            }
+            self.notify("MCP sampling denied");
+            return;
+        }
+        let messages = Self::sampling_messages(&params);
+        self.state.mode = InputMode::Normal;
+        self.sampling_task = Some(crate::ai::spawn_chat(
+            self.state.config.ai.clone(),
+            messages,
+            Vec::new(),
+        ));
+        self.notify(format!("sampling request from {server}..."));
+    }
+
+    pub(crate) fn pump_sampling(&mut self) {
+        let Some(task) = self.sampling_task.as_ref() else {
+            return;
+        };
+        let Some(result) = crate::ai::poll_task(task) else {
+            return;
+        };
+        self.sampling_task = None;
+        let Some((server, id, _)) = self.sampling_request.take() else {
+            return;
+        };
+        let Some(manager) = self.mcp.as_mut() else {
+            self.notify("MCP manager unavailable after sampling");
+            return;
+        };
+        match result {
+            Ok(reply) => {
+                if let Some(content) = reply.content {
+                    let response = json!({
+                        "role": "assistant",
+                        "content": {"type": "text", "text": content},
+                        "model": self.state.config.ai.model
+                    });
+                    if let Err(error) = manager.respond(&server, id, response) {
+                        self.notify(error);
+                    } else {
+                        self.notify(format!("sampling response sent to {server}"));
+                    }
+                } else {
+                    let _ = manager.respond_error(&server, id, "sampling response had no text");
+                }
+            }
+            Err(error) => {
+                let _ = manager.respond_error(&server, id, &error);
+                self.notify(format!("sampling failed: {error}"));
+            }
+        }
+        self.dirty = true;
     }
 
     fn handle_mcp_warning(&mut self, message: String) {
@@ -292,6 +388,26 @@ impl App {
         self.state.mcp_view = Some(HelpView { lines, scroll: 0 });
     }
 
+    fn sampling_messages(params: &Value) -> Vec<Value> {
+        let mut messages = Vec::new();
+        if let Some(system) = params.get("systemPrompt").and_then(Value::as_str)
+            && !system.is_empty()
+        {
+            messages.push(json!({"role": "system", "content": system}));
+        }
+        if let Some(items) = params.get("messages").and_then(Value::as_array) {
+            for item in items {
+                let role = item.get("role").and_then(Value::as_str).unwrap_or("user");
+                let content = item
+                    .pointer("/content/text")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                messages.push(json!({"role": role, "content": content}));
+            }
+        }
+        messages
+    }
+
     fn fill_mcp_servers(&self, prompt: &mut PromptState) {
         let mut candidates = Vec::new();
         for name in self.state.config.mcp.servers.keys() {
@@ -344,6 +460,7 @@ impl App {
             PromptKind::McpResourceList => self.submit_mcp_resource_list(prompt),
             PromptKind::McpPrompts => self.submit_mcp_prompts(prompt),
             PromptKind::McpPromptList => self.submit_mcp_prompt_list(prompt),
+            PromptKind::McpSampling => self.submit_mcp_sampling(prompt),
             _ => {}
         }
     }

@@ -199,6 +199,18 @@ impl App {
 
     /// Close the prompt without submitting. A running project scan is stopped.
     pub(crate) fn cancel_prompt(&mut self) {
+        if matches!(
+            &self.state.mode,
+            InputMode::Prompt(prompt) if prompt.kind == PromptKind::McpSampling
+        ) {
+            self.state.mode = InputMode::Normal;
+            if let Some((server, id, _)) = self.sampling_request.take()
+                && let Some(manager) = self.mcp.as_mut()
+            {
+                let _ = manager.respond_error(&server, id, "sampling denied by user");
+            }
+            return;
+        }
         if let InputMode::Prompt(prompt) = &self.state.mode
             && prompt.kind == PromptKind::Recovery
         {
@@ -253,20 +265,7 @@ impl App {
         ) {
             return self.submit_git_prompt(prompt);
         }
-        if matches!(
-            prompt.kind,
-            PromptKind::Mcp
-                | PromptKind::McpTrust
-                | PromptKind::McpTools
-                | PromptKind::McpArgs
-                | PromptKind::McpConfirm
-                | PromptKind::McpAdd
-                | PromptKind::McpAddPath
-                | PromptKind::McpResources
-                | PromptKind::McpResourceList
-                | PromptKind::McpPrompts
-                | PromptKind::McpPromptList
-        ) {
+        if prompt.kind.is_mcp() {
             self.submit_mcp_prompt(prompt);
             return Ok(());
         }

@@ -64,6 +64,8 @@ impl App {
             ai_task: None,
             ai_stream: None,
             ai_streamed: false,
+            sampling_request: None,
+            sampling_task: None,
             native_check: None,
             native_check_output: None,
             native_undo: Vec::new(),
@@ -150,6 +152,8 @@ pub struct App {
     pub(crate) ai_task: Option<crate::ai::Task>,
     pub(crate) ai_stream: Option<crate::ai::StreamTask>,
     pub(crate) ai_streamed: bool,
+    pub(crate) sampling_request: Option<(String, i64, serde_json::Value)>,
+    pub(crate) sampling_task: Option<crate::ai::Task>,
     pub(crate) native_check: Option<crate::native::CheckTask>,
     pub(crate) native_check_output: Option<String>,
     pub(crate) native_undo: Vec<crate::native::UndoState>,
@@ -285,6 +289,8 @@ impl App {
             ai_task: None,
             ai_stream: None,
             ai_streamed: false,
+            sampling_request: None,
+            sampling_task: None,
             native_check: None,
             native_check_output: None,
             native_undo: Vec::new(),
@@ -405,6 +411,7 @@ impl App {
             self.pump_mcp();
             self.pump_ai();
             self.pump_native_check();
+            self.pump_sampling();
             self.pump_lsp_install();
             self.refresh_git_if_due();
             self.autosave_swaps();
@@ -488,7 +495,11 @@ impl App {
     }
 
     fn frame_timeout(&self) -> Duration {
-        if self.lsp_install.is_some() || self.ai_task.is_some() || self.ai_stream.is_some() {
+        if self.lsp_install.is_some()
+            || self.ai_task.is_some()
+            || self.ai_stream.is_some()
+            || self.sampling_task.is_some()
+        {
             return Duration::from_millis(100);
         }
         if !self.state.terminals.is_empty() {

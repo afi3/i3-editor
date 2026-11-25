@@ -50,6 +50,7 @@ pub enum PromptKind {
     McpResourceList,
     McpPrompts,
     McpPromptList,
+    McpSampling,
 }
 
 /// Grouping used by the prompt setup and submit code, so neither needs one
@@ -72,7 +73,28 @@ impl PromptKind {
         }
     }
 
+    pub fn is_mcp(self) -> bool {
+        matches!(
+            self,
+            PromptKind::Mcp
+                | PromptKind::McpTrust
+                | PromptKind::McpTools
+                | PromptKind::McpArgs
+                | PromptKind::McpConfirm
+                | PromptKind::McpAdd
+                | PromptKind::McpAddPath
+                | PromptKind::McpResources
+                | PromptKind::McpResourceList
+                | PromptKind::McpPrompts
+                | PromptKind::McpPromptList
+                | PromptKind::McpSampling
+        )
+    }
+
     fn is_query(self) -> bool {
+        if self.is_mcp() {
+            return true;
+        }
         matches!(
             self,
             PromptKind::CommandPalette
@@ -87,17 +109,6 @@ impl PromptKind {
                 | PromptKind::Conflicts
                 | PromptKind::CommitMessage
                 | PromptKind::SelectWorkspace
-                | PromptKind::Mcp
-                | PromptKind::McpTrust
-                | PromptKind::McpTools
-                | PromptKind::McpArgs
-                | PromptKind::McpConfirm
-                | PromptKind::McpAdd
-                | PromptKind::McpAddPath
-                | PromptKind::McpResources
-                | PromptKind::McpResourceList
-                | PromptKind::McpPrompts
-                | PromptKind::McpPromptList
         )
     }
 
@@ -163,6 +174,7 @@ impl PromptKind {
             PromptKind::McpResourceList => "MCP Resources",
             PromptKind::McpPrompts => "MCP Prompt Servers",
             PromptKind::McpPromptList => "MCP Prompts",
+            PromptKind::McpSampling => "MCP Sampling Request",
             _ => return None,
         })
     }
@@ -216,6 +228,9 @@ impl PromptKind {
     }
 
     pub fn lists_candidates(self) -> bool {
+        if self.is_mcp() {
+            return true;
+        }
         matches!(
             self,
             PromptKind::CommandPalette
@@ -232,7 +247,6 @@ impl PromptKind {
                 | PromptKind::QuitConfirm
                 | PromptKind::ExternalChange
                 | PromptKind::SelectWorkspace
-                | PromptKind::Mcp
                 | PromptKind::McpTrust
                 | PromptKind::McpTools
                 | PromptKind::McpConfirm

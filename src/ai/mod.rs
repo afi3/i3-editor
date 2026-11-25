@@ -48,6 +48,16 @@ impl Task {
     }
 }
 
+pub(crate) fn poll_task(task: &Task) -> Option<Result<Reply, String>> {
+    match task.try_recv() {
+        Ok(result) => Some(result),
+        Err(std::sync::mpsc::TryRecvError::Empty) => None,
+        Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+            Some(Err("AI worker stopped".to_string()))
+        }
+    }
+}
+
 pub fn spawn_chat(config: AiConfig, messages: Vec<Value>, tools: Vec<Value>) -> Task {
     let (tx, rx) = mpsc::channel();
     let cancel = Arc::new(AtomicBool::new(false));

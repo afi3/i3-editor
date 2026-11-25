@@ -425,6 +425,7 @@ command = "npx"
 args = ["-y", "@modelcontextprotocol/server-filesystem", "/home/arif/project"]
 cwd = "/home/arif/project"
 env = { TOKEN = "..." }
+allow_sampling = true   # opt in to stdio sampling; default false
 
 # HTTP endpoint instead of command/args:
 [mcp.remote]
@@ -452,8 +453,11 @@ url = "https://example.test/mcp"
 - A tool result opens in a read-only overlay. It cannot edit a buffer or run a
   shell command automatically. `Esc` or `q` closes the overlay.
 - HTTP transport posts JSON-RPC requests to `url`, accepts JSON or SSE
-  responses, and forwards an `Mcp-Session-Id` returned by the server. Sampling
-  and server-initiated SSE streams remain deferred.
+  responses, and forwards an `Mcp-Session-Id` returned by the server.
+- With `allow_sampling = true` on a stdio server, `sampling/createMessage`
+  requests are shown for consent, answered through the configured AI provider,
+  and sent back to the server. Sampling is not advertised for HTTP, which would
+  require a server-initiated SSE stream.
 
 Manual real-server check:
 

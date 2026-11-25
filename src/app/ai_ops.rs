@@ -545,12 +545,8 @@ impl App {
         let Some(task) = self.ai_task.as_ref() else {
             return;
         };
-        let result = match task.try_recv() {
-            Ok(result) => result,
-            Err(std::sync::mpsc::TryRecvError::Empty) => return,
-            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                Err("AI request worker stopped".to_string())
-            }
+        let Some(result) = crate::ai::poll_task(task) else {
+            return;
         };
         self.ai_task = None;
         self.state.ai.busy = false;

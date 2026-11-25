@@ -33,6 +33,8 @@ pub struct McpServerConfig {
     pub env: BTreeMap<String, String>,
     /// HTTP MCP endpoint. When set, command/args are not spawned.
     pub url: Option<String>,
+    /// Advertise MCP sampling and allow server-initiated model requests.
+    pub allow_sampling: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -174,6 +176,11 @@ pub enum Event {
         server: String,
         name: String,
         content: String,
+    },
+    Sampling {
+        server: String,
+        id: i64,
+        params: Value,
     },
     Log {
         server: String,
@@ -366,6 +373,33 @@ impl McpManager {
         )
     }
 
+    pub fn respond(&mut self, server: &str, id: i64, result: Value) -> Result<(), String> {
+        self.respond_value(
+            server,
+            json!({"jsonrpc": "2.0", "id": id, "result": result}),
+        )
+    }
+
+    pub fn respond_error(&mut self, server: &str, id: i64, message: &str) -> Result<(), String> {
+        self.respond_value(
+            server,
+            json!({"jsonrpc": "2.0", "id": id, "error": {"code": -32603, "message": message}}),
+        )
+    }
+
+    fn respond_value(&mut self, server: &str, value: Value) -> Result<(), String> {
+        let Some(server) = self.servers.get_mut(server) else {
+            return Err("MCP server is not running".to_string());
+        };
+        match &mut server.transport {
+            Transport::Stdio { writer, .. } => write_message(writer, &value),
+            Transport::Http { .. } => Err(
+                "HTTP server-initiated requests require an SSE stream and are unsupported"
+                    .to_string(),
+            ),
+        }
+    }
+
     pub fn call_tool(&mut self, server: &str, tool: &str, arguments: Value) -> Result<(), String> {
         self.request(
             server,
@@ -470,7 +504,12 @@ impl McpManager {
             }
         };
         let id = self.next_id();
-        if let Err(error) = send_request(&mut server, id, "initialize", initialize_params()) {
+        if let Err(error) = send_request(
+            &mut server,
+            id,
+            "initialize",
+            initialize_params(config.allow_sampling && config.url.is_none()),
+        ) {
             self.failed.insert(name.to_string());
             return Err(error);
         }
@@ -552,6 +591,44 @@ impl McpManager {
         }
     }
 
+    fn handle_reply(
+        &mut self,
+        name: &str,
+        pending: Pending,
+        result: &Value,
+        events: &mut Vec<Event>,
+    ) {
+        match pending.kind {
+            ReplyKind::Initialize => self.finish_initialize(name, events),
+            ReplyKind::ToolsList => {
+                let tools = parse_tools(result);
+                if let Some(server) = self.servers.get_mut(name) {
+                    server.tools = tools.clone();
+                    server.tools_loaded = true;
+                }
+                events.push(Event::Tools {
+                    server: name.to_string(),
+                    tools,
+                });
+            }
+            ReplyKind::CallTool => {
+                let (content, is_error) = parse_tool_result(result);
+                events.push(Event::ToolResult {
+                    server: name.to_string(),
+                    tool: pending.tool.unwrap_or_default(),
+                    content,
+                    is_error,
+                });
+            }
+            ReplyKind::ResourcesList => self.handle_resource_reply(name, None, result, events),
+            ReplyKind::ResourceRead => {
+                self.handle_resource_reply(name, pending.tool, result, events)
+            }
+            ReplyKind::PromptsList => self.handle_prompt_reply(name, None, result, events),
+            ReplyKind::PromptGet => self.handle_prompt_reply(name, pending.tool, result, events),
+        }
+    }
+
     fn handle_resource_reply(
         &mut self,
         name: &str,
@@ -604,6 +681,33 @@ impl McpManager {
         }
     }
 
+    fn handle_server_request(
+        &mut self,
+        name: &str,
+        id: i64,
+        method: &str,
+        value: &Value,
+        events: &mut Vec<Event>,
+    ) {
+        if method == "sampling/createMessage" {
+            let allowed = self
+                .configs
+                .get(name)
+                .is_some_and(|config| config.allow_sampling && config.url.is_none());
+            if allowed {
+                events.push(Event::Sampling {
+                    server: name.to_string(),
+                    id,
+                    params: value.get("params").cloned().unwrap_or(Value::Null),
+                });
+            } else {
+                let _ = self.respond_error(name, id, "sampling is disabled");
+            }
+            return;
+        }
+        let _ = self.respond_error(name, id, "unsupported MCP client method");
+    }
+
     fn handle_line(&mut self, name: &str, line: &str, events: &mut Vec<Event>) {
         if line.len() > MAX_MESSAGE_BYTES {
             events.push(Event::Warning(format!("MCP {name}: response too large")));
@@ -617,6 +721,10 @@ impl McpManager {
             }
         };
         if let Some(id) = value.get("id").and_then(Value::as_i64) {
+            if let Some(method) = value.get("method").and_then(Value::as_str) {
+                self.handle_server_request(name, id, method, &value, events);
+                return;
+            }
             let Some(pending) = self
                 .servers
                 .get_mut(name)
@@ -633,37 +741,7 @@ impl McpManager {
                 return;
             }
             let result = value.get("result").cloned().unwrap_or(Value::Null);
-            match pending.kind {
-                ReplyKind::Initialize => self.finish_initialize(name, events),
-                ReplyKind::ToolsList => {
-                    let tools = parse_tools(&result);
-                    if let Some(server) = self.servers.get_mut(name) {
-                        server.tools = tools.clone();
-                        server.tools_loaded = true;
-                    }
-                    events.push(Event::Tools {
-                        server: name.to_string(),
-                        tools,
-                    });
-                }
-                ReplyKind::CallTool => {
-                    let (content, is_error) = parse_tool_result(&result);
-                    events.push(Event::ToolResult {
-                        server: name.to_string(),
-                        tool: pending.tool.unwrap_or_default(),
-                        content,
-                        is_error,
-                    });
-                }
-                ReplyKind::ResourcesList => self.handle_resource_reply(name, None, &result, events),
-                ReplyKind::ResourceRead => {
-                    self.handle_resource_reply(name, pending.tool, &result, events)
-                }
-                ReplyKind::PromptsList => self.handle_prompt_reply(name, None, &result, events),
-                ReplyKind::PromptGet => {
-                    self.handle_prompt_reply(name, pending.tool, &result, events)
-                }
-            }
+            self.handle_reply(name, pending, &result, events);
             return;
         }
         if value.get("method").and_then(Value::as_str) == Some("notifications/tools/list_changed") {
@@ -982,10 +1060,15 @@ fn spawn_server(name: &str, config: &McpServerConfig, root: &Path) -> Result<Ser
     })
 }
 
-fn initialize_params() -> Value {
+fn initialize_params(allow_sampling: bool) -> Value {
+    let capabilities = if allow_sampling {
+        json!({"sampling": {}})
+    } else {
+        json!({})
+    };
     json!({
         "protocolVersion": PROTOCOL_VERSION,
-        "capabilities": {},
+        "capabilities": capabilities,
         "clientInfo": {
             "name": "i3-editor",
             "version": env!("CARGO_PKG_VERSION")
@@ -1224,6 +1307,7 @@ mod tests {
             cwd: None,
             env,
             url: None,
+            allow_sampling: false,
         };
         McpManager::new(
             BTreeMap::from([("mock".to_string(), config)]),
@@ -1262,6 +1346,54 @@ mod tests {
             }
         }
         panic!("timed out waiting for MCP event; seen {seen:?}");
+    }
+
+    #[test]
+    fn sampling_request_is_emitted_and_response_is_written_back() {
+        if !python_available() {
+            return;
+        }
+        let script = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("fixtures")
+            .join("mock_mcp.py");
+        let config = McpServerConfig {
+            command: "python3".to_string(),
+            args: vec![script.to_string_lossy().into_owned()],
+            cwd: None,
+            env: BTreeMap::from([("MOCK_MCP_MODE".to_string(), "sampling".to_string())]),
+            url: None,
+            allow_sampling: true,
+        };
+        let mut manager = McpManager::new(
+            BTreeMap::from([("mock".to_string(), config)]),
+            std::env::temp_dir(),
+        );
+        manager.list_tools("mock").expect("start");
+        let events = wait_for(&mut manager, |event| {
+            matches!(event, Event::Sampling { .. })
+        });
+        let (id, params) = events
+            .iter()
+            .find_map(|event| match event {
+                Event::Sampling { id, params, .. } => Some((*id, params.clone())),
+                _ => None,
+            })
+            .expect("sampling event");
+        assert_eq!(id, 900);
+        assert!(params.to_string().contains("sample me"));
+        manager
+            .respond(
+                "mock",
+                id,
+                json!({"role": "assistant", "content": {"type": "text", "text": "sample answer"}}),
+            )
+            .expect("respond");
+        let events = wait_for(
+            &mut manager,
+            |event| matches!(event, Event::Log { line, .. } if line.contains("sampling response")),
+        );
+        assert!(!events.is_empty());
     }
 
     #[test]
@@ -1365,6 +1497,7 @@ mod tests {
                     cwd: None,
                     env: BTreeMap::new(),
                     url: Some(format!("http://{address}/mcp")),
+                    allow_sampling: false,
                 },
             )]),
             std::env::temp_dir(),
@@ -1586,6 +1719,7 @@ mod tests {
             cwd: None,
             env: BTreeMap::new(),
             url: None,
+            allow_sampling: false,
         };
         let mut manager = McpManager::new(
             BTreeMap::from([("filesystem".to_string(), config)]),

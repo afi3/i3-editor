@@ -39,6 +39,10 @@ for raw in sys.stdin:
     if MODE == "silent":
         continue
 
+    if method is None and request_id == 900:
+        print("sampling response: " + json.dumps(request), file=sys.stderr, flush=True)
+        continue
+
     if method == "initialize":
         send(
             {
@@ -46,11 +50,24 @@ for raw in sys.stdin:
                 "id": request_id,
                 "result": {
                     "protocolVersion": "2025-06-18",
-                    "capabilities": {"tools": {}},
+                    "capabilities": {"tools": {}, "sampling": {}},
                     "serverInfo": {"name": "mock", "version": "1.0"},
                 },
             }
         )
+        if MODE == "sampling":
+            send(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 900,
+                    "method": "sampling/createMessage",
+                    "params": {
+                        "messages": [
+                            {"role": "user", "content": {"type": "text", "text": "sample me"}}
+                        ]
+                    },
+                }
+            )
     elif method == "notifications/initialized":
         continue
     elif method == "tools/list":
