@@ -463,9 +463,10 @@ It does not stream, send project context automatically, or edit buffers.
 
 ```toml
 [ai]
-base_url = "https://api.openai.com/v1"
-model = "gpt-4o-mini"
-api_key_env = "OPENAI_API_KEY"
+base_url = "https://openrouter.ai/api/v1"
+model = "openai/gpt-4o-mini"
+api_key_env = "OPENROUTER_API_KEY"
+api_key = ""                     # optional local override; prefer the env var
 timeout_secs = 60
 max_context_tokens = 16000       # prompt budget; old turns are dropped
 max_tool_output_chars = 20000    # one MCP result kept in history
@@ -511,6 +512,32 @@ panel_width = 20                 # percent of terminal width
 - The panel title shows estimated conversation tokens against the configured
   budget. Headings, fenced code, and user turns get basic Markdown styling;
   `Ctrl+Left`/`Ctrl+Right` scrolls long transcript lines horizontally.
+- The default provider is OpenRouter (`https://openrouter.ai/api/v1`,
+  `openai/gpt-4o-mini`) with `OPENROUTER_API_KEY`. Put the key in the
+  environment for normal use; `api_key` is available only as an explicit local
+  config override and is not written by the editor.
+
+### Native hashline tools
+
+The harness also exposes two built-in tools, independent of MCP:
+
+- `native/read_file {"path": "...", "start_line": 1, "end_line": 400}` returns
+  `path`, `total_lines`, a file `snapshot`, and lines shaped like
+  `42:a3f1c9|    let value = 1;`.
+- `native/edit_file` takes `path`, the `snapshot`, and an `edits` array of
+  `{line, hash, text}`. Every line hash and the snapshot are validated before
+  one atomic write; edits apply from bottom to top. Empty `text` deletes the
+  line.
+- Reads and edits are limited to regular UTF-8 files inside the workspace root,
+  at most 16 MiB. Symlinks escaping the root, stale hashes, stale snapshots,
+  and dirty open buffers are rejected. A clean open buffer is reloaded after a
+  successful edit.
+- The tools use the same `allowed_tools`/`denied_tools` policy, confirmation,
+  capability labels (`read-only`/`destructive`), and audit log as MCP tools.
+  `native/read_file` and `native/edit_file` are visible even when no MCP server
+  is configured.
+
+Search and post-edit `cargo check` are not part of this slice.
 - The API key is read from `api_key_env`; leave it empty for a local
   OpenAI-compatible server without authentication.
 - Requests are non-streaming and do not include the active file unless you paste
@@ -869,9 +896,10 @@ command = "npx"
 args = ["-y", "@modelcontextprotocol/server-filesystem", "."]
 
 [ai]
-base_url = "https://api.openai.com/v1"
-model = "gpt-4o-mini"
-api_key_env = "OPENAI_API_KEY"
+base_url = "https://openrouter.ai/api/v1"
+model = "openai/gpt-4o-mini"
+api_key_env = "OPENROUTER_API_KEY"
+api_key = ""
 timeout_secs = 60
 max_context_tokens = 16000
 max_tool_output_chars = 20000

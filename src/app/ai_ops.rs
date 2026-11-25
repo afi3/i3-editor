@@ -355,6 +355,9 @@ impl App {
     }
 
     fn ai_tool_capability(&self, server: &str, tool: &str) -> String {
+        if server == crate::native::SERVER {
+            return crate::native::capability(tool).to_string();
+        }
         self.mcp
             .as_ref()
             .and_then(|mcp| mcp.tools(server))
@@ -378,6 +381,24 @@ impl App {
                     );
                 }
             }
+        }
+        for (name, schema) in crate::native::tools() {
+            if !tool_allowed(&self.state.config.ai, crate::native::SERVER, name) {
+                continue;
+            }
+            let api = format!("{}__{name}", crate::native::SERVER);
+            map.insert(
+                api.clone(),
+                (crate::native::SERVER.to_string(), name.to_string()),
+            );
+            tools.push(json!({
+                "type": "function",
+                "function": {
+                    "name": api,
+                    "description": crate::native::description(name),
+                    "parameters": schema
+                }
+            }));
         }
         self.state.ai.tool_map = map;
         tools
@@ -486,6 +507,10 @@ impl App {
             self.state.ai.busy = false;
             return;
         }
+        if call.server == crate::native::SERVER {
+            self.allow_native_tool(call);
+            return;
+        }
         let Some(manager) = self.mcp.as_mut() else {
             self.state
                 .ai
@@ -539,6 +564,74 @@ impl App {
                 self.state.ai.busy = false;
             }
         }
+    }
+
+    fn allow_native_tool(&mut self, call: AiToolCall) {
+        super::audit::decision(&self.state, &call, "allowed");
+        let root = self.state.explorer.root.clone();
+        let result = self.run_native_tool(&root, &call);
+        let waiting = AiWaiting {
+            id: call.id.clone(),
+            server: call.server.clone(),
+            tool: call.tool.clone(),
+            capability: call.capability.clone(),
+        };
+        self.state.ai.waiting = Some(waiting);
+        let text = match result {
+            Ok(text) => {
+                self.finish_ai_tool(
+                    crate::native::SERVER,
+                    &call.tool,
+                    &[ToolContent::Text(text)],
+                    false,
+                );
+                return;
+            }
+            Err(error) => error,
+        };
+        self.finish_ai_tool(
+            crate::native::SERVER,
+            &call.tool,
+            &[ToolContent::Text(text)],
+            true,
+        );
+    }
+
+    fn run_native_tool(
+        &mut self,
+        root: &std::path::Path,
+        call: &AiToolCall,
+    ) -> Result<String, String> {
+        let raw = call
+            .arguments
+            .get("path")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "path must be a non-empty string".to_string())?;
+        let path = crate::native::resolve_path(root, raw)?;
+        let open = self.state.documents.values().find(|document| {
+            document
+                .path
+                .as_deref()
+                .is_some_and(|open| super::same_path(open, &path))
+        });
+        let document_id = open.map(|document| (document.id, document.dirty));
+        if let Some((_, true)) = document_id {
+            return Err("file has unsaved changes; save or reload it first".to_string());
+        }
+        if call.tool == "read_file" {
+            return crate::native::read_file(root, &call.arguments);
+        }
+        if call.tool != "edit_file" {
+            return Err(format!("unknown native tool {}", call.tool));
+        }
+        let result = crate::native::edit_file(root, &call.arguments);
+        if result.is_ok()
+            && let Some((id, _)) = document_id
+        {
+            self.reload_document(id)
+                .map_err(|error| format!("reload after edit: {error}"))?;
+        }
+        result
     }
 
     fn deny_ai_tool(&mut self) {

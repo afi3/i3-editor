@@ -97,7 +97,11 @@ fn chat_with_cancel(
     body_file
         .write_all(&body_text)
         .map_err(|error| error.to_string())?;
-    let key = std::env::var(&config.api_key_env).unwrap_or_default();
+    let key = if config.api_key.trim().is_empty() {
+        std::env::var(&config.api_key_env).unwrap_or_default()
+    } else {
+        config.api_key.trim().to_string()
+    };
     let mut curl_config = String::new();
     curl_config.push_str(&format!("url = {}\n", quote(&url)));
     curl_config.push_str("request = \"POST\"\n");

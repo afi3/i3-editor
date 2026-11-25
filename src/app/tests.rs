@@ -2478,6 +2478,128 @@ fn cancelling_an_ai_tool_call_stops_the_mcp_server() {
 }
 
 #[test]
+fn native_ai_tools_read_and_edit_the_open_document() {
+    use crate::state::AiToolCall;
+
+    let (mut app, dir) = fixture("x\n");
+    app.state.config.ai.base_url.clear();
+    app.dispatch(Command::AiChat).expect("ai panel");
+    app.state.ai.pending.push_back(AiToolCall {
+        id: "native-read".to_string(),
+        server: "native".to_string(),
+        tool: "read_file".to_string(),
+        capability: "read-only".to_string(),
+        arguments: serde_json::json!({"path": "note.txt"}),
+    });
+    app.handle_key(ratatui::crossterm::event::KeyEvent::new(
+        ratatui::crossterm::event::KeyCode::Char('y'),
+        ratatui::crossterm::event::KeyModifiers::NONE,
+    ));
+    let tool_message = app
+        .state
+        .ai
+        .conversation
+        .last()
+        .and_then(|message| message["content"].as_str())
+        .expect("native read result");
+    assert!(tool_message.contains("snapshot:"), "{tool_message}");
+    assert!(tool_message.contains("1:"), "{tool_message}");
+    app.pump_ai();
+
+    let read = crate::native::read_file(
+        &app.state.explorer.root,
+        &serde_json::json!({"path": "note.txt"}),
+    )
+    .expect("read");
+    let snapshot = read
+        .lines()
+        .find_map(|line| line.strip_prefix("snapshot: "))
+        .expect("snapshot");
+    let line = read.lines().find(|line| line.contains("|x")).expect("line");
+    let (head, _) = line.split_once('|').expect("separator");
+    let (number, hash) = head.split_once(':').expect("hash");
+    app.state.ai.pending.push_back(AiToolCall {
+        id: "native-edit".to_string(),
+        server: "native".to_string(),
+        tool: "edit_file".to_string(),
+        capability: "destructive".to_string(),
+        arguments: serde_json::json!({
+            "path": "note.txt",
+            "snapshot": snapshot,
+            "edits": [{"line": number.parse::<usize>().unwrap(), "hash": hash, "text": "y"}]
+        }),
+    });
+    app.handle_key(ratatui::crossterm::event::KeyEvent::new(
+        ratatui::crossterm::event::KeyCode::Char('y'),
+        ratatui::crossterm::event::KeyModifiers::NONE,
+    ));
+    assert_eq!(
+        std::fs::read_to_string(dir.join("note.txt")).expect("edited file"),
+        "y\n"
+    );
+    assert!(app.state.documents.values().any(|document| {
+        document.rope.len_chars() == 2
+            && document.rope.char(0) == 'y'
+            && document.rope.char(1) == '\n'
+    }));
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn native_edit_refuses_a_dirty_buffer() {
+    use crate::state::AiToolCall;
+
+    let (mut app, dir) = fixture("x\n");
+    app.state.config.ai.base_url.clear();
+    app.dispatch(Command::AiChat).expect("ai panel");
+    let read = crate::native::read_file(
+        &app.state.explorer.root,
+        &serde_json::json!({"path": "note.txt"}),
+    )
+    .expect("read");
+    let snapshot = read
+        .lines()
+        .find_map(|line| line.strip_prefix("snapshot: "))
+        .expect("snapshot");
+    let line = read.lines().find(|line| line.contains("|x")).expect("line");
+    let (head, _) = line.split_once('|').expect("separator");
+    let (number, hash) = head.split_once(':').expect("hash");
+    let document_id = *app.state.documents.keys().next().expect("document");
+    app.state
+        .documents
+        .get_mut(&document_id)
+        .expect("document")
+        .dirty = true;
+    app.state.ai.pending.push_back(AiToolCall {
+        id: "native-dirty".to_string(),
+        server: "native".to_string(),
+        tool: "edit_file".to_string(),
+        capability: "destructive".to_string(),
+        arguments: serde_json::json!({
+            "path": "note.txt",
+            "snapshot": snapshot,
+            "edits": [{"line": number.parse::<usize>().unwrap(), "hash": hash, "text": "y"}]
+        }),
+    });
+    app.handle_key(ratatui::crossterm::event::KeyEvent::new(
+        ratatui::crossterm::event::KeyCode::Char('y'),
+        ratatui::crossterm::event::KeyModifiers::NONE,
+    ));
+    assert_eq!(
+        std::fs::read_to_string(dir.join("note.txt")).expect("original file"),
+        "x\n"
+    );
+    assert!(
+        app.state
+            .ai
+            .entries
+            .iter()
+            .any(|line| line.contains("unsaved"))
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn ai_panel_commands_copy_clear_resize_and_scroll() {
     let (mut app, dir) = fixture("x\n");
     app.dispatch(Command::AiChat).expect("ai panel");

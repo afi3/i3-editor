@@ -16,6 +16,7 @@ mod input;
 mod lsp;
 mod lsp_install;
 mod mcp;
+mod native;
 mod plugins;
 mod project_search;
 mod recovery;

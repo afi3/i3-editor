@@ -115,6 +115,8 @@ pub struct AiConfig {
     pub model: String,
     /// Environment variable holding the API key; empty means unauthenticated.
     pub api_key_env: String,
+    /// Optional direct key for local configs; prefer `api_key_env`.
+    pub api_key: String,
     pub timeout_secs: u64,
     /// Maximum estimated prompt tokens sent to the provider.
     pub max_context_tokens: usize,
@@ -139,9 +141,10 @@ pub struct AiConfig {
 impl Default for AiConfig {
     fn default() -> Self {
         Self {
-            base_url: "https://api.openai.com/v1".to_string(),
-            model: "gpt-4o-mini".to_string(),
-            api_key_env: "OPENAI_API_KEY".to_string(),
+            base_url: "https://openrouter.ai/api/v1".to_string(),
+            model: "openai/gpt-4o-mini".to_string(),
+            api_key_env: "OPENROUTER_API_KEY".to_string(),
+            api_key: String::new(),
             timeout_secs: 60,
             max_context_tokens: 16_000,
             max_tool_output_chars: 20_000,
@@ -735,6 +738,7 @@ const AI_KEYS: &[&str] = &[
     "base_url",
     "model",
     "api_key_env",
+    "api_key",
     "timeout_secs",
     "max_context_tokens",
     "max_tool_output_chars",
