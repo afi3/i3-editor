@@ -533,10 +533,12 @@ panel_width = 20                 # percent of terminal width
 - Every tool decision and result is appended to
   `<config>/i3-editor/audit.jsonl`. Arguments are truncated and keys containing
   token, secret, password, authorization, or api_key are redacted.
-- The panel title shows estimated conversation tokens against the configured
-  budget plus actual provider prompt/completion usage; if input/output pricing
-  is configured, it also shows an estimated session cost. Headings, fenced
-  code, and user turns get basic Markdown styling;
+- The panel title starts with the configured model name, followed by estimated
+  conversation tokens against the configured budget plus actual provider
+  prompt/completion usage; if input/output pricing
+  is configured, it also shows an estimated session cost. Headings, lists,
+  blockquotes, tables, fenced/inline code, bold/italic text, links, and user
+  turns get Markdown styling;
   long transcript lines wrap inside the panel, and `Ctrl+Left`/`Ctrl+Right`
   scrolls horizontally when needed.
 - The default provider is OpenRouter (`https://openrouter.ai/api/v1`,

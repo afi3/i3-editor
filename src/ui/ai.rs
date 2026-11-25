@@ -27,8 +27,9 @@ pub fn render(frame: &mut Frame, state: &AppState) {
         String::new()
     };
     let cost = session_cost(state);
+    let model = model_label(&state.config.ai.model);
     let title = format!(
-        " AI {}/{}{}{}{} ",
+        " {model} {}/{}{}{}{} ",
         compact(tokens),
         compact(state.config.ai.max_context_tokens),
         usage,
@@ -196,56 +197,218 @@ fn push_entry_rows(
     in_code: &mut bool,
 ) {
     for raw in entry.split('\n') {
-        let style = line_style(state, raw, in_code);
-        let text = clip(raw, state.ai.scroll_x);
-        push_wrapped(rows, &text, width, style);
+        push_markdown_line(rows, state, raw, width, in_code);
     }
 }
 
-fn push_wrapped(rows: &mut Vec<Line<'static>>, text: &str, width: usize, style: Style) {
-    if text.is_empty() {
+fn push_markdown_line(
+    rows: &mut Vec<Line<'static>>,
+    state: &AppState,
+    raw: &str,
+    width: usize,
+    in_code: &mut bool,
+) {
+    let text = clip(raw, state.ai.scroll_x);
+    if text.starts_with("```") {
+        *in_code = !*in_code;
+        push_styled(rows, vec![Span::styled(text, code_style(state))], width);
+        return;
+    }
+    if *in_code {
+        push_styled(rows, vec![Span::styled(text, code_style(state))], width);
+        return;
+    }
+    let base = state.theme.base();
+    if let Some(text) = text.strip_prefix("# ") {
+        let style = base
+            .fg(state.theme.explorer_dir)
+            .add_modifier(Modifier::BOLD);
+        push_styled(rows, inline_spans(state, text, style), width);
+        return;
+    }
+    if text == "---" || text == "***" {
+        push_styled(
+            rows,
+            vec![Span::styled("─".repeat(width), code_style(state))],
+            width,
+        );
+        return;
+    }
+    if let Some(text) = text.strip_prefix("> ") {
+        let mut spans = vec![Span::styled("│ ", code_style(state))];
+        spans.extend(inline_spans(
+            state,
+            text,
+            base.fg(state.theme.border_active),
+        ));
+        push_styled(rows, spans, width);
+        return;
+    }
+    for marker in ["- ", "* ", "+ "] {
+        if let Some(text) = text.strip_prefix(marker) {
+            let mut spans = vec![Span::styled("• ", base.fg(state.theme.explorer_dir))];
+            spans.extend(inline_spans(state, text, base));
+            push_styled(rows, spans, width);
+            return;
+        }
+    }
+    if let Some((prefix, text)) = ordered_prefix(&text) {
+        let mut spans = vec![Span::styled(prefix, base.fg(state.theme.explorer_dir))];
+        spans.extend(inline_spans(state, text, base));
+        push_styled(rows, spans, width);
+        return;
+    }
+    push_styled(rows, inline_spans(state, &text, base), width);
+}
+
+fn ordered_prefix(text: &str) -> Option<(String, &str)> {
+    let digits = text.chars().take_while(char::is_ascii_digit).count();
+    if digits == 0 {
+        return None;
+    }
+    let rest = text.get(digits..)?;
+    let tail = rest.strip_prefix(". ")?;
+    Some((format!("{}. ", &text[..digits]), tail))
+}
+
+fn code_style(state: &AppState) -> Style {
+    Style::default().fg(state.theme.gutter)
+}
+
+fn inline_spans(state: &AppState, text: &str, base: Style) -> Vec<Span<'static>> {
+    let chars: Vec<char> = text.chars().collect();
+    let mut spans = Vec::new();
+    let mut buffer = String::new();
+    let mut index = 0usize;
+    while index < chars.len() {
+        if chars[index] == '*'
+            && chars.get(index + 1) == Some(&'*')
+            && let Some(end) = find_marker(&chars, index + 2, "**")
+        {
+            push_text(&mut spans, &mut buffer, base);
+            let value: String = chars[index + 2..end].iter().collect();
+            spans.push(Span::styled(value, base.add_modifier(Modifier::BOLD)));
+            index = end + 2;
+            continue;
+        }
+        if chars[index] == '`'
+            && let Some(end) = find_char(&chars, index + 1, '`')
+        {
+            push_text(&mut spans, &mut buffer, base);
+            let value: String = chars[index + 1..index + 1 + end].iter().collect();
+            spans.push(Span::styled(value, base.fg(state.theme.syntax.string)));
+            index += end + 2;
+            continue;
+        }
+        if chars[index] == '*'
+            && let Some(end) = find_char(&chars, index + 1, '*')
+        {
+            push_text(&mut spans, &mut buffer, base);
+            let value: String = chars[index + 1..index + 1 + end].iter().collect();
+            spans.push(Span::styled(value, base.add_modifier(Modifier::ITALIC)));
+            index += end + 2;
+            continue;
+        }
+        if chars[index] == '['
+            && let Some((label, next)) = link_at(&chars, index)
+        {
+            push_text(&mut spans, &mut buffer, base);
+            spans.push(Span::styled(
+                label,
+                base.fg(state.theme.border_active)
+                    .add_modifier(Modifier::UNDERLINED),
+            ));
+            index = next;
+            continue;
+        }
+        buffer.push(chars[index]);
+        index += 1;
+    }
+    push_text(&mut spans, &mut buffer, base);
+    spans
+}
+
+fn find_char(chars: &[char], from: usize, needle: char) -> Option<usize> {
+    (from..chars.len())
+        .find(|index| chars[*index] == needle)
+        .map(|index| index - from)
+}
+
+fn find_marker(chars: &[char], from: usize, marker: &str) -> Option<usize> {
+    let marker: Vec<char> = marker.chars().collect();
+    (from..chars.len().saturating_sub(marker.len() - 1))
+        .find(|index| chars[*index..*index + marker.len()] == marker)
+}
+
+fn link_at(chars: &[char], start: usize) -> Option<(String, usize)> {
+    let close = chars[start + 1..].iter().position(|ch| *ch == ']')? + start + 1;
+    if chars.get(close + 1) != Some(&'(') {
+        return None;
+    }
+    let end = chars[close + 2..].iter().position(|ch| *ch == ')')? + close + 2;
+    let label: String = chars[start + 1..close].iter().collect();
+    Some((label, end + 1))
+}
+
+fn push_text(spans: &mut Vec<Span<'static>>, buffer: &mut String, style: Style) {
+    if buffer.is_empty() {
+        return;
+    }
+    spans.push(Span::styled(std::mem::take(buffer), style));
+}
+
+fn push_styled(rows: &mut Vec<Line<'static>>, spans: Vec<Span<'static>>, width: usize) {
+    if spans.is_empty() {
         rows.push(Line::from(""));
         return;
     }
-    let mut current = String::new();
+    let mut current = Vec::new();
+    let mut text = String::new();
+    let mut style = Style::default();
     let mut used = 0usize;
-    for ch in text.chars() {
-        let cells = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
-        if used > 0 && used + cells > width {
-            rows.push(Line::from(Span::styled(
-                std::mem::take(&mut current),
-                style,
-            )));
-            used = 0;
-        }
-        current.push(ch);
-        used += cells;
+    for span in spans {
+        append_span(
+            rows,
+            &mut current,
+            &mut text,
+            &mut style,
+            &mut used,
+            span,
+            width,
+        );
     }
+    push_text(&mut current, &mut text, style);
     if !current.is_empty() {
-        rows.push(Line::from(Span::styled(current, style)));
+        rows.push(Line::from(current));
     }
 }
 
-fn line_style(state: &AppState, line: &str, in_code: &mut bool) -> Style {
-    if line.starts_with("```") {
-        *in_code = !*in_code;
-        return Style::default().fg(state.theme.gutter);
+fn append_span(
+    rows: &mut Vec<Line<'static>>,
+    current: &mut Vec<Span<'static>>,
+    text: &mut String,
+    style: &mut Style,
+    used: &mut usize,
+    span: Span<'static>,
+    width: usize,
+) {
+    for ch in span.content.chars() {
+        let cells = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+        if *used > 0 && *used + cells > width {
+            push_text(current, text, *style);
+            rows.push(Line::from(std::mem::take(current)));
+            *used = 0;
+        }
+        if *style != span.style {
+            push_text(current, text, *style);
+            *style = span.style;
+        }
+        text.push(ch);
+        *used += cells;
     }
-    if *in_code {
-        return Style::default().fg(state.theme.gutter);
+    if !text.is_empty() {
+        push_text(current, text, *style);
     }
-    if line.starts_with("# ") {
-        return Style::default()
-            .fg(state.theme.explorer_dir)
-            .add_modifier(Modifier::BOLD);
-    }
-    if line.starts_with("> ") {
-        return Style::default().fg(state.theme.border_active);
-    }
-    if line.starts_with("[error]") || line.starts_with("[blocked]") {
-        return state.theme.base().add_modifier(Modifier::BOLD);
-    }
-    state.theme.base()
 }
 
 fn clip(text: &str, skip: usize) -> String {
@@ -253,6 +416,17 @@ fn clip(text: &str, skip: usize) -> String {
         return text.to_string();
     }
     text.chars().skip(skip).collect()
+}
+
+fn model_label(model: &str) -> String {
+    let short = model.rsplit('/').next().unwrap_or(model);
+    let mut chars = short.chars();
+    let mut label: String = chars.by_ref().take(14).collect();
+    if chars.next().is_some() {
+        label.pop();
+        label.push('…');
+    }
+    label
 }
 
 fn session_cost(state: &AppState) -> String {

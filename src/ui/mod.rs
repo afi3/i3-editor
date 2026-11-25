@@ -618,6 +618,28 @@ mod tests {
         assert!(screen.contains("answer"), "{screen}");
         assert!(screen.contains("next"), "{screen}");
         assert!(screen.contains("16.0k"), "{screen}");
+        assert!(screen.contains("gpt-4o-mini"), "{screen}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn renders_markdown_blocks_and_inline_styles() {
+        let (mut state, dir) = state("x\n");
+        state.ai.visible = true;
+        state.ai.focused = true;
+        state.ai.entries = vec![
+            "# Heading".to_string(),
+            "- **bold** and `code` [link](https://example.test)".to_string(),
+            "> quoted".to_string(),
+            "1. ordered".to_string(),
+        ];
+        let screen = draw(&mut state, 100, 24);
+        assert!(screen.contains("Heading"), "{screen}");
+        assert!(screen.contains("bold"), "{screen}");
+        assert!(screen.contains("code"), "{screen}");
+        assert!(screen.contains("link"), "{screen}");
+        assert!(screen.contains("quoted"), "{screen}");
+        assert!(screen.contains("ordered"), "{screen}");
         std::fs::remove_dir_all(&dir).ok();
     }
 
