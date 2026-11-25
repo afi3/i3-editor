@@ -8,8 +8,10 @@ verified before the next one started.
 - `v0.1.x` is the current hardening and feature-completion line: release
   engineering, correctness, daily-driver operations, performance, polish, and
   Git depth.
-- `v0.2.x` is reserved for AI and MCP features. Do not tag `v0.2.0` until those
-  features land; current-feature work stays inside `v0.1.x`.
+- `v0.2.x` is reserved for MCP and AI features. `v0.2.0` is the stdio MCP
+  client; AI assistant work starts only after that client is stable. Do not tag
+  `v0.2.0` until the MCP acceptance checklist below passes; other feature work
+  stays inside `v0.1.x`.
 
 ## Phase 1 — Terminal foundation and pane skeleton: done
 
@@ -771,6 +773,77 @@ Version `0.1.9`, tag `v0.1.9`, and the four platform assets are the release
 milestone. Release workflow run `45413315109` built and published all four
 targets; the aarch64 macOS asset passed its SHA-256 check, reported
 `i3-editor 0.1.9`, and a v0.1.8 binary self-updated to v0.1.9 successfully.
+
+## Planned v0.2.0 — MCP client (stdio only)
+
+Scope is deliberately narrow: connect to configured MCP servers and let the user
+list and call tools explicitly. There is no chat, model provider, automatic edit,
+or background agent in this release.
+
+### Agreed behavior
+
+- One palette command: `mcp`, opening a menu for `servers`, `tools`, `call`, and
+  `logs`.
+- Transport is stdio JSON-RPC 2.0 with newline-delimited messages, not LSP
+  `Content-Length` framing.
+- Servers start lazily on first use and are killed on exit or workspace-root
+  change.
+- Configuration lives in `[mcp.<name>]` tables:
+  `command`, `args`, optional `cwd`, and an explicit `env` table. The workspace
+  root is the default cwd.
+- A server trust prompt appears before the first spawn. The trusted identity is
+  the hash of command, args, cwd, and env; changing any of them requires trust
+  again.
+- Tool calls require confirmation and show server, tool, and JSON arguments.
+  A tool result opens in a read-only overlay; it never edits a buffer or runs a
+  shell command implicitly.
+- No installer or registry; users provide the server command.
+
+### Protocol and lifecycle
+
+- Spawn with stdin/stdout pipes; stderr goes to the MCP log ring, not the UI.
+- `initialize` → `notifications/initialized` → `tools/list` with pagination.
+- Track request ids, bound response size, and time out requests; kill a server
+  that violates framing or exits.
+- Restart all servers when the workspace root changes; report failures once in
+  the status bar and `mcp` logs.
+- Sanitize inherited environment variables and never interpolate arguments
+  through a shell.
+
+### Delivery checklist
+
+- [ ] MCP JSON-RPC framing, request ids, timeouts, and server lifecycle.
+- [ ] Config schema and validation for `[mcp.<name>]`.
+- [ ] Mock stdio MCP server fixture for deterministic tests.
+- [ ] `mcp` palette menu with server/tool lists and a scrollable result/log view.
+- [ ] Trust prompt with config-hash invalidation.
+- [ ] Per-call confirmation and denial path.
+- [ ] Workspace-root restart and shutdown cleanup.
+- [ ] README, ARCHITECTURE, and this roadmap updated.
+
+### Acceptance
+
+- A mock server initializes, lists tools, and returns a tool result in the
+  read-only overlay.
+- Denying trust prevents spawn; denying a call sends no request.
+- Malformed output, timeout, oversized output, and crash are reported without
+  blocking the editor.
+- No tool result can mutate an editor buffer in v0.2.0.
+- `cargo test` (including mock MCP tests), `cargo fmt --check`,
+  `cargo clippy --all-targets --all-features`, MSRV 1.91, audit, and gate pass.
+- `v0.2.0` is tagged only after the checklist and acceptance pass.
+
+### Deferred to v0.2.x
+
+- AI chat and model-provider HTTP clients.
+- API key/keyring management.
+- Auto-apply diffs and autonomous tool loops.
+- MCP HTTP/SSE transport.
+- MCP resources/prompts/sampling and installer/registry.
+
+Risk: MCP servers are arbitrary code and return untrusted text. The trust hash,
+explicit per-call confirmation, sanitized env, read-only results, and no
+auto-apply are the containment boundary for this release.
 
 ## Verification commands
 
