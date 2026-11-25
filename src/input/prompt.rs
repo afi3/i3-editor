@@ -39,6 +39,11 @@ pub enum PromptKind {
     CommitMessage,
     Theme,
     SelectWorkspace,
+    Mcp,
+    McpTrust,
+    McpTools,
+    McpArgs,
+    McpConfirm,
 }
 
 /// Grouping used by the prompt setup and submit code, so neither needs one
@@ -76,6 +81,11 @@ impl PromptKind {
                 | PromptKind::Conflicts
                 | PromptKind::CommitMessage
                 | PromptKind::SelectWorkspace
+                | PromptKind::Mcp
+                | PromptKind::McpTrust
+                | PromptKind::McpTools
+                | PromptKind::McpArgs
+                | PromptKind::McpConfirm
         )
     }
 
@@ -105,7 +115,13 @@ impl PromptKind {
     }
 
     fn query_title(self) -> &'static str {
-        match self {
+        self.core_query_title()
+            .or_else(|| self.mcp_query_title())
+            .unwrap_or("")
+    }
+
+    fn core_query_title(self) -> Option<&'static str> {
+        Some(match self {
             PromptKind::CommandPalette => "Command Palette",
             PromptKind::Messages => "Messages",
             PromptKind::Find => "Find",
@@ -118,8 +134,19 @@ impl PromptKind {
             PromptKind::Conflicts => "Merge Conflicts",
             PromptKind::CommitMessage => "Commit Message",
             PromptKind::SelectWorkspace => "Workspace",
-            _ => "",
-        }
+            _ => return None,
+        })
+    }
+
+    fn mcp_query_title(self) -> Option<&'static str> {
+        Some(match self {
+            PromptKind::Mcp => "MCP Servers",
+            PromptKind::McpTrust => "Trust MCP Server",
+            PromptKind::McpTools => "MCP Tools",
+            PromptKind::McpArgs => "MCP Tool Arguments",
+            PromptKind::McpConfirm => "Call MCP Tool",
+            _ => return None,
+        })
     }
 
     fn file_title(self) -> &'static str {
@@ -185,6 +212,10 @@ impl PromptKind {
                 | PromptKind::QuitConfirm
                 | PromptKind::ExternalChange
                 | PromptKind::SelectWorkspace
+                | PromptKind::Mcp
+                | PromptKind::McpTrust
+                | PromptKind::McpTools
+                | PromptKind::McpConfirm
         )
     }
 }
@@ -226,6 +257,9 @@ pub struct PromptState {
     keep_selection: bool,
     /// Definitions backing the candidate rows for `PromptKind::Symbols`.
     pub symbols: Vec<crate::structure::Symbol>,
+    pub mcp_server: Option<String>,
+    pub mcp_tool: Option<String>,
+    pub mcp_arguments: Option<String>,
 }
 
 impl PromptState {
@@ -243,6 +277,9 @@ impl PromptState {
             history: Box::default(),
             keep_selection: false,
             symbols: Vec::new(),
+            mcp_server: None,
+            mcp_tool: None,
+            mcp_arguments: None,
         }
     }
 

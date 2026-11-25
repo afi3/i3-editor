@@ -357,6 +357,16 @@ never overwritten by the installer. `lsp_uninstall` removes only the managed
 entry; downloaded files stay under `lsp/` for explicit cleanup. Filename
 matching accepts exact names plus `*` prefix/suffix patterns.
 
+**MCP is a separate stdio JSON-RPC client.** `mcp::McpManager` owns one child
+per configured `[mcp.<name>]` server. A reader thread frames newline-delimited
+JSON-RPC messages; `App::pump_mcp` drains them on the UI thread. `initialize`
+precedes `tools/list` and `tools/call`; pending requests carry timeouts, stderr
+is kept in a bounded per-server log, and a crashed server is removed once.
+Servers start only after the palette trust flow records the hash of command,
+args, cwd, and env for the session. Tool arguments are JSON, every call has a
+confirmation prompt, and results render in a read-only overlay with no automatic
+buffer or shell mutation.
+
 **File operations follow the focused surface.** `duplicate_file`, `copy_path`,
 and `reveal_in_terminal` take the explorer row when the explorer has focus;
 otherwise the active document's path wins, with the explorer row as fallback.

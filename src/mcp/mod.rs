@@ -14,6 +14,7 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 
 pub const PROTOCOL_VERSION: &str = "2025-06-18";
 
@@ -125,6 +126,14 @@ impl McpManager {
             failed: HashSet::new(),
             next_id: 0,
         }
+    }
+
+    pub fn config_hash(&self, name: &str) -> Option<String> {
+        let config = self.configs.get(name)?;
+        let bytes = serde_json::to_vec(config).ok()?;
+        let mut hash = Sha256::new();
+        hash.update(&bytes);
+        Some(format!("{:x}", hash.finalize()))
     }
 
     pub fn is_configured(&self) -> bool {

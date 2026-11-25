@@ -34,6 +34,7 @@ pub enum Focus {
     Shell,
 }
 
+#[allow(clippy::large_enum_variant)] // PromptState is moved, not cloned, on submit.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum InputMode {
     Normal,

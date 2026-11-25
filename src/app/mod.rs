@@ -59,6 +59,7 @@ impl App {
             last_swap: std::time::Instant::now(),
             lsp: None,
             mcp: None,
+            mcp_trusted: std::collections::HashSet::new(),
             plugins: None,
             block_anchor: None,
             git_status_entries: Vec::new(),
@@ -135,6 +136,8 @@ pub struct App {
     pub(crate) lsp: Option<crate::lsp::LspManager>,
     /// MCP servers configured for this workspace.
     pub(crate) mcp: Option<crate::mcp::McpManager>,
+    /// Trusted MCP server config hashes for this session.
+    pub(crate) mcp_trusted: std::collections::HashSet<String>,
     /// Alt-drag block selection: pane, anchor line, anchor char column.
     pub(crate) block_anchor: Option<(crate::state::PaneId, usize, usize)>,
     /// Lua plugins; `None` when disabled or unavailable.
@@ -253,6 +256,7 @@ impl App {
             last_swap: std::time::Instant::now(),
             lsp: None,
             mcp: None,
+            mcp_trusted: std::collections::HashSet::new(),
             plugins: None,
             block_anchor: None,
             git_status_entries: Vec::new(),

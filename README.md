@@ -412,6 +412,30 @@ can be overridden. `lsp_definition` has no default key; bind it under
 `[keys.editing]` if the terminal can emit the combination, for example
 `"ctrl+u" = "lsp_definition"`.
 
+### MCP servers
+
+MCP support is a stdio JSON-RPC client. It does not auto-start servers and never
+applies a tool result to a buffer.
+
+```toml
+[mcp.filesystem]
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-filesystem", "/home/arif/project"]
+cwd = "/home/arif/project"
+env = { TOKEN = "..." }
+```
+
+- `F1` → `mcp` opens the server menu. The first start shows a trust prompt with
+  the command to run; changing command, args, cwd, or env changes the trust
+  hash and prompts again. Trust is remembered for the session.
+- After trust, the server starts lazily and `tools/list` populates the tool menu.
+- Selecting a tool opens a JSON argument editor; `Enter` opens a per-call
+  confirmation. Nothing runs until the confirmation is accepted.
+- A tool result opens in a read-only overlay. It cannot edit a buffer or run a
+  shell command automatically. `Esc` or `q` closes the overlay.
+- Only stdio transport is supported. HTTP/SSE, resources, prompts, and automatic
+  tool loops are deferred.
+
 ### Git
 
 Git runs through the configured binary (`[git] binary`, default `git`); there is
@@ -758,6 +782,10 @@ scrollback = 2000          # lines kept, clamped to 100..=100000
 command = "rust-analyzer"
 args = []
 extensions = ["rs"]        # optional; empty means the table name
+
+[mcp.filesystem]           # configured only; F1 > mcp starts after trust
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-filesystem", "."]
 
 [git]
 binary = "git"             # executable used for every git command

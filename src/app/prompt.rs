@@ -253,6 +253,21 @@ impl App {
         ) {
             return self.submit_git_prompt(prompt);
         }
+        if matches!(
+            prompt.kind,
+            PromptKind::Mcp
+                | PromptKind::McpTrust
+                | PromptKind::McpTools
+                | PromptKind::McpArgs
+                | PromptKind::McpConfirm
+        ) {
+            self.submit_mcp_prompt(prompt);
+            return Ok(());
+        }
+        self.submit_regular_query(prompt)
+    }
+
+    fn submit_regular_query(&mut self, prompt: PromptState) -> Result<()> {
         let history = matches!(
             prompt.kind,
             PromptKind::Find
