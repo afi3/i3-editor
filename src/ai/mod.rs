@@ -31,6 +31,8 @@ pub struct Reply {
     pub message: Value,
     pub content: Option<String>,
     pub tool_calls: Vec<ToolCall>,
+    pub prompt_tokens: Option<u64>,
+    pub completion_tokens: Option<u64>,
 }
 
 pub struct Task {
@@ -113,6 +115,7 @@ pub(crate) fn prepare_request(
     }
     if stream {
         body["stream"] = Value::Bool(true);
+        body["stream_options"] = json!({"include_usage": true});
     }
     let body_text = serde_json::to_vec(&body).map_err(|error| error.to_string())?;
     let mut body_file = tempfile::NamedTempFile::new().map_err(|error| error.to_string())?;
@@ -316,10 +319,18 @@ pub(crate) fn parse_reply(body: &str) -> Result<Reply, AttemptError> {
             false,
         ));
     }
+    let prompt_tokens = value
+        .pointer("/usage/prompt_tokens")
+        .and_then(Value::as_u64);
+    let completion_tokens = value
+        .pointer("/usage/completion_tokens")
+        .and_then(Value::as_u64);
     Ok(Reply {
         message,
         content,
         tool_calls,
+        prompt_tokens,
+        completion_tokens,
     })
 }
 

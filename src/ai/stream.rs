@@ -355,6 +355,8 @@ fn consume_stream(
 struct Accumulator {
     content: String,
     calls: BTreeMap<usize, PartialCall>,
+    prompt_tokens: Option<u64>,
+    completion_tokens: Option<u64>,
 }
 
 #[derive(Default)]
@@ -366,6 +368,18 @@ struct PartialCall {
 
 impl Accumulator {
     fn push(&mut self, value: &Value) -> Option<String> {
+        if let Some(prompt) = value
+            .pointer("/usage/prompt_tokens")
+            .and_then(Value::as_u64)
+        {
+            self.prompt_tokens = Some(prompt);
+        }
+        if let Some(completion) = value
+            .pointer("/usage/completion_tokens")
+            .and_then(Value::as_u64)
+        {
+            self.completion_tokens = Some(completion);
+        }
         let delta = value.pointer("/choices/0/delta")?;
         let mut text = None;
         if let Some(content) = delta.get("content").and_then(Value::as_str) {
@@ -432,6 +446,8 @@ impl Accumulator {
             message,
             content,
             tool_calls,
+            prompt_tokens: self.prompt_tokens,
+            completion_tokens: self.completion_tokens,
         })
     }
 }

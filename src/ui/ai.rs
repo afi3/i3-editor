@@ -17,10 +17,22 @@ pub fn render(frame: &mut Frame, state: &AppState) {
     let focused = panel.focused;
     let tokens = crate::ai::context_tokens(&panel.conversation);
     let marker = if panel.busy { " *" } else { "" };
+    let usage = if panel.prompt_tokens + panel.completion_tokens > 0 {
+        format!(
+            " ↑{} ↓{}",
+            compact(panel.prompt_tokens as usize),
+            compact(panel.completion_tokens as usize)
+        )
+    } else {
+        String::new()
+    };
+    let cost = session_cost(state);
     let title = format!(
-        " AI {}/{}{} ",
+        " AI {}/{}{}{}{} ",
         compact(tokens),
         compact(state.config.ai.max_context_tokens),
+        usage,
+        cost,
         marker
     );
     let border = Style::default().fg(if focused {
@@ -241,6 +253,17 @@ fn clip(text: &str, skip: usize) -> String {
         return text.to_string();
     }
     text.chars().skip(skip).collect()
+}
+
+fn session_cost(state: &AppState) -> String {
+    let input = state.config.ai.input_cost_per_million;
+    let output = state.config.ai.output_cost_per_million;
+    if input <= 0.0 && output <= 0.0 {
+        return String::new();
+    }
+    let cost = (state.ai.prompt_tokens as f64 * input + state.ai.completion_tokens as f64 * output)
+        / 1_000_000.0;
+    format!(" ${cost:.4}")
 }
 
 fn compact(tokens: usize) -> String {

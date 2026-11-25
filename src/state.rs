@@ -321,6 +321,8 @@ pub struct AiPanel {
     pub queued_question: Option<String>,
     pub attachments: Vec<AiAttachment>,
     pub tool_map: std::collections::BTreeMap<String, (String, String)>,
+    pub prompt_tokens: u64,
+    pub completion_tokens: u64,
 }
 
 /// Selectable hunk list for partial staging.

@@ -916,6 +916,7 @@ and no-auto-apply boundaries.
 - [x] Background agents require approval before any destructive tool.
 - [x] Release version and tag are `0.2.1` / `v0.2.1`; the release workflow
   published four platform assets plus checksums (run `45714031032`).
+- [x] Actual provider usage and optional session cost metering in the panel title.
 - [x] Published aarch64 macOS asset passed its SHA-256 check and reports
   `i3-editor 0.2.1`.
 
@@ -923,7 +924,7 @@ and no-auto-apply boundaries.
 
 - Rich persistent agent planning and objectives.
 - HTTP/server-initiated SSE sampling and MCP resource templates/pagination.
-- Actual provider cost accounting and full Markdown rendering.
+- Full Markdown rendering.
 - API key/keyring management, context indexing, and autonomous write policies.
 
 Risk: MCP servers are arbitrary code and model output is untrusted. Trust hashes,

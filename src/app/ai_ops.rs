@@ -733,6 +733,16 @@ impl App {
     }
 
     fn finish_ai_reply(&mut self, reply: crate::ai::Reply, streamed: bool) {
+        self.state.ai.prompt_tokens = self
+            .state
+            .ai
+            .prompt_tokens
+            .saturating_add(reply.prompt_tokens.unwrap_or(0));
+        self.state.ai.completion_tokens = self
+            .state
+            .ai
+            .completion_tokens
+            .saturating_add(reply.completion_tokens.unwrap_or(0));
         self.state.ai.conversation.push(reply.message);
         if !streamed && let Some(content) = reply.content.filter(|text| !text.is_empty()) {
             self.state

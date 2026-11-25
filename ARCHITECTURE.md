@@ -395,7 +395,9 @@ Tool definitions are filtered by the `[ai]` allow/deny policy, and tool
 annotations drive the read-only/write/destructive label in the confirmation.
 Each decision and result is appended to `<config>/i3-editor/audit.jsonl` with
 redacted arguments. The panel width comes from `[ai] panel_width`; palette
-commands copy/clear it, and the title reports an estimated token count. MCP
+commands copy/clear it, and the title reports estimated context plus actual
+provider prompt/completion usage. Optional per-million input/output prices add
+a session cost estimate. MCP
 trust is still checked before a server starts. Built-in `native/read_file` and
 `native/edit_file` tools add a workspace-root boundary, a file snapshot,
 six-hex line hashes, and atomic writes; dirty open buffers are rejected and

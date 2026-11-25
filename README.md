@@ -484,6 +484,8 @@ timeout_secs = 60
 stream = true                    # SSE token streaming
 persist_history = false          # opt in to ai_history.json
 background_agents = false        # opt in to read-only background tasks
+input_cost_per_million = 0.0     # optional USD pricing for the title cost meter
+output_cost_per_million = 0.0
 max_context_tokens = 16000       # prompt budget; old turns are dropped
 max_tool_output_chars = 20000    # one MCP result kept in history
 max_history_turns = 24
@@ -532,7 +534,9 @@ panel_width = 20                 # percent of terminal width
   `<config>/i3-editor/audit.jsonl`. Arguments are truncated and keys containing
   token, secret, password, authorization, or api_key are redacted.
 - The panel title shows estimated conversation tokens against the configured
-  budget. Headings, fenced code, and user turns get basic Markdown styling;
+  budget plus actual provider prompt/completion usage; if input/output pricing
+  is configured, it also shows an estimated session cost. Headings, fenced
+  code, and user turns get basic Markdown styling;
   long transcript lines wrap inside the panel, and `Ctrl+Left`/`Ctrl+Right`
   scrolls horizontally when needed.
 - The default provider is OpenRouter (`https://openrouter.ai/api/v1`,
@@ -952,6 +956,8 @@ timeout_secs = 60
 stream = true
 persist_history = false
 background_agents = false
+input_cost_per_million = 0.0
+output_cost_per_million = 0.0
 max_context_tokens = 16000
 max_tool_output_chars = 20000
 max_history_turns = 24

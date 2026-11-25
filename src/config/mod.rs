@@ -142,6 +142,10 @@ pub struct AiConfig {
     pub persist_history: bool,
     /// Allow the explicit background-agent command.
     pub background_agents: bool,
+    /// Optional input price in USD per million prompt tokens.
+    pub input_cost_per_million: f64,
+    /// Optional output price in USD per million completion tokens.
+    pub output_cost_per_million: f64,
 }
 
 impl Default for AiConfig {
@@ -164,6 +168,8 @@ impl Default for AiConfig {
             stream: true,
             persist_history: false,
             background_agents: false,
+            input_cost_per_million: 0.0,
+            output_cost_per_million: 0.0,
         }
     }
 }
@@ -720,6 +726,8 @@ pub fn load_from(path: &Path) -> (AppConfig, Vec<String>) {
     config.ai.max_context_tokens = config.ai.max_context_tokens.clamp(512, 1_000_000);
     config.ai.max_tool_output_chars = config.ai.max_tool_output_chars.clamp(500, 1_000_000);
     config.ai.max_history_turns = config.ai.max_history_turns.clamp(1, 500);
+    config.ai.input_cost_per_million = config.ai.input_cost_per_million.max(0.0);
+    config.ai.output_cost_per_million = config.ai.output_cost_per_million.max(0.0);
     config.ai.retry_attempts = config.ai.retry_attempts.clamp(0, 5);
     config.ai.retry_base_ms = config.ai.retry_base_ms.clamp(50, 60_000);
     config.ai.retry_max_ms = config.ai.retry_max_ms.clamp(100, 120_000);
@@ -761,6 +769,8 @@ const AI_KEYS: &[&str] = &[
     "stream",
     "persist_history",
     "background_agents",
+    "input_cost_per_million",
+    "output_cost_per_million",
 ];
 const LUA_KEYS: &[&str] = &["enabled", "allow_file", "allow_process", "time_budget_ms"];
 const KEYS_KEYS: &[&str] = &["preset", "global", "editing", "explorer"];
@@ -862,7 +872,7 @@ mod tests {
         let path = dir.join("config.toml");
         std::fs::write(
             &path,
-            "[ai]\nbase_url = \"http://localhost:11434/v1\"\nmodel = \"local\"\napi_key_env = \"LOCAL_KEY\"\ntimeout_secs = 9999\nmax_context_tokens = 4096\nmax_tool_output_chars = 1000\nmax_history_turns = 6\nallowed_tools = [\"mock/echo\"]\ndenied_tools = [\"mock/add\"]\nretry_attempts = 4\nretry_base_ms = 100\nretry_max_ms = 2000\npanel_width = 35\n",
+            "[ai]\nbase_url = \"http://localhost:11434/v1\"\nmodel = \"local\"\napi_key_env = \"LOCAL_KEY\"\ntimeout_secs = 9999\nmax_context_tokens = 4096\nmax_tool_output_chars = 1000\nmax_history_turns = 6\nallowed_tools = [\"mock/echo\"]\ndenied_tools = [\"mock/add\"]\nretry_attempts = 4\nretry_base_ms = 100\nretry_max_ms = 2000\npanel_width = 35\ninput_cost_per_million = 1.5\noutput_cost_per_million = 6.0\n",
         )
         .expect("write");
         let (config, warnings) = load_from(&path);
@@ -880,6 +890,8 @@ mod tests {
         assert_eq!(config.ai.retry_base_ms, 100);
         assert_eq!(config.ai.retry_max_ms, 2000);
         assert_eq!(config.ai.panel_width, 35);
+        assert_eq!(config.ai.input_cost_per_million, 1.5);
+        assert_eq!(config.ai.output_cost_per_million, 6.0);
         std::fs::remove_dir_all(&dir).ok();
     }
 
