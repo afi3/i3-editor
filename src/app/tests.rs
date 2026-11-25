@@ -2600,6 +2600,38 @@ fn native_edit_refuses_a_dirty_buffer() {
 }
 
 #[test]
+fn ai_input_accepts_shift_enter_newlines_and_enter_submits() {
+    use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    let (mut app, dir) = fixture("x\n");
+    app.state.config.ai.base_url.clear();
+    app.dispatch(Command::AiChat).expect("ai panel");
+    for ch in "first".chars() {
+        app.handle_key(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
+    }
+    app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT));
+    for ch in "second".chars() {
+        app.handle_key(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
+    }
+    assert_eq!(app.state.ai.input, "first\nsecond");
+    assert!(app.ai_task.is_none());
+    app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert!(app.state.ai.input.is_empty());
+    assert!(
+        app.state
+            .ai
+            .conversation
+            .iter()
+            .any(|message| { message["role"] == "user" && message["content"] == "first\nsecond" })
+    );
+    if let Some(task) = app.ai_task.as_ref() {
+        task.cancel();
+    }
+    app.ai_task = None;
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn ai_panel_commands_copy_clear_resize_and_scroll() {
     let (mut app, dir) = fixture("x\n");
     app.dispatch(Command::AiChat).expect("ai panel");

@@ -37,8 +37,26 @@ pub fn render(frame: &mut Frame, state: &AppState) {
     if inner.width == 0 || inner.height == 0 {
         return;
     }
-    let input_row = inner.y.saturating_add(inner.height.saturating_sub(1));
-    let transcript_height = inner.height.saturating_sub(1);
+    let status = if let Some(call) = panel.pending.front() {
+        Some(format!(
+            "Allow {}/{} [{}]? [y] yes [n] no",
+            call.server, call.tool, call.capability
+        ))
+    } else if panel.waiting.is_some() {
+        Some("tool running...".to_string())
+    } else if panel.busy {
+        Some("thinking...".to_string())
+    } else {
+        None
+    };
+    let input = status
+        .is_none()
+        .then(|| input_display(&panel.input, panel.cursor, inner.width as usize));
+    let max_input_rows = (inner.height / 2).clamp(1, 6) as usize;
+    let visible_input_rows = input
+        .as_ref()
+        .map_or(1, |input| input.rows.len().min(max_input_rows).max(1));
+    let transcript_height = inner.height.saturating_sub(visible_input_rows as u16);
     let rows = build_rows(state);
     let max_scroll = rows.len().saturating_sub(transcript_height as usize);
     let scroll = panel.scroll.min(max_scroll) as u16;
@@ -47,34 +65,96 @@ pub fn render(frame: &mut Frame, state: &AppState) {
         Rect::new(inner.x, inner.y, inner.width, transcript_height),
     );
 
-    let footer = if let Some(call) = panel.pending.front() {
-        format!(
-            "Allow {}/{} [{}]? [y] yes [n] no",
-            call.server, call.tool, call.capability
-        )
-    } else if panel.waiting.is_some() {
-        "tool running...".to_string()
-    } else if panel.busy {
-        "thinking...".to_string()
-    } else {
-        format!("> {}", panel.input)
-    };
+    let input_y = inner.y.saturating_add(transcript_height);
     let style = if focused {
         state.theme.base().add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(state.theme.gutter)
     };
-    frame
-        .buffer_mut()
-        .set_stringn(inner.x, input_row, &footer, inner.width as usize, style);
-    if focused && panel.pending.is_empty() && panel.waiting.is_none() && !panel.busy {
-        let cursor = panel.cursor.min(panel.input.chars().count());
-        let x = inner
-            .x
-            .saturating_add(2)
-            .saturating_add(cursor as u16)
-            .min(inner.x.saturating_add(inner.width).saturating_sub(1));
-        frame.set_cursor_position((x, input_row));
+    if let Some(status) = status {
+        frame
+            .buffer_mut()
+            .set_stringn(inner.x, input_y, &status, inner.width as usize, style);
+    } else if let Some(input) = input {
+        let input_start = input
+            .cursor_row
+            .saturating_sub(visible_input_rows.saturating_sub(1))
+            .min(input.rows.len().saturating_sub(visible_input_rows));
+        for (offset, row) in input
+            .rows
+            .iter()
+            .skip(input_start)
+            .take(visible_input_rows)
+            .enumerate()
+        {
+            frame.buffer_mut().set_stringn(
+                inner.x,
+                input_y.saturating_add(offset as u16),
+                row,
+                inner.width as usize,
+                style,
+            );
+        }
+        if focused {
+            let x = inner
+                .x
+                .saturating_add(input.cursor_col as u16)
+                .min(inner.x.saturating_add(inner.width).saturating_sub(1));
+            let y = input_y.saturating_add((input.cursor_row - input_start) as u16);
+            frame.set_cursor_position((x, y));
+        }
+    }
+}
+
+struct InputDisplay {
+    rows: Vec<String>,
+    cursor_row: usize,
+    cursor_col: usize,
+}
+
+fn input_display(text: &str, cursor: usize, width: usize) -> InputDisplay {
+    let width = width.max(3);
+    let content_width = width - 2;
+    let mut rows = vec!["> ".to_string()];
+    let mut row = 0usize;
+    let mut cells = 0usize;
+    let mut col = 2usize;
+    let mut cursor_row = 0usize;
+    let mut cursor_col = 2usize;
+    let chars: Vec<char> = text.chars().collect();
+    for (index, ch) in chars.iter().enumerate() {
+        if index == cursor {
+            cursor_row = row;
+            cursor_col = col;
+        }
+        if *ch == '\n' {
+            rows.push("  ".to_string());
+            row += 1;
+            cells = 0;
+            col = 2;
+            continue;
+        }
+        let ch_width = unicode_width::UnicodeWidthChar::width(*ch).unwrap_or(0);
+        if cells > 0 && cells + ch_width > content_width {
+            rows.push("  ".to_string());
+            row += 1;
+            cells = 0;
+            col = 2;
+        }
+        if let Some(row_text) = rows.get_mut(row) {
+            row_text.push(*ch);
+        }
+        cells += ch_width;
+        col += ch_width;
+    }
+    if cursor >= chars.len() {
+        cursor_row = row;
+        cursor_col = col;
+    }
+    InputDisplay {
+        rows,
+        cursor_row,
+        cursor_col,
     }
 }
 

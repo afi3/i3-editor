@@ -177,6 +177,21 @@ impl App {
             KeyCode::Esc => {
                 self.state.ai.focused = false;
             }
+            KeyCode::Enter
+                if combo.mods.intersects(
+                    ratatui::crossterm::event::KeyModifiers::SHIFT
+                        | ratatui::crossterm::event::KeyModifiers::ALT,
+                ) =>
+            {
+                insert_ai_char(self, '\n');
+            }
+            KeyCode::Char('j')
+                if combo
+                    .mods
+                    .contains(ratatui::crossterm::event::KeyModifiers::CONTROL) =>
+            {
+                insert_ai_char(self, '\n');
+            }
             KeyCode::Enter => self.submit_panel_input(),
             KeyCode::Backspace => {
                 if self.state.ai.cursor > 0 {
@@ -820,6 +835,12 @@ fn tool_content_text(content: &[ToolContent]) -> String {
         text.push_str(&piece);
     }
     text
+}
+
+fn insert_ai_char(app: &mut App, ch: char) {
+    let byte = char_byte(&app.state.ai.input, app.state.ai.cursor);
+    app.state.ai.input.insert(byte, ch);
+    app.state.ai.cursor += 1;
 }
 
 fn char_byte(text: &str, char_index: usize) -> usize {

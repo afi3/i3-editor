@@ -483,8 +483,10 @@ panel_width = 20                 # percent of terminal width
   toggles it. `ai_wider`/`ai_narrower` resize it, `ai_clear` clears a finished
   conversation, and `ai_copy` copies the transcript to the internal and system
   clipboards. The panel keeps session-only history.
-- Type a message and press `Enter`. If trusted MCP servers are still reading
-  their tool lists, the question waits and is sent once the tools are loaded.
+- Type a message and press `Enter` to send. Use `Shift+Enter`, `Alt+Enter`, or
+  `Ctrl+J` for a newline; the input grows up to six wrapped rows. If trusted MCP
+  servers are still reading their tool lists, the question waits and is sent
+  once the tools are loaded.
   The active turn shows `thinking...` until the reply arrives. `Esc` cancels a
   running request or tool call; cancelling a tool call terminates that MCP
   server process, and its tools are reloaded on the next question. `Esc` with

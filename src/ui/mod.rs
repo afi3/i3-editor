@@ -622,6 +622,19 @@ mod tests {
     }
 
     #[test]
+    fn renders_multiline_ai_input() {
+        let (mut state, dir) = state("x\n");
+        state.ai.visible = true;
+        state.ai.focused = true;
+        state.ai.input = "first line\nsecond line".to_string();
+        state.ai.cursor = state.ai.input.chars().count();
+        let screen = draw(&mut state, 100, 24);
+        assert!(screen.contains("first line"), "{screen}");
+        assert!(screen.contains("second line"), "{screen}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
     fn wraps_long_ai_transcript_lines_without_hiding_text() {
         let (mut state, dir) = state("x\n");
         state.ai.visible = true;

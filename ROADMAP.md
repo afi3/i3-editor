@@ -909,7 +909,8 @@ user's explicit choice.
 - Prompt context and tool output are bounded; tool definitions obey the `[ai]`
   allow/deny policy, and decisions/results are written to a redacted audit log.
 - Retryable provider failures use bounded backoff, and the panel supports
-  resize, clear, copy, token display, and horizontal transcript scrolling.
+  resize, clear, copy, token display, wrapped multiline input, and horizontal
+  transcript scrolling.
 - Native hashline tools provide snapshot/hash-validated reads, atomic edits,
   and an `ignore`/`regex` search without subprocesses; Rust edits trigger a
   bounded background `cargo check` whose diagnostics join the same tool turn.
@@ -971,4 +972,4 @@ cargo clippy --all-targets --all-features
 cargo run -- --dump-keymap
 ```
 
-Last recorded run: `cargo test` → 428 passed (421 unit + 6 CLI process + 1 PTY smoke), `cargo clippy` → 0 warnings.
+Last recorded run: `cargo test` → 430 passed (423 unit + 6 CLI process + 1 PTY smoke), `cargo clippy` → 0 warnings.
