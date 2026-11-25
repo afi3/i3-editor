@@ -116,6 +116,16 @@ pub struct AiConfig {
     /// Environment variable holding the API key; empty means unauthenticated.
     pub api_key_env: String,
     pub timeout_secs: u64,
+    /// Maximum estimated prompt tokens sent to the provider.
+    pub max_context_tokens: usize,
+    /// Maximum characters kept from one MCP tool result.
+    pub max_tool_output_chars: usize,
+    /// Maximum prior user turns retained in the request.
+    pub max_history_turns: usize,
+    /// Optional `server/tool` allowlist; empty means every tool.
+    pub allowed_tools: Vec<String>,
+    /// `server/tool` entries that are never offered or called.
+    pub denied_tools: Vec<String>,
 }
 
 impl Default for AiConfig {
@@ -125,6 +135,11 @@ impl Default for AiConfig {
             model: "gpt-4o-mini".to_string(),
             api_key_env: "OPENAI_API_KEY".to_string(),
             timeout_secs: 60,
+            max_context_tokens: 16_000,
+            max_tool_output_chars: 20_000,
+            max_history_turns: 24,
+            allowed_tools: Vec::new(),
+            denied_tools: Vec::new(),
         }
     }
 }
@@ -678,6 +693,9 @@ pub fn load_from(path: &Path) -> (AppConfig, Vec<String>) {
     config.terminal.height = config.terminal.height.clamp(3, 60);
     config.terminal.scrollback = config.terminal.scrollback.clamp(100, 100_000);
     config.ai.timeout_secs = config.ai.timeout_secs.clamp(1, 600);
+    config.ai.max_context_tokens = config.ai.max_context_tokens.clamp(512, 1_000_000);
+    config.ai.max_tool_output_chars = config.ai.max_tool_output_chars.clamp(500, 1_000_000);
+    config.ai.max_history_turns = config.ai.max_history_turns.clamp(1, 500);
     (config, warnings)
 }
 
@@ -697,7 +715,17 @@ const APPEARANCE_KEYS: &[&str] = &[
 ];
 const TERMINAL_KEYS: &[&str] = &["height", "shell", "scrollback"];
 const GIT_KEYS: &[&str] = &["binary"];
-const AI_KEYS: &[&str] = &["base_url", "model", "api_key_env", "timeout_secs"];
+const AI_KEYS: &[&str] = &[
+    "base_url",
+    "model",
+    "api_key_env",
+    "timeout_secs",
+    "max_context_tokens",
+    "max_tool_output_chars",
+    "max_history_turns",
+    "allowed_tools",
+    "denied_tools",
+];
 const LUA_KEYS: &[&str] = &["enabled", "allow_file", "allow_process", "time_budget_ms"];
 const KEYS_KEYS: &[&str] = &["preset", "global", "editing", "explorer"];
 
@@ -798,7 +826,7 @@ mod tests {
         let path = dir.join("config.toml");
         std::fs::write(
             &path,
-            "[ai]\nbase_url = \"http://localhost:11434/v1\"\nmodel = \"local\"\napi_key_env = \"LOCAL_KEY\"\ntimeout_secs = 9999\n",
+            "[ai]\nbase_url = \"http://localhost:11434/v1\"\nmodel = \"local\"\napi_key_env = \"LOCAL_KEY\"\ntimeout_secs = 9999\nmax_context_tokens = 4096\nmax_tool_output_chars = 1000\nmax_history_turns = 6\nallowed_tools = [\"mock/echo\"]\ndenied_tools = [\"mock/add\"]\n",
         )
         .expect("write");
         let (config, warnings) = load_from(&path);
@@ -807,6 +835,11 @@ mod tests {
         assert_eq!(config.ai.model, "local");
         assert_eq!(config.ai.api_key_env, "LOCAL_KEY");
         assert_eq!(config.ai.timeout_secs, 600);
+        assert_eq!(config.ai.max_context_tokens, 4096);
+        assert_eq!(config.ai.max_tool_output_chars, 1000);
+        assert_eq!(config.ai.max_history_turns, 6);
+        assert_eq!(config.ai.allowed_tools, ["mock/echo"]);
+        assert_eq!(config.ai.denied_tools, ["mock/add"]);
         std::fs::remove_dir_all(&dir).ok();
     }
 

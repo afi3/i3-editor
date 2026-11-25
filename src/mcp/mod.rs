@@ -55,9 +55,22 @@ pub struct Tool {
     pub name: String,
     pub description: String,
     pub input_schema: Value,
+    pub read_only: bool,
+    pub destructive: bool,
+    pub open_world: bool,
 }
 
 impl Tool {
+    pub fn capability(&self) -> &'static str {
+        if self.read_only {
+            "read-only"
+        } else if self.destructive {
+            "destructive"
+        } else {
+            "write"
+        }
+    }
+
     pub fn arguments(&self) -> Vec<ToolArg> {
         let required: Vec<&str> = self
             .input_schema
@@ -665,6 +678,18 @@ fn parse_tools(result: &Value) -> Vec<Tool> {
                             .get("inputSchema")
                             .cloned()
                             .unwrap_or_else(|| json!({})),
+                        read_only: tool
+                            .pointer("/annotations/readOnlyHint")
+                            .and_then(Value::as_bool)
+                            .unwrap_or(false),
+                        destructive: tool
+                            .pointer("/annotations/destructiveHint")
+                            .and_then(Value::as_bool)
+                            .unwrap_or(true),
+                        open_world: tool
+                            .pointer("/annotations/openWorldHint")
+                            .and_then(Value::as_bool)
+                            .unwrap_or(false),
                     })
                 })
                 .collect()
@@ -795,6 +820,34 @@ mod tests {
     }
 
     #[test]
+    fn parses_tool_capability_annotations() {
+        let tools = parse_tools(&json!({
+            "tools": [
+                {
+                    "name": "reader",
+                    "description": "",
+                    "inputSchema": {},
+                    "annotations": {"readOnlyHint": true, "destructiveHint": false}
+                },
+                {
+                    "name": "writer",
+                    "description": "",
+                    "inputSchema": {},
+                    "annotations": {"destructiveHint": false}
+                },
+                {
+                    "name": "unannotated",
+                    "description": "",
+                    "inputSchema": {}
+                }
+            ]
+        }));
+        assert_eq!(tools[0].capability(), "read-only");
+        assert_eq!(tools[1].capability(), "write");
+        assert_eq!(tools[2].capability(), "destructive");
+    }
+
+    #[test]
     fn tool_schema_becomes_required_and_typed_arguments() {
         let schema = json!({
             "type": "object",
@@ -810,6 +863,9 @@ mod tests {
             name: "demo".to_string(),
             description: String::new(),
             input_schema: schema,
+            read_only: false,
+            destructive: true,
+            open_world: false,
         };
         let args = tool.arguments();
         assert_eq!(args.len(), 4);

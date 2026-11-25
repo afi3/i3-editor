@@ -144,8 +144,8 @@ impl App {
                             .entries
                             .push(format!("[error] MCP tools unavailable: {message}"));
                     }
-                    if self.state.ai.waiting.is_some() {
-                        self.state.ai.waiting = None;
+                    if let Some(waiting) = self.state.ai.waiting.take() {
+                        super::audit::result(&self.state, &waiting, "error", Some(&message));
                         self.state.ai.busy = false;
                         self.state.ai.entries.push(format!("[error] {message}"));
                     }

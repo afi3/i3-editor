@@ -2190,7 +2190,6 @@ fn ai_commands_open_and_toggle_the_panel() {
 
 #[test]
 fn ai_harness_confirms_a_tool_and_returns_the_final_answer() {
-    use crate::config::AiConfig;
     use std::collections::BTreeMap;
     use std::io::{Read, Write};
     use std::net::TcpListener;
@@ -2245,12 +2244,7 @@ fn ai_harness_confirms_a_tool_and_returns_the_final_answer() {
         BTreeMap::from([("mock".to_string(), mcp)]),
         dir.clone(),
     ));
-    app.state.config.ai = AiConfig {
-        base_url: format!("http://{address}/v1"),
-        model: "mock-model".to_string(),
-        api_key_env: "I3_EDITOR_TEST_AI_KEY".to_string(),
-        timeout_secs: 5,
-    };
+    app.state.config.ai = crate::ai::test_config(format!("http://{address}/v1"));
     app.mcp
         .as_mut()
         .expect("mcp")
@@ -2465,6 +2459,7 @@ fn cancelling_an_ai_tool_call_stops_the_mcp_server() {
         id: "call-cancel".to_string(),
         server: "mock".to_string(),
         tool: "echo".to_string(),
+        capability: "destructive".to_string(),
     });
     app.handle_key(ratatui::crossterm::event::KeyEvent::new(
         ratatui::crossterm::event::KeyCode::Esc,
@@ -2483,6 +2478,138 @@ fn cancelling_an_ai_tool_call_stops_the_mcp_server() {
 }
 
 #[test]
+fn ai_tool_policy_filters_the_tool_definitions() {
+    use std::collections::BTreeMap;
+    use std::time::{Duration, Instant};
+
+    if std::process::Command::new("python3")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        eprintln!("skipping AI tool policy: python3 unavailable");
+        return;
+    }
+    let (mut app, dir) = fixture("x\n");
+    let script = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+        .join("mock_mcp.py");
+    let mcp = crate::mcp::McpServerConfig {
+        command: "python3".to_string(),
+        args: vec![script.to_string_lossy().into_owned()],
+        cwd: None,
+        env: BTreeMap::from([("MOCK_MCP_MODE".to_string(), "normal".to_string())]),
+    };
+    app.state
+        .config
+        .mcp
+        .servers
+        .insert("mock".to_string(), mcp.clone());
+    app.mcp = Some(crate::mcp::McpManager::new(
+        BTreeMap::from([("mock".to_string(), mcp)]),
+        dir.clone(),
+    ));
+    app.mcp
+        .as_mut()
+        .expect("mcp")
+        .list_tools("mock")
+        .expect("load tools");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        app.pump_mcp();
+        if app
+            .mcp
+            .as_ref()
+            .and_then(|mcp| mcp.tools("mock"))
+            .is_some_and(|tools| !tools.is_empty())
+        {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    app.state.config.ai.allowed_tools = vec!["mock/echo".to_string()];
+    app.state.config.ai.denied_tools = vec!["mock/add".to_string()];
+    app.dispatch(Command::AiChat).expect("ai panel");
+    app.start_ai_request();
+    assert!(app.state.ai.tool_map.contains_key("mock__echo"));
+    assert!(!app.state.ai.tool_map.contains_key("mock__add"));
+    assert!(!app.state.ai.tool_map.contains_key("mock__read_text_file"));
+    if let Some(task) = app.ai_task.as_ref() {
+        task.cancel();
+    }
+    app.ai_task = None;
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn ai_tool_audit_redacts_arguments_and_records_denial() {
+    use crate::state::AiToolCall;
+
+    let (mut app, dir) = fixture("x\n");
+    let config_path = dir.join("config.toml");
+    app.state.config_path = Some(config_path.clone());
+    app.dispatch(Command::AiChat).expect("ai panel");
+    app.state.ai.pending.push_back(AiToolCall {
+        id: "call-audit".to_string(),
+        server: "mock".to_string(),
+        tool: "echo".to_string(),
+        capability: "destructive".to_string(),
+        arguments: serde_json::json!({"api_token": "secret-value", "text": "hello"}),
+    });
+    app.handle_key(ratatui::crossterm::event::KeyEvent::new(
+        ratatui::crossterm::event::KeyCode::Char('n'),
+        ratatui::crossterm::event::KeyModifiers::NONE,
+    ));
+    let audit =
+        std::fs::read_to_string(config_path.with_file_name("audit.jsonl")).expect("audit log");
+    let record: serde_json::Value =
+        serde_json::from_str(audit.lines().next().expect("record")).expect("json record");
+    assert_eq!(record["event"], "decision");
+    assert_eq!(record["decision"], "denied");
+    assert_eq!(record["capability"], "destructive");
+    assert_eq!(record["arguments"]["api_token"], "[redacted]");
+    assert_eq!(record["arguments"]["text"], "hello");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn ai_tool_output_is_capped_before_history() {
+    use crate::mcp::ToolContent;
+    use crate::state::AiWaiting;
+
+    let (mut app, dir) = fixture("x\n");
+    app.state.config.ai.max_tool_output_chars = 500;
+    app.dispatch(Command::AiChat).expect("ai panel");
+    app.state.ai.waiting = Some(AiWaiting {
+        id: "call-cap".to_string(),
+        server: "mock".to_string(),
+        tool: "echo".to_string(),
+        capability: "destructive".to_string(),
+    });
+    app.finish_ai_tool(
+        "mock",
+        "echo",
+        &[ToolContent::Text("x".repeat(5_000))],
+        false,
+    );
+    let text = app
+        .state
+        .ai
+        .conversation
+        .last()
+        .and_then(|message| message["content"].as_str())
+        .expect("tool message");
+    assert!(text.ends_with("[truncated]"), "{text}");
+    assert!(text.chars().count() < 1_000);
+    if let Some(task) = app.ai_task.as_ref() {
+        task.cancel();
+    }
+    app.ai_task = None;
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn denying_an_ai_tool_call_does_not_invoke_mcp() {
     use crate::state::AiToolCall;
 
@@ -2492,6 +2619,7 @@ fn denying_an_ai_tool_call_does_not_invoke_mcp() {
         id: "call-deny".to_string(),
         server: "mock".to_string(),
         tool: "echo".to_string(),
+        capability: "destructive".to_string(),
         arguments: serde_json::json!({"text": "hello"}),
     });
     app.handle_key(ratatui::crossterm::event::KeyEvent::new(

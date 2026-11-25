@@ -382,9 +382,14 @@ message before the next request. The loop is capped at 8 model round trips and
 call removes that MCP server process, because MCP has no mandatory cancellation
 acknowledgement; the next question reloads its tools. The panel holds a question
 until every trusted server reports a loaded tool list or is marked failed, so
-the first request sees the tools it will offer. MCP trust is still checked
-before a server starts, and
-no harness path can edit a buffer, open a file, or apply a patch.
+the first request sees the tools it will offer. `ai::trim_messages` enforces a
+conservative prompt-token estimate, drops older turns, and trims oversized
+non-user content; one MCP result is capped before it enters the conversation.
+Tool definitions are filtered by the `[ai]` allow/deny policy, and tool
+annotations drive the read-only/write/destructive label in the confirmation.
+Each decision and result is appended to `<config>/i3-editor/audit.jsonl` with
+redacted arguments. MCP trust is still checked before a server starts, and no
+harness path can edit a buffer, open a file, or apply a patch.
 
 **File operations follow the focused surface.** `duplicate_file`, `copy_path`,
 and `reveal_in_terminal` take the explorer row when the explorer has focus;

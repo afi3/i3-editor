@@ -82,6 +82,7 @@ fn chat_with_cancel(
         return Err("AI base_url and model must be configured".to_string());
     }
     let url = completions_url(&config.base_url);
+    let messages = trim_messages(messages, tools, config);
     let mut body = json!({
         "model": config.model,
         "messages": messages,
@@ -215,6 +216,115 @@ fn chat_with_cancel(
     })
 }
 
+fn trim_messages(messages: &[Value], tools: &[Value], config: &AiConfig) -> Vec<Value> {
+    let tool_tokens = tools.iter().map(estimate_tokens).sum::<usize>() + tools.len();
+    let budget = config
+        .max_context_tokens
+        .saturating_sub(tool_tokens)
+        .saturating_sub(128)
+        .max(1);
+    let mut groups = split_turns(messages);
+    let keep = config.max_history_turns.clamp(1, 500);
+    if groups.len() > keep {
+        groups.drain(..groups.len() - keep);
+    }
+    let mut selected = Vec::new();
+    let mut used = 0;
+    for group in groups.into_iter().rev() {
+        let cost = estimate_messages(&group);
+        if selected.is_empty() || used + cost <= budget {
+            used += cost;
+            selected.push(group);
+        } else {
+            break;
+        }
+    }
+    selected.reverse();
+    let mut messages: Vec<Value> = selected.into_iter().flatten().collect();
+    if estimate_messages(&messages) > budget {
+        trim_large_contents(&mut messages, budget, config.max_tool_output_chars);
+    }
+    messages
+}
+
+fn split_turns(messages: &[Value]) -> Vec<Vec<Value>> {
+    let mut groups = Vec::new();
+    let mut current = Vec::new();
+    for message in messages {
+        if message.get("role").and_then(Value::as_str) == Some("user") && !current.is_empty() {
+            groups.push(std::mem::take(&mut current));
+        }
+        current.push(message.clone());
+    }
+    if !current.is_empty() {
+        groups.push(current);
+    }
+    groups
+}
+
+fn estimate_messages(messages: &[Value]) -> usize {
+    messages
+        .iter()
+        .map(|message| estimate_tokens(message) + 4)
+        .sum()
+}
+
+fn estimate_tokens(value: &Value) -> usize {
+    match value {
+        Value::Null => 0,
+        Value::Bool(_) => 1,
+        Value::Number(_) => 1,
+        Value::String(text) => estimate_text_tokens(text),
+        Value::Array(items) => items.iter().map(estimate_tokens).sum::<usize>() + items.len(),
+        Value::Object(map) => map
+            .iter()
+            .map(|(key, value)| estimate_text_tokens(key) + estimate_tokens(value))
+            .sum(),
+    }
+}
+
+fn estimate_text_tokens(text: &str) -> usize {
+    text.chars().count().div_ceil(4) + 4
+}
+
+fn trim_large_contents(messages: &mut [Value], budget: usize, max_tool_chars: usize) {
+    let non_user = messages
+        .iter()
+        .filter(|message| message.get("role").and_then(Value::as_str) != Some("user"))
+        .count()
+        .max(1);
+    let per_message = (budget.saturating_mul(4) / non_user).clamp(200, max_tool_chars.max(200));
+    for message in messages.iter_mut() {
+        if message.get("role").and_then(Value::as_str) == Some("user") {
+            continue;
+        }
+        if let Some(content) = message.get("content").and_then(Value::as_str) {
+            let trimmed = truncate_text(content, per_message);
+            message["content"] = Value::String(trimmed);
+        }
+    }
+    if estimate_messages(messages) > budget {
+        let user_cap = budget.saturating_mul(4).max(200);
+        for message in messages.iter_mut() {
+            if message.get("role").and_then(Value::as_str) != Some("user") {
+                continue;
+            }
+            if let Some(content) = message.get("content").and_then(Value::as_str) {
+                message["content"] = Value::String(truncate_text(content, user_cap));
+            }
+        }
+    }
+}
+
+pub(crate) fn truncate_text(text: &str, max_chars: usize) -> String {
+    if text.chars().count() <= max_chars {
+        return text.to_string();
+    }
+    let mut out: String = text.chars().take(max_chars).collect();
+    out.push_str("\n[truncated]");
+    out
+}
+
 fn completions_url(base: &str) -> String {
     let base = base.trim_end_matches('/');
     if base.ends_with("/chat/completions") {
@@ -231,6 +341,17 @@ fn quote(value: &str) -> String {
         .replace('\n', "\\n")
         .replace('\r', "\\r");
     format!("\"{escaped}\"")
+}
+
+#[cfg(test)]
+pub(crate) fn test_config(base_url: String) -> AiConfig {
+    AiConfig {
+        base_url,
+        model: "mock-model".to_string(),
+        api_key_env: "I3_EDITOR_TEST_AI_KEY".to_string(),
+        timeout_secs: 5,
+        ..AiConfig::default()
+    }
 }
 
 #[cfg(test)]
@@ -254,12 +375,7 @@ mod tests {
             );
             stream.write_all(response.as_bytes()).expect("write");
         });
-        let config = AiConfig {
-            base_url: format!("http://{address}/v1"),
-            model: "mock-model".to_string(),
-            api_key_env: "I3_EDITOR_TEST_AI_KEY".to_string(),
-            timeout_secs: 5,
-        };
+        let config = test_config(format!("http://{address}/v1"));
         let reply = ask(&config, "hello").expect("reply");
         assert_eq!(reply, "hello from mock");
         server.join().expect("server");
@@ -280,12 +396,7 @@ mod tests {
             );
             stream.write_all(response.as_bytes()).expect("write");
         });
-        let config = AiConfig {
-            base_url: format!("http://{address}/v1"),
-            model: "mock-model".to_string(),
-            api_key_env: "I3_EDITOR_TEST_AI_KEY".to_string(),
-            timeout_secs: 5,
-        };
+        let config = test_config(format!("http://{address}/v1"));
         let error = ask(&config, "hello").expect_err("429");
         assert!(error.contains("429"), "{error}");
         assert!(error.contains("quota exceeded"), "{error}");
@@ -307,12 +418,7 @@ mod tests {
             );
             stream.write_all(response.as_bytes()).expect("write");
         });
-        let config = AiConfig {
-            base_url: format!("http://{address}/v1"),
-            model: "mock-model".to_string(),
-            api_key_env: "I3_EDITOR_TEST_AI_KEY".to_string(),
-            timeout_secs: 5,
-        };
+        let config = test_config(format!("http://{address}/v1"));
         let task = spawn_chat(
             config,
             vec![json!({"role": "user", "content": "hello"})],
@@ -331,6 +437,46 @@ mod tests {
         };
         assert!(error.contains("tool arguments for bad"), "{error}");
         server.join().expect("server");
+    }
+
+    #[test]
+    fn keeps_only_the_requested_history_turns() {
+        let config = AiConfig {
+            max_history_turns: 1,
+            max_context_tokens: 16_000,
+            ..AiConfig::default()
+        };
+        let messages = vec![
+            json!({"role": "user", "content": "old"}),
+            json!({"role": "assistant", "content": "old answer"}),
+            json!({"role": "user", "content": "new"}),
+            json!({"role": "assistant", "content": "new answer"}),
+        ];
+        let trimmed = trim_messages(&messages, &[], &config);
+        assert_eq!(trimmed.len(), 2);
+        assert_eq!(trimmed[0]["content"], "new");
+        assert_eq!(trimmed[1]["content"], "new answer");
+    }
+
+    #[test]
+    fn trims_tool_content_to_the_context_budget() {
+        let config = AiConfig {
+            max_context_tokens: 512,
+            max_tool_output_chars: 20_000,
+            ..AiConfig::default()
+        };
+        let messages = vec![
+            json!({"role": "user", "content": "read it"}),
+            json!({"role": "assistant", "content": null, "tool_calls": [{"id": "1", "type": "function", "function": {"name": "read", "arguments": "{}"}}]}),
+            json!({"role": "tool", "tool_call_id": "1", "content": "x".repeat(50_000)}),
+        ];
+        let trimmed = trim_messages(&messages, &[], &config);
+        let text = trimmed
+            .last()
+            .and_then(|message| message["content"].as_str())
+            .expect("tool text");
+        assert!(text.ends_with("[truncated]"), "{text}");
+        assert!(text.chars().count() < 50_000);
     }
 
     #[test]

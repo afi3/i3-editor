@@ -286,6 +286,7 @@ pub struct AiToolCall {
     pub id: String,
     pub server: String,
     pub tool: String,
+    pub capability: String,
     pub arguments: serde_json::Value,
 }
 
@@ -294,6 +295,7 @@ pub struct AiWaiting {
     pub id: String,
     pub server: String,
     pub tool: String,
+    pub capability: String,
 }
 
 #[derive(Debug, Default)]

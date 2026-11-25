@@ -1,6 +1,7 @@
 //! Application coordinator: event loop, key routing, pane lifecycle.
 
 pub mod ai_ops;
+mod audit;
 pub mod comment;
 pub mod config_ops;
 pub mod conflict_ops;

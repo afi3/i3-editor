@@ -467,6 +467,11 @@ base_url = "https://api.openai.com/v1"
 model = "gpt-4o-mini"
 api_key_env = "OPENAI_API_KEY"
 timeout_secs = 60
+max_context_tokens = 16000       # prompt budget; old turns are dropped
+max_tool_output_chars = 20000    # one MCP result kept in history
+max_history_turns = 24
+allowed_tools = []               # empty = every trusted tool; supports server/*
+denied_tools = ["filesystem/write_file"]
 ```
 
 - `F1` → `ai_chat` opens and focuses the right-side `AI` panel; `ai_panel`
@@ -484,6 +489,17 @@ timeout_secs = 60
 - Tool results are appended to the transcript as untrusted text and returned to
   the model. A turn stops after 8 model round trips, on cancellation, or on an
   API/MCP error. There is no automatic edit, patch apply, or background agent.
+- Before each request the conversation is capped by `max_context_tokens` and
+  `max_history_turns`; old turns are dropped and oversized tool text is
+  truncated. One MCP result is capped by `max_tool_output_chars` before it
+  enters the conversation.
+- `allowed_tools` and `denied_tools` accept exact `server/tool` names or a
+  trailing/leading `*` (for example `filesystem/*`). Blocked tools are not sent
+  to the model; an unexpected call is rejected and recorded. Tool annotations
+  classify confirmation text as `read-only`, `write`, or `destructive`.
+- Every tool decision and result is appended to
+  `<config>/i3-editor/audit.jsonl`. Arguments are truncated and keys containing
+  token, secret, password, authorization, or api_key are redacted.
 - The API key is read from `api_key_env`; leave it empty for a local
   OpenAI-compatible server without authentication.
 - Requests are non-streaming and do not include the active file unless you paste
@@ -846,6 +862,11 @@ base_url = "https://api.openai.com/v1"
 model = "gpt-4o-mini"
 api_key_env = "OPENAI_API_KEY"
 timeout_secs = 60
+max_context_tokens = 16000
+max_tool_output_chars = 20000
+max_history_turns = 24
+allowed_tools = []
+denied_tools = []
 
 [git]
 binary = "git"             # executable used for every git command

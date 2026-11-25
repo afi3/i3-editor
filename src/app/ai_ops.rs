@@ -148,13 +148,23 @@ impl App {
             if let Some(mcp) = self.mcp.as_mut() {
                 mcp.cancel_tool_call(&waiting.server);
             }
+            super::audit::result(&self.state, &waiting, "cancelled", None);
             self.state.ai.conversation.push(json!({
                 "role": "tool",
                 "tool_call_id": waiting.id,
                 "content": "Tool call cancelled."
             }));
         }
-        for call in self.state.ai.pending.drain(..) {
+        let pending: Vec<AiToolCall> = self.state.ai.pending.drain(..).collect();
+        for call in pending {
+            super::audit::blocked(
+                &self.state,
+                &call.id,
+                &call.server,
+                &call.tool,
+                &call.arguments,
+                "cancelled before execution",
+            );
             self.state.ai.conversation.push(json!({
                 "role": "tool",
                 "tool_call_id": call.id,
@@ -271,13 +281,28 @@ impl App {
             .any(|name| self.mcp_trusted(name) && !mcp.failed(name) && !mcp.tools_loaded(name))
     }
 
+    fn ai_tool_capability(&self, server: &str, tool: &str) -> String {
+        self.mcp
+            .as_ref()
+            .and_then(|mcp| mcp.tools(server))
+            .and_then(|tools| tools.iter().find(|candidate| candidate.name == tool))
+            .map(|tool| tool.capability().to_string())
+            .unwrap_or_else(|| "unknown".to_string())
+    }
+
     fn ai_tool_definitions(&mut self) -> Vec<Value> {
         let mut tools = Vec::new();
         let mut map = std::collections::BTreeMap::new();
         if let Some(mcp) = self.mcp.as_ref() {
             for server in mcp.names() {
                 if let Some(server_tools) = mcp.tools(server) {
-                    add_tool_definitions(server, server_tools, &mut map, &mut tools);
+                    add_tool_definitions(
+                        server,
+                        server_tools,
+                        &self.state.config.ai,
+                        &mut map,
+                        &mut tools,
+                    );
                 }
             }
         }
@@ -319,6 +344,14 @@ impl App {
                 for call in reply.tool_calls {
                     let Some((server, tool)) = self.state.ai.tool_map.get(&call.name).cloned()
                     else {
+                        super::audit::blocked(
+                            &self.state,
+                            &call.id,
+                            "unknown",
+                            &call.name,
+                            &call.arguments,
+                            "tool not offered",
+                        );
                         self.state
                             .ai
                             .entries
@@ -330,22 +363,23 @@ impl App {
                         }));
                         continue;
                     };
+                    let capability = self.ai_tool_capability(&server, &tool);
                     self.state.ai.entries.push(format!(
-                        "[tool] {server}/{} {}",
-                        tool,
+                        "[tool] {server}/{tool} [{capability}] {}",
                         serde_json::to_string(&call.arguments).unwrap_or_default()
                     ));
                     self.state.ai.pending.push_back(AiToolCall {
                         id: call.id,
                         server,
                         tool,
+                        capability,
                         arguments: call.arguments,
                     });
                 }
                 if let Some(call) = self.state.ai.pending.front() {
                     self.state.ai.entries.push(format!(
-                        "Allow {}/{}? [y] yes  [n] no",
-                        call.server, call.tool
+                        "Allow {}/{} [{}]? [y] yes  [n] no",
+                        call.server, call.tool, call.capability
                     ));
                 }
             }
@@ -358,6 +392,27 @@ impl App {
         let Some(call) = self.state.ai.pending.pop_front() else {
             return;
         };
+        if !tool_allowed(&self.state.config.ai, &call.server, &call.tool) {
+            super::audit::blocked(
+                &self.state,
+                &call.id,
+                &call.server,
+                &call.tool,
+                &call.arguments,
+                "tool policy",
+            );
+            self.state.ai.entries.push(format!(
+                "[blocked] {}/{} by tool policy",
+                call.server, call.tool
+            ));
+            self.state.ai.conversation.push(json!({
+                "role": "tool",
+                "tool_call_id": call.id,
+                "content": "Tool call blocked by tool policy."
+            }));
+            self.state.ai.busy = false;
+            return;
+        }
         let Some(manager) = self.mcp.as_mut() else {
             self.state
                 .ai
@@ -367,22 +422,41 @@ impl App {
         };
         match manager.call_tool(&call.server, &call.tool, call.arguments.clone()) {
             Ok(()) => {
+                super::audit::decision(&self.state, &call, "allowed");
                 self.state.ai.waiting = Some(AiWaiting {
                     id: call.id,
                     server: call.server,
                     tool: call.tool,
+                    capability: call.capability,
                 });
                 self.state.ai.busy = true;
                 self.state.ai.entries.push("[tool] running...".to_string());
             }
             Err(error) => {
+                super::audit::blocked(
+                    &self.state,
+                    &call.id,
+                    &call.server,
+                    &call.tool,
+                    &call.arguments,
+                    &error,
+                );
                 self.state.ai.entries.push(format!("[error] {error}"));
                 self.state.ai.conversation.push(json!({
                     "role": "tool",
                     "tool_call_id": call.id,
                     "content": format!("Tool call failed: {error}")
                 }));
-                for rest in self.state.ai.pending.drain(..) {
+                let pending: Vec<AiToolCall> = self.state.ai.pending.drain(..).collect();
+                for rest in pending {
+                    super::audit::blocked(
+                        &self.state,
+                        &rest.id,
+                        &rest.server,
+                        &rest.tool,
+                        &rest.arguments,
+                        "not run after previous failure",
+                    );
                     self.state.ai.conversation.push(json!({
                         "role": "tool",
                         "tool_call_id": rest.id,
@@ -397,6 +471,7 @@ impl App {
     fn deny_ai_tool(&mut self) {
         let calls: Vec<AiToolCall> = self.state.ai.pending.drain(..).collect();
         for call in calls {
+            super::audit::decision(&self.state, &call, "denied");
             self.state.ai.conversation.push(json!({
                 "role": "tool",
                 "tool_call_id": call.id,
@@ -424,7 +499,16 @@ impl App {
             self.state.ai.waiting = Some(waiting);
             return;
         }
-        let text = tool_content_text(content);
+        let text = truncate_tool_text(
+            tool_content_text(content),
+            self.state.config.ai.max_tool_output_chars,
+        );
+        super::audit::result(
+            &self.state,
+            &waiting,
+            if is_error { "error" } else { "ok" },
+            Some(&format!("{} chars", text.chars().count())),
+        );
         self.state.ai.conversation.push(json!({
             "role": "tool",
             "tool_call_id": waiting.id,
@@ -437,8 +521,8 @@ impl App {
         ));
         if let Some(call) = self.state.ai.pending.front() {
             self.state.ai.entries.push(format!(
-                "Allow {}/{}? [y] yes  [n] no",
-                call.server, call.tool
+                "Allow {}/{} [{}]? [y] yes  [n] no",
+                call.server, call.tool, call.capability
             ));
             self.state.ai.busy = false;
         } else {
@@ -451,10 +535,14 @@ impl App {
 fn add_tool_definitions(
     server: &str,
     server_tools: &[crate::mcp::Tool],
+    config: &crate::config::AiConfig,
     map: &mut std::collections::BTreeMap<String, (String, String)>,
     tools: &mut Vec<Value>,
 ) {
     for tool in server_tools {
+        if !tool_allowed(config, server, &tool.name) {
+            continue;
+        }
         let api = format!("{server}__{}", tool.name);
         map.insert(api.clone(), (server.to_string(), tool.name.clone()));
         tools.push(json!({
@@ -466,6 +554,44 @@ fn add_tool_definitions(
             }
         }));
     }
+}
+
+fn tool_allowed(config: &crate::config::AiConfig, server: &str, tool: &str) -> bool {
+    let id = format!("{server}/{tool}");
+    if config
+        .denied_tools
+        .iter()
+        .any(|pattern| tool_pattern_matches(pattern, &id))
+    {
+        return false;
+    }
+    config.allowed_tools.is_empty()
+        || config
+            .allowed_tools
+            .iter()
+            .any(|pattern| tool_pattern_matches(pattern, &id))
+}
+
+fn tool_pattern_matches(pattern: &str, id: &str) -> bool {
+    if pattern == "*" {
+        return true;
+    }
+    if let Some(prefix) = pattern.strip_suffix('*') {
+        return id.starts_with(prefix);
+    }
+    if let Some(suffix) = pattern.strip_prefix('*') {
+        return id.ends_with(suffix);
+    }
+    pattern == id
+}
+
+fn truncate_tool_text(text: String, max_chars: usize) -> String {
+    if text.chars().count() <= max_chars {
+        return text;
+    }
+    let mut out: String = text.chars().take(max_chars).collect();
+    out.push_str("\n[truncated]");
+    out
 }
 
 fn tool_content_text(content: &[ToolContent]) -> String {

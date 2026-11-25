@@ -906,6 +906,8 @@ user's explicit choice.
   them.
 - Tool output is untrusted data appended to the transcript, never interpreted as
   a new instruction or applied to a buffer.
+- Prompt context and tool output are bounded; tool definitions obey the `[ai]`
+  allow/deny policy, and decisions/results are written to a redacted audit log.
 - API failures, 429 responses, malformed tool calls, MCP timeouts, and server
   crashes stop the turn with a visible error.
 - `Esc` cancels the active turn; cancelling an active tool call terminates that
@@ -925,6 +927,7 @@ user's explicit choice.
 - [x] Extend the mock MCP server or use the existing mock for harness tests.
 - [x] Test denial, cap, API failure, malformed arguments, and no-buffer-mutation paths; MCP timeout stays covered by the manager suite.
 - [x] Update README, ARCHITECTURE, and this roadmap.
+- [x] Bound prompt context and tool output; add tool policy and audit logging.
 
 ### Acceptance
 
@@ -934,6 +937,7 @@ user's explicit choice.
 - [x] The ninth model round trip is refused with a clear message.
 - [x] A 429/API error and a malformed tool call are shown without blocking input.
 - [x] No harness path mutates an editor buffer, opens a file, or applies a patch.
+- [x] Context, tool output, policy, capability labels, and redacted audit records are tested.
 - [x] Full suite, fmt, clippy, and gate pass.
 - [ ] MSRV 1.91 and `cargo audit` pass.
 
@@ -958,4 +962,4 @@ cargo clippy --all-targets --all-features
 cargo run -- --dump-keymap
 ```
 
-Last recorded run: `cargo test` → 412 passed (405 unit + 6 CLI process + 1 PTY smoke), `cargo clippy` → 0 warnings.
+Last recorded run: `cargo test` → 418 passed (411 unit + 6 CLI process + 1 PTY smoke), `cargo clippy` → 0 warnings.
