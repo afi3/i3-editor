@@ -370,8 +370,10 @@ args, cwd, and env in `mcp_trust.toml`; a changed config prompts again. Tool
 arguments are rendered as typed fields from the tool's JSON schema (with a JSON
 fallback for nested values), every call has a confirmation prompt, and results
 and stderr logs render in read-only overlays with no automatic buffer or shell
-mutation. `mcp_add` writes managed server entries to `mcp.toml`; recent tool
-choices are kept in `mcp_recent.toml` and sorted first.
+mutation. `resources/list`, `resources/read`, `prompts/list`, and `prompts/get`
+feed palette menus and the same read-only overlay. `mcp_add` writes managed
+server entries to `mcp.toml`; recent tool choices are kept in `mcp_recent.toml`
+and sorted first.
 
 **The AI assistant is a bounded worker loop, not a runtime.** `ai::spawn_chat`
 writes the OpenAI-compatible request to a private temporary file and runs

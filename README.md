@@ -446,11 +446,14 @@ url = "https://example.test/mcp"
   never spawns the server; cancelling a call sends no request. Recent tools are
   sorted first and persisted in `mcp_recent.toml`. The tool list also has a
   `logs` row for the server's stderr ring.
+- `mcp_resources` lists resources from a trusted server; selecting one opens its
+  text in a read-only overlay. `mcp_prompts` lists prompts and opens the returned
+  messages in the same overlay. Prompt arguments are not prompted for yet.
 - A tool result opens in a read-only overlay. It cannot edit a buffer or run a
   shell command automatically. `Esc` or `q` closes the overlay.
 - HTTP transport posts JSON-RPC requests to `url`, accepts JSON or SSE
-  responses, and forwards an `Mcp-Session-Id` returned by the server. Resources,
-  prompts, sampling, and server-initiated SSE streams remain deferred.
+  responses, and forwards an `Mcp-Session-Id` returned by the server. Sampling
+  and server-initiated SSE streams remain deferred.
 
 Manual real-server check:
 

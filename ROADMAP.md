@@ -944,6 +944,7 @@ user's explicit choice.
 - [x] Add explicit file/selection context attachments for one AI turn.
 - [x] Add native edit/write diff previews and snapshot-safe undo.
 - [x] Add HTTP MCP transport with JSON/SSE responses and session headers.
+- [x] Add MCP resources and prompts list/read menus.
 
 ### Acceptance
 
@@ -962,7 +963,7 @@ user's explicit choice.
 - v0.2.2: explicit file/selection context.
 - v0.2.3: diff previews, confirmed `native/edit_file`/`native/write_file`, and
   snapshot-safe undo are implemented.
-- Later: MCP resources/prompts/sampling and autonomous background agents.
+- Later: MCP sampling and autonomous background agents.
 
 Risk: model output can request a dangerous MCP tool or contain prompt injection.
 The loop must keep trust, per-call confirmation, step limits, sanitized env,
@@ -978,4 +979,4 @@ cargo clippy --all-targets --all-features
 cargo run -- --dump-keymap
 ```
 
-Last recorded run: `cargo test` → 437 passed (430 unit + 6 CLI process + 1 PTY smoke), `cargo clippy` → 0 warnings.
+Last recorded run: `cargo test` → 438 passed (431 unit + 6 CLI process + 1 PTY smoke), `cargo clippy` → 0 warnings.

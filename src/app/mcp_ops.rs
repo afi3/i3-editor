@@ -31,6 +31,20 @@ impl App {
         self.dirty = true;
     }
 
+    pub(crate) fn open_mcp_resources(&mut self) {
+        let mut prompt = PromptState::new(PromptKind::McpResources);
+        self.fill_mcp_servers(&mut prompt);
+        self.state.mode = InputMode::Prompt(prompt);
+        self.dirty = true;
+    }
+
+    pub(crate) fn open_mcp_prompts(&mut self) {
+        let mut prompt = PromptState::new(PromptKind::McpPrompts);
+        self.fill_mcp_servers(&mut prompt);
+        self.state.mode = InputMode::Prompt(prompt);
+        self.dirty = true;
+    }
+
     pub(crate) fn submit_mcp_add(&mut self, prompt: PromptState) {
         let Some(candidate) = prompt.selected_candidate() else {
             return;
@@ -137,33 +151,34 @@ impl App {
         let mut refresh_tools = false;
         for event in events {
             match event {
-                crate::mcp::Event::Warning(message) => {
-                    if self.state.ai.queued_question.is_some() {
-                        self.state.ai.queued_question = None;
-                        self.state
-                            .ai
-                            .entries
-                            .push(format!("[error] MCP tools unavailable: {message}"));
-                    }
-                    if let Some(waiting) = self.state.ai.waiting.take() {
-                        super::audit::result(&self.state, &waiting, "error", Some(&message));
-                        self.state.ai.busy = false;
-                        self.state.ai.entries.push(format!("[error] {message}"));
-                    }
-                    self.notify(message);
-                }
+                crate::mcp::Event::Warning(message) => self.handle_mcp_warning(message),
                 crate::mcp::Event::Tools { .. } => refresh_tools = true,
                 crate::mcp::Event::ToolResult {
                     server,
                     tool,
                     content,
                     is_error,
+                } => self.handle_mcp_tool_result(&server, &tool, &content, is_error),
+                crate::mcp::Event::Resources { server, resources } => {
+                    self.update_resource_prompt(&server, &resources);
+                }
+                crate::mcp::Event::Resource {
+                    server,
+                    uri,
+                    content,
+                    mime_type,
                 } => {
-                    if self.state.ai.waiting.is_some() {
-                        self.finish_ai_tool(&server, &tool, &content, is_error);
-                    } else {
-                        self.show_mcp_result(&server, &tool, &content, is_error);
-                    }
+                    self.show_mcp_resource(&server, &uri, &content, &mime_type);
+                }
+                crate::mcp::Event::Prompts { server, prompts } => {
+                    self.update_prompt_prompt(&server, &prompts);
+                }
+                crate::mcp::Event::Prompt {
+                    server,
+                    name,
+                    content,
+                } => {
+                    self.show_mcp_prompt(&server, &name, &content);
                 }
                 crate::mcp::Event::Log { .. } => {}
             }
@@ -184,6 +199,97 @@ impl App {
                 self.state.mode = InputMode::Prompt(prompt);
             }
         }
+    }
+
+    fn selected_server(prompt: &PromptState) -> Option<String> {
+        prompt
+            .selected_candidate()
+            .and_then(|candidate| candidate.split(" — ").next())
+            .filter(|name| !name.is_empty() && *name != "No MCP servers configured")
+            .map(str::to_string)
+    }
+
+    fn handle_mcp_warning(&mut self, message: String) {
+        if self.state.ai.queued_question.is_some() {
+            self.state.ai.queued_question = None;
+            self.state
+                .ai
+                .entries
+                .push(format!("[error] MCP tools unavailable: {message}"));
+        }
+        if let Some(waiting) = self.state.ai.waiting.take() {
+            super::audit::result(&self.state, &waiting, "error", Some(&message));
+            self.state.ai.busy = false;
+            self.state.ai.entries.push(format!("[error] {message}"));
+        }
+        self.notify(message);
+    }
+
+    fn handle_mcp_tool_result(
+        &mut self,
+        server: &str,
+        tool: &str,
+        content: &[ToolContent],
+        is_error: bool,
+    ) {
+        if self.state.ai.waiting.is_some() {
+            self.finish_ai_tool(server, tool, content, is_error);
+        } else {
+            self.show_mcp_result(server, tool, content, is_error);
+        }
+    }
+
+    fn update_resource_prompt(&mut self, server: &str, resources: &[crate::mcp::Resource]) {
+        if let InputMode::Prompt(prompt) = &mut self.state.mode
+            && prompt.kind == PromptKind::McpResourceList
+            && prompt.mcp_server.as_deref() == Some(server)
+        {
+            prompt.set_candidates(
+                resources
+                    .iter()
+                    .map(|resource| format!("{} — {}", resource.uri, resource.description))
+                    .collect(),
+            );
+        }
+    }
+
+    fn update_prompt_prompt(&mut self, server: &str, prompts: &[crate::mcp::Prompt]) {
+        if let InputMode::Prompt(prompt) = &mut self.state.mode
+            && prompt.kind == PromptKind::McpPromptList
+            && prompt.mcp_server.as_deref() == Some(server)
+        {
+            prompt.set_candidates(
+                prompts
+                    .iter()
+                    .map(|prompt| format!("{} — {}", prompt.name, prompt.description))
+                    .collect(),
+            );
+        }
+    }
+
+    fn show_mcp_resource(&mut self, server: &str, uri: &str, content: &str, mime_type: &str) {
+        let lines = vec![
+            format!("Resource: {uri}"),
+            format!("Server: {server}"),
+            format!("Type: {mime_type}"),
+            String::new(),
+            content.to_string(),
+            String::new(),
+            "Esc or q closes this overlay".to_string(),
+        ];
+        self.state.mcp_view = Some(HelpView { lines, scroll: 0 });
+    }
+
+    fn show_mcp_prompt(&mut self, server: &str, name: &str, content: &str) {
+        let lines = vec![
+            format!("Prompt: {name}"),
+            format!("Server: {server}"),
+            String::new(),
+            content.to_string(),
+            String::new(),
+            "Esc or q closes this overlay".to_string(),
+        ];
+        self.state.mcp_view = Some(HelpView { lines, scroll: 0 });
     }
 
     fn fill_mcp_servers(&self, prompt: &mut PromptState) {
@@ -234,7 +340,97 @@ impl App {
             PromptKind::McpConfirm => self.submit_mcp_confirm(prompt),
             PromptKind::McpAdd => self.submit_mcp_add(prompt),
             PromptKind::McpAddPath => self.submit_mcp_add_path(prompt),
+            PromptKind::McpResources => self.submit_mcp_resources(prompt),
+            PromptKind::McpResourceList => self.submit_mcp_resource_list(prompt),
+            PromptKind::McpPrompts => self.submit_mcp_prompts(prompt),
+            PromptKind::McpPromptList => self.submit_mcp_prompt_list(prompt),
             _ => {}
+        }
+    }
+
+    pub(crate) fn submit_mcp_resources(&mut self, prompt: PromptState) {
+        let Some(server) = Self::selected_server(&prompt) else {
+            return;
+        };
+        if !self.mcp_trusted(&server) {
+            self.notify(format!("trust MCP {server} before listing resources"));
+            return;
+        }
+        if let Some(manager) = self.mcp.as_mut()
+            && let Err(error) = manager.list_resources(&server)
+        {
+            self.notify(error);
+            return;
+        }
+        let mut list = PromptState::new(PromptKind::McpResourceList);
+        list.mcp_server = Some(server);
+        self.state.mode = InputMode::Prompt(list);
+    }
+
+    pub(crate) fn submit_mcp_resource_list(&mut self, prompt: PromptState) {
+        let Some(candidate) = prompt.selected_candidate() else {
+            return;
+        };
+        let Some(uri) = candidate
+            .split(" — ")
+            .next()
+            .filter(|uri| !uri.is_empty())
+            .map(str::to_string)
+        else {
+            return;
+        };
+        let Some(server) = prompt.mcp_server else {
+            return;
+        };
+        if let Some(manager) = self.mcp.as_mut()
+            && let Err(error) = manager.read_resource(&server, &uri)
+        {
+            self.notify(error);
+        } else {
+            self.notify(format!("reading {uri}"));
+        }
+    }
+
+    pub(crate) fn submit_mcp_prompts(&mut self, prompt: PromptState) {
+        let Some(server) = Self::selected_server(&prompt) else {
+            return;
+        };
+        if !self.mcp_trusted(&server) {
+            self.notify(format!("trust MCP {server} before listing prompts"));
+            return;
+        }
+        if let Some(manager) = self.mcp.as_mut()
+            && let Err(error) = manager.list_prompts(&server)
+        {
+            self.notify(error);
+            return;
+        }
+        let mut list = PromptState::new(PromptKind::McpPromptList);
+        list.mcp_server = Some(server);
+        self.state.mode = InputMode::Prompt(list);
+    }
+
+    pub(crate) fn submit_mcp_prompt_list(&mut self, prompt: PromptState) {
+        let Some(candidate) = prompt.selected_candidate() else {
+            return;
+        };
+        let Some(name) = candidate
+            .split(" — ")
+            .next()
+            .filter(|name| !name.is_empty())
+            .map(str::to_string)
+        else {
+            return;
+        };
+        let Some(server) = prompt.mcp_server else {
+            return;
+        };
+        if let Some(manager) = self.mcp.as_mut()
+            && let Err(error) = manager.get_prompt(&server, &name)
+        {
+            self.notify(error);
+        } else {
+            self.notify(format!("loading prompt {name}"));
         }
     }
 

@@ -60,6 +60,8 @@ impl App {
             Command::Help => self.open_help(),
             Command::Mcp => self.open_mcp(),
             Command::McpAdd => self.open_mcp_add(),
+            Command::McpResources => self.open_mcp_resources(),
+            Command::McpPrompts => self.open_mcp_prompts(),
             Command::AiChat
             | Command::AiPanel
             | Command::AiClear

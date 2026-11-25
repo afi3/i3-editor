@@ -77,6 +77,8 @@ pub enum Command {
     LspInstall,
     LspUninstall,
     McpAdd,
+    McpResources,
+    McpPrompts,
     AiChat,
     AiPanel,
     AiClear,
@@ -276,6 +278,8 @@ impl Command {
                 "Install the language server for the active file",
             ),
             Command::McpAdd => ("mcp_add", "Add a configured MCP server"),
+            Command::McpResources => ("mcp_resources", "List MCP resources"),
+            Command::McpPrompts => ("mcp_prompts", "List MCP prompts"),
             Command::AiChat
             | Command::AiPanel
             | Command::AiClear
@@ -513,6 +517,8 @@ impl Command {
             Command::LspInstall,
             Command::LspUninstall,
             Command::McpAdd,
+            Command::McpResources,
+            Command::McpPrompts,
             Command::AiChat,
             Command::AiPanel,
             Command::AiClear,
@@ -660,6 +666,8 @@ mod tests {
             Command::LspInstall,
             Command::LspUninstall,
             Command::McpAdd,
+            Command::McpResources,
+            Command::McpPrompts,
             Command::AiChat,
             Command::AiPanel,
             Command::AiClear,

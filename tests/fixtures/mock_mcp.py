@@ -107,6 +107,68 @@ for raw in sys.stdin:
                 },
             }
         )
+    elif method == "resources/list":
+        send(
+            {
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "result": {
+                    "resources": [
+                        {
+                            "uri": "mock://readme",
+                            "name": "README",
+                            "description": "Mock resource",
+                            "mimeType": "text/plain",
+                        }
+                    ]
+                },
+            }
+        )
+    elif method == "resources/read":
+        send(
+            {
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "result": {
+                    "contents": [
+                        {
+                            "uri": "mock://readme",
+                            "mimeType": "text/plain",
+                            "text": "hello resource",
+                        }
+                    ]
+                },
+            }
+        )
+    elif method == "prompts/list":
+        send(
+            {
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "result": {
+                    "prompts": [
+                        {
+                            "name": "review",
+                            "description": "Review the change",
+                            "arguments": [{"name": "path", "required": True}],
+                        }
+                    ]
+                },
+            }
+        )
+    elif method == "prompts/get":
+        send(
+            {
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "result": {
+                    "description": "Review the change",
+                    "messages": [
+                        {"role": "user", "content": {"type": "text", "text": "review it"}}
+                    ],
+                },
+            }
+        )
     elif method == "tools/call":
         params = request.get("params") or {}
         name = params.get("name")

@@ -123,6 +123,21 @@ impl Tool {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Resource {
+    pub uri: String,
+    pub name: String,
+    pub description: String,
+    pub mime_type: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Prompt {
+    pub name: String,
+    pub description: String,
+    pub arguments: Vec<String>,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum ToolContent {
     Text(String),
@@ -141,6 +156,25 @@ pub enum Event {
         content: Vec<ToolContent>,
         is_error: bool,
     },
+    Resources {
+        server: String,
+        resources: Vec<Resource>,
+    },
+    Resource {
+        server: String,
+        uri: String,
+        content: String,
+        mime_type: String,
+    },
+    Prompts {
+        server: String,
+        prompts: Vec<Prompt>,
+    },
+    Prompt {
+        server: String,
+        name: String,
+        content: String,
+    },
     Log {
         server: String,
         line: String,
@@ -153,6 +187,10 @@ enum ReplyKind {
     Initialize,
     ToolsList,
     CallTool,
+    ResourcesList,
+    ResourceRead,
+    PromptsList,
+    PromptGet,
 }
 
 struct Pending {
@@ -194,6 +232,8 @@ struct Server {
     pending: HashMap<i64, Pending>,
     queued: VecDeque<Queued>,
     tools: Vec<Tool>,
+    resources: Vec<Resource>,
+    prompts: Vec<Prompt>,
     tools_loaded: bool,
     logs: VecDeque<String>,
 }
@@ -284,6 +324,46 @@ impl McpManager {
         drop(process);
         self.failed.remove(server);
         true
+    }
+
+    pub fn list_resources(&mut self, server: &str) -> Result<(), String> {
+        self.request(
+            server,
+            "resources/list",
+            json!({}),
+            ReplyKind::ResourcesList,
+            None,
+        )
+    }
+
+    pub fn read_resource(&mut self, server: &str, uri: &str) -> Result<(), String> {
+        self.request(
+            server,
+            "resources/read",
+            json!({"uri": uri}),
+            ReplyKind::ResourceRead,
+            Some(uri.to_string()),
+        )
+    }
+
+    pub fn list_prompts(&mut self, server: &str) -> Result<(), String> {
+        self.request(
+            server,
+            "prompts/list",
+            json!({}),
+            ReplyKind::PromptsList,
+            None,
+        )
+    }
+
+    pub fn get_prompt(&mut self, server: &str, name: &str) -> Result<(), String> {
+        self.request(
+            server,
+            "prompts/get",
+            json!({"name": name}),
+            ReplyKind::PromptGet,
+            Some(name.to_string()),
+        )
     }
 
     pub fn call_tool(&mut self, server: &str, tool: &str, arguments: Value) -> Result<(), String> {
@@ -472,6 +552,58 @@ impl McpManager {
         }
     }
 
+    fn handle_resource_reply(
+        &mut self,
+        name: &str,
+        uri: Option<String>,
+        result: &Value,
+        events: &mut Vec<Event>,
+    ) {
+        if let Some(uri) = uri {
+            let (content, mime_type) = parse_resource_content(result);
+            events.push(Event::Resource {
+                server: name.to_string(),
+                uri,
+                content,
+                mime_type,
+            });
+        } else {
+            let resources = parse_resources(result);
+            if let Some(server) = self.servers.get_mut(name) {
+                server.resources = resources.clone();
+            }
+            events.push(Event::Resources {
+                server: name.to_string(),
+                resources,
+            });
+        }
+    }
+
+    fn handle_prompt_reply(
+        &mut self,
+        name: &str,
+        prompt: Option<String>,
+        result: &Value,
+        events: &mut Vec<Event>,
+    ) {
+        if let Some(prompt) = prompt {
+            events.push(Event::Prompt {
+                server: name.to_string(),
+                name: prompt,
+                content: parse_prompt_content(result),
+            });
+        } else {
+            let prompts = parse_prompts(result);
+            if let Some(server) = self.servers.get_mut(name) {
+                server.prompts = prompts.clone();
+            }
+            events.push(Event::Prompts {
+                server: name.to_string(),
+                prompts,
+            });
+        }
+    }
+
     fn handle_line(&mut self, name: &str, line: &str, events: &mut Vec<Event>) {
         if line.len() > MAX_MESSAGE_BYTES {
             events.push(Event::Warning(format!("MCP {name}: response too large")));
@@ -522,6 +654,14 @@ impl McpManager {
                         content,
                         is_error,
                     });
+                }
+                ReplyKind::ResourcesList => self.handle_resource_reply(name, None, &result, events),
+                ReplyKind::ResourceRead => {
+                    self.handle_resource_reply(name, pending.tool, &result, events)
+                }
+                ReplyKind::PromptsList => self.handle_prompt_reply(name, None, &result, events),
+                ReplyKind::PromptGet => {
+                    self.handle_prompt_reply(name, pending.tool, &result, events)
                 }
             }
             return;
@@ -578,6 +718,8 @@ fn spawn_http_server(url: &str) -> Server {
         pending: HashMap::new(),
         queued: VecDeque::new(),
         tools: Vec::new(),
+        resources: Vec::new(),
+        prompts: Vec::new(),
         tools_loaded: false,
         logs: VecDeque::new(),
     }
@@ -833,6 +975,8 @@ fn spawn_server(name: &str, config: &McpServerConfig, root: &Path) -> Result<Ser
         pending: HashMap::new(),
         queued: VecDeque::new(),
         tools: Vec::new(),
+        resources: Vec::new(),
+        prompts: Vec::new(),
         tools_loaded: false,
         logs: VecDeque::new(),
     })
@@ -872,6 +1016,128 @@ fn write_message(writer: &mut ChildStdin, message: &Value) -> Result<(), String>
         .write_all(text.as_bytes())
         .and_then(|_| writer.flush())
         .map_err(|error| error.to_string())
+}
+
+fn parse_resources(result: &Value) -> Vec<Resource> {
+    result
+        .get("resources")
+        .and_then(Value::as_array)
+        .map(|resources| {
+            resources
+                .iter()
+                .filter_map(|resource| {
+                    let uri = resource.get("uri")?.as_str()?.to_string();
+                    Some(Resource {
+                        uri,
+                        name: resource
+                            .get("name")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_string(),
+                        description: resource
+                            .get("description")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_string(),
+                        mime_type: resource
+                            .get("mimeType")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_string(),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn parse_resource_content(result: &Value) -> (String, String) {
+    let contents = result
+        .get("contents")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mut text = String::new();
+    let mut mime_type = String::new();
+    for item in contents {
+        if let Some(value) = item.get("text").and_then(Value::as_str) {
+            if !text.is_empty() {
+                text.push('\n');
+            }
+            text.push_str(value);
+        } else if let Some(blob) = item.get("blob").and_then(Value::as_str) {
+            if !text.is_empty() {
+                text.push('\n');
+            }
+            text.push_str("[binary resource] ");
+            text.push_str(blob);
+        }
+        if mime_type.is_empty()
+            && let Some(value) = item.get("mimeType").and_then(Value::as_str)
+        {
+            mime_type = value.to_string();
+        }
+    }
+    (text, mime_type)
+}
+
+fn parse_prompts(result: &Value) -> Vec<Prompt> {
+    result
+        .get("prompts")
+        .and_then(Value::as_array)
+        .map(|prompts| {
+            prompts
+                .iter()
+                .filter_map(|prompt| {
+                    let name = prompt.get("name")?.as_str()?.to_string();
+                    Some(Prompt {
+                        name,
+                        description: prompt
+                            .get("description")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_string(),
+                        arguments: prompt
+                            .get("arguments")
+                            .and_then(Value::as_array)
+                            .map(|items| {
+                                items
+                                    .iter()
+                                    .filter_map(|item| {
+                                        item.get("name").and_then(Value::as_str).map(str::to_string)
+                                    })
+                                    .collect()
+                            })
+                            .unwrap_or_default(),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn parse_prompt_content(result: &Value) -> String {
+    result
+        .get("messages")
+        .and_then(Value::as_array)
+        .map(|messages| {
+            messages
+                .iter()
+                .map(|message| {
+                    let role = message
+                        .get("role")
+                        .and_then(Value::as_str)
+                        .unwrap_or("message");
+                    let content = message
+                        .pointer("/content/text")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default();
+                    format!("{role}: {content}")
+                })
+                .collect::<Vec<_>>()
+                .join("\n\n")
+        })
+        .unwrap_or_default()
 }
 
 fn parse_tools(result: &Value) -> Vec<Tool> {
@@ -996,6 +1262,45 @@ mod tests {
             }
         }
         panic!("timed out waiting for MCP event; seen {seen:?}");
+    }
+
+    #[test]
+    fn resources_and_prompts_round_trip_over_stdio() {
+        if !python_available() {
+            return;
+        }
+        let mut manager = mock("normal");
+        manager.list_resources("mock").expect("list resources");
+        let events = wait_for(&mut manager, |event| {
+            matches!(event, Event::Resources { .. })
+        });
+        let resources = events
+            .iter()
+            .find_map(|event| match event {
+                Event::Resources { resources, .. } => Some(resources.clone()),
+                _ => None,
+            })
+            .expect("resources");
+        assert_eq!(resources[0].uri, "mock://readme");
+        manager
+            .read_resource("mock", "mock://readme")
+            .expect("read");
+        let events = wait_for(&mut manager, |event| {
+            matches!(event, Event::Resource { .. })
+        });
+        assert!(events.iter().any(
+            |event| matches!(event, Event::Resource { content, .. } if content == "hello resource")
+        ));
+        manager.list_prompts("mock").expect("list prompts");
+        let events = wait_for(&mut manager, |event| matches!(event, Event::Prompts { .. }));
+        assert!(events.iter().any(
+            |event| matches!(event, Event::Prompts { prompts, .. } if prompts[0].name == "review")
+        ));
+        manager.get_prompt("mock", "review").expect("get prompt");
+        let events = wait_for(&mut manager, |event| matches!(event, Event::Prompt { .. }));
+        assert!(events.iter().any(
+            |event| matches!(event, Event::Prompt { content, .. } if content.contains("review it"))
+        ));
     }
 
     #[test]

@@ -46,6 +46,10 @@ pub enum PromptKind {
     McpConfirm,
     McpAdd,
     McpAddPath,
+    McpResources,
+    McpResourceList,
+    McpPrompts,
+    McpPromptList,
 }
 
 /// Grouping used by the prompt setup and submit code, so neither needs one
@@ -90,6 +94,10 @@ impl PromptKind {
                 | PromptKind::McpConfirm
                 | PromptKind::McpAdd
                 | PromptKind::McpAddPath
+                | PromptKind::McpResources
+                | PromptKind::McpResourceList
+                | PromptKind::McpPrompts
+                | PromptKind::McpPromptList
         )
     }
 
@@ -151,6 +159,10 @@ impl PromptKind {
             PromptKind::McpConfirm => "Call MCP Tool",
             PromptKind::McpAdd => "Add MCP Server",
             PromptKind::McpAddPath => "MCP Server Directory",
+            PromptKind::McpResources => "MCP Resource Servers",
+            PromptKind::McpResourceList => "MCP Resources",
+            PromptKind::McpPrompts => "MCP Prompt Servers",
+            PromptKind::McpPromptList => "MCP Prompts",
             _ => return None,
         })
     }
@@ -225,6 +237,10 @@ impl PromptKind {
                 | PromptKind::McpTools
                 | PromptKind::McpConfirm
                 | PromptKind::McpAdd
+                | PromptKind::McpResources
+                | PromptKind::McpResourceList
+                | PromptKind::McpPrompts
+                | PromptKind::McpPromptList
         )
     }
 }
