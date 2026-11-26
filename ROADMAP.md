@@ -924,7 +924,7 @@ and no-auto-apply boundaries.
 - [x] Add MCP resource templates and pagination.
 - [x] Add an opt-in sequential objective queue with automatic cross-session resume.
 - [x] Add aligned Markdown tables, MCP prompt argument forms, and objective dependencies.
-- [x] Add HTTP server-initiated SSE sampling and bearer-token auth.
+- [x] Add HTTP server-initiated SSE sampling, bearer-token auth, and custom headers.
 - [x] Add task/nested lists, strikethrough, and persisted queue state.
 - [x] Add heading levels, escaped punctuation, table alignment, inline table formatting, and nested ordered lists.
 - [x] Published aarch64 macOS asset passed its SHA-256 check and reports
@@ -933,7 +933,7 @@ and no-auto-apply boundaries.
 ### Deferred to later v0.2.x
 
 - Markdown footnotes and nested blockquotes.
-- MCP HTTP custom headers beyond bearer auth and Windows keyring support.
+- Windows keyring support.
 
 Risk: MCP servers are arbitrary code and model output is untrusted. Trust hashes,
 explicit tool confirmation, capability gating, context/tool budgets, audits,
@@ -949,4 +949,4 @@ cargo clippy --all-targets --all-features
 cargo run -- --dump-keymap
 ```
 
-Last recorded run: `cargo test` → 451 passed (444 unit + 6 CLI process + 1 PTY smoke), `cargo clippy` → 0 warnings.
+Last recorded run: `cargo test` → 453 passed (446 unit + 6 CLI process + 1 PTY smoke), `cargo clippy` → 0 warnings.

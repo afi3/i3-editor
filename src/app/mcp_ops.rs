@@ -1,5 +1,7 @@
 //! MCP menu, trust prompt, tool calls, and result overlay.
 
+use std::collections::BTreeMap;
+
 use serde_json::{Value, json};
 
 use crate::input::{KeyCombo, PromptKind, PromptState};
@@ -118,6 +120,7 @@ impl App {
             url: None,
             allow_sampling: false,
             auth_token_env: None,
+            headers: BTreeMap::new(),
         };
         self.state
             .config

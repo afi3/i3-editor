@@ -2284,6 +2284,7 @@ fn ai_harness_confirms_a_tool_and_returns_the_final_answer() {
         url: None,
         allow_sampling: false,
         auth_token_env: None,
+        headers: BTreeMap::new(),
     };
     app.state
         .config
@@ -2393,6 +2394,7 @@ fn ai_waits_for_mcp_tools_before_the_first_request() {
         url: None,
         allow_sampling: false,
         auth_token_env: None,
+        headers: BTreeMap::new(),
     };
     app.state
         .config
@@ -2480,6 +2482,7 @@ fn cancelling_an_ai_tool_call_stops_the_mcp_server() {
         url: None,
         allow_sampling: false,
         auth_token_env: None,
+        headers: BTreeMap::new(),
     };
     app.state
         .config
@@ -2957,6 +2960,7 @@ fn ai_tool_policy_filters_the_tool_definitions() {
         url: None,
         allow_sampling: false,
         auth_token_env: None,
+        headers: BTreeMap::new(),
     };
     app.state
         .config
@@ -3265,6 +3269,7 @@ fn mcp_trust_tools_call_and_result_flow() {
         url: None,
         allow_sampling: false,
         auth_token_env: None,
+        headers: BTreeMap::new(),
     };
     app.state
         .config

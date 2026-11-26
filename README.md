@@ -431,6 +431,10 @@ allow_sampling = true   # opt in to stdio sampling; default false
 [mcp.remote]
 url = "https://example.test/mcp"
 auth_token_env = "MCP_TOKEN"   # optional bearer token env
+
+[mcp.remote.headers]
+X-Project = "demo"             # extra headers for HTTP MCP
+# Authorization = "Bearer ..." # overrides auth_token_env
 ```
 
 - `F1` → `mcp_add` starts the wizard. Choose `filesystem`, enter a directory
@@ -457,6 +461,10 @@ auth_token_env = "MCP_TOKEN"   # optional bearer token env
   shell command automatically. `Esc` or `q` closes the overlay.
 - HTTP transport posts JSON-RPC requests to `url`, accepts JSON or SSE
   responses, and forwards an `Mcp-Session-Id` returned by the server.
+  `headers` adds request headers to normal requests, SSE streams, and
+  sampling responses; a configured `Authorization` header takes precedence
+  over `auth_token_env`. Header names and values are validated before use,
+  and headers are part of the trust hash.
 - With `allow_sampling = true`, `sampling/createMessage` requests from stdio
   servers and HTTP servers with a server-initiated SSE stream are shown for
   consent, answered through the configured AI provider, and sent back to the

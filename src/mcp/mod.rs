@@ -38,6 +38,8 @@ pub struct McpServerConfig {
     pub allow_sampling: bool,
     /// Environment variable containing a bearer token for HTTP MCP.
     pub auth_token_env: Option<String>,
+    /// Extra HTTP headers for MCP HTTP transport.
+    pub headers: BTreeMap<String, String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -244,7 +246,7 @@ enum Transport {
     Http {
         url: String,
         session: Arc<Mutex<Option<String>>>,
-        authorization: Option<String>,
+        headers: Vec<(String, String)>,
     },
 }
 
@@ -495,12 +497,12 @@ impl McpManager {
             Transport::Http {
                 url,
                 session,
-                authorization,
+                headers,
             } => {
                 spawn_http_payload(
                     url.clone(),
                     Arc::clone(session),
-                    authorization.clone(),
+                    headers.clone(),
                     server.sender.clone(),
                     value,
                 );
@@ -912,7 +914,7 @@ impl McpManager {
             if let Transport::Http {
                 url,
                 session,
-                authorization,
+                headers,
             } = &server.transport
                 && self
                     .configs
@@ -922,7 +924,7 @@ impl McpManager {
                 server.http_stream = Some(spawn_http_stream(
                     url.clone(),
                     Arc::clone(session),
-                    authorization.clone(),
+                    headers.clone(),
                     server.sender.clone(),
                 ));
             }
@@ -944,28 +946,68 @@ impl McpManager {
 
 fn start_transport(name: &str, config: &McpServerConfig, root: &Path) -> Result<Server, String> {
     if let Some(url) = config.url.as_deref().filter(|url| !url.trim().is_empty()) {
-        let authorization = config
-            .auth_token_env
-            .as_deref()
-            .filter(|name| !name.trim().is_empty())
-            .map(|name| {
-                std::env::var(name)
-                    .map(|token| format!("Authorization: Bearer {token}"))
-                    .map_err(|_| format!("MCP {name}: auth token environment is missing"))
-            })
-            .transpose()?;
-        return Ok(spawn_http_server(url, authorization));
+        let headers = http_headers(config)?;
+        return Ok(spawn_http_server(url, headers));
     }
     spawn_server(name, config, root)
 }
 
-fn spawn_http_server(url: &str, authorization: Option<String>) -> Server {
+fn http_headers(config: &McpServerConfig) -> Result<Vec<(String, String)>, String> {
+    let mut headers = Vec::new();
+    for (name, value) in &config.headers {
+        if name.is_empty()
+            || name
+                .chars()
+                .any(|ch| ch == ':' || ch.is_whitespace() || ch.is_control())
+        {
+            return Err(format!("MCP HTTP header name is invalid: {name:?}"));
+        }
+        if value.chars().any(|ch| ch == '\r' || ch == '\n') {
+            return Err(format!("MCP HTTP header {name} contains a newline"));
+        }
+        headers.push((name.clone(), value.clone()));
+    }
+    let has_authorization = headers
+        .iter()
+        .any(|(name, _)| name.eq_ignore_ascii_case("authorization"));
+    if !has_authorization
+        && let Some(name) = config
+            .auth_token_env
+            .as_deref()
+            .filter(|name| !name.trim().is_empty())
+    {
+        let token = std::env::var(name)
+            .map_err(|_| format!("MCP {name}: auth token environment is missing"))?;
+        if token.chars().any(|ch| ch == '\r' || ch == '\n') {
+            return Err(format!("MCP {name}: auth token contains a newline"));
+        }
+        headers.push(("Authorization".to_string(), format!("Bearer {token}")));
+    }
+    Ok(headers)
+}
+
+fn has_header(headers: &[(String, String)], name: &str) -> bool {
+    headers
+        .iter()
+        .any(|(header, _)| header.eq_ignore_ascii_case(name))
+}
+
+fn add_http_headers(config: &mut String, headers: &[(String, String)]) {
+    for (name, value) in headers {
+        config.push_str(&format!(
+            "header = {}\n",
+            quote_curl(&format!("{name}: {value}"))
+        ));
+    }
+}
+
+fn spawn_http_server(url: &str, headers: Vec<(String, String)>) -> Server {
     let (sender, incoming) = mpsc::channel();
     Server {
         transport: Transport::Http {
             url: url.to_string(),
             session: Arc::new(Mutex::new(None)),
-            authorization,
+            headers,
         },
         sender,
         incoming,
@@ -995,12 +1037,12 @@ fn send_request(
         Transport::Http {
             url,
             session,
-            authorization,
+            headers,
         } => {
             spawn_http_request(
                 url.clone(),
                 Arc::clone(session),
-                authorization.clone(),
+                headers.clone(),
                 sender,
                 Some(id),
                 method,
@@ -1018,12 +1060,12 @@ fn send_notification(server: &mut Server, method: &'static str) -> Result<(), St
         Transport::Http {
             url,
             session,
-            authorization,
+            headers,
         } => {
             spawn_http_request(
                 url.clone(),
                 Arc::clone(session),
-                authorization.clone(),
+                headers.clone(),
                 sender,
                 None,
                 method,
@@ -1037,7 +1079,7 @@ fn send_notification(server: &mut Server, method: &'static str) -> Result<(), St
 fn spawn_http_request(
     url: String,
     session: Arc<Mutex<Option<String>>>,
-    authorization: Option<String>,
+    headers: Vec<(String, String)>,
     sender: Sender<Incoming>,
     id: Option<i64>,
     method: &'static str,
@@ -1060,11 +1102,13 @@ fn spawn_http_request(
             }
         };
         let mut config = format!("url = {}\nrequest = \"POST\"\n", quote_curl(&url));
-        config.push_str("header = \"Content-Type: application/json\"\n");
-        config.push_str("header = \"Accept: application/json, text/event-stream\"\n");
-        if let Some(auth) = &authorization {
-            config.push_str(&format!("header = {}\n", quote_curl(auth)));
+        if !has_header(&headers, "Content-Type") {
+            config.push_str("header = \"Content-Type: application/json\"\n");
         }
+        if !has_header(&headers, "Accept") {
+            config.push_str("header = \"Accept: application/json, text/event-stream\"\n");
+        }
+        add_http_headers(&mut config, &headers);
         if let Ok(session) = session.lock()
             && let Some(session) = session.as_deref()
         {
@@ -1124,7 +1168,7 @@ fn spawn_http_request(
 fn spawn_http_stream(
     url: String,
     session: Arc<Mutex<Option<String>>>,
-    authorization: Option<String>,
+    headers: Vec<(String, String)>,
     sender: Sender<Incoming>,
 ) -> HttpStream {
     let cancel = Arc::new(AtomicBool::new(false));
@@ -1134,10 +1178,10 @@ fn spawn_http_stream(
     std::thread::spawn(move || {
         let session = session.lock().ok().and_then(|session| session.clone());
         let mut config = format!("url = {}\nrequest = \"GET\"\n", quote_curl(&url));
-        config.push_str("header = \"Accept: text/event-stream\"\n");
-        if let Some(auth) = &authorization {
-            config.push_str(&format!("header = {}\n", quote_curl(auth)));
+        if !has_header(&headers, "Accept") {
+            config.push_str("header = \"Accept: text/event-stream\"\n");
         }
+        add_http_headers(&mut config, &headers);
         if let Some(session) = session {
             config.push_str(&format!(
                 "header = {}\n",
@@ -1193,7 +1237,7 @@ fn spawn_http_stream(
 fn spawn_http_payload(
     url: String,
     session: Arc<Mutex<Option<String>>>,
-    authorization: Option<String>,
+    headers: Vec<(String, String)>,
     sender: Sender<Incoming>,
     body: Value,
 ) {
@@ -1210,10 +1254,10 @@ fn spawn_http_payload(
         };
         let session = session.lock().ok().and_then(|session| session.clone());
         let mut config = format!("url = {}\nrequest = \"POST\"\n", quote_curl(&url));
-        config.push_str("header = \"Content-Type: application/json\"\n");
-        if let Some(auth) = &authorization {
-            config.push_str(&format!("header = {}\n", quote_curl(auth)));
+        if !has_header(&headers, "Content-Type") {
+            config.push_str("header = \"Content-Type: application/json\"\n");
         }
+        add_http_headers(&mut config, &headers);
         if let Some(session) = session {
             config.push_str(&format!(
                 "header = {}\n",
@@ -1671,6 +1715,7 @@ mod tests {
             url: None,
             allow_sampling: false,
             auth_token_env: None,
+            headers: BTreeMap::new(),
         };
         McpManager::new(
             BTreeMap::from([("mock".to_string(), config)]),
@@ -1728,6 +1773,7 @@ mod tests {
             url: None,
             allow_sampling: true,
             auth_token_env: None,
+            headers: BTreeMap::new(),
         };
         let mut manager = McpManager::new(
             BTreeMap::from([("mock".to_string(), config)]),
@@ -1844,6 +1890,10 @@ mod tests {
                 let mut request = [0u8; 8192];
                 let read = stream.read(&mut request).expect("read");
                 let text = String::from_utf8_lossy(&request[..read]);
+                assert!(
+                    text.to_ascii_lowercase().contains("x-test: yes"),
+                    "custom header missing: {text}"
+                );
                 let body = text
                     .split_once("\r\n\r\n")
                     .map(|(_, body)| body)
@@ -1893,6 +1943,7 @@ mod tests {
                     url: Some(format!("http://{address}/mcp")),
                     allow_sampling: false,
                     auth_token_env: None,
+                    headers: BTreeMap::from([("X-Test".to_string(), "yes".to_string())]),
                 },
             )]),
             std::env::temp_dir(),
@@ -2116,6 +2167,7 @@ mod tests {
             url: None,
             allow_sampling: false,
             auth_token_env: None,
+            headers: BTreeMap::new(),
         };
         let mut manager = McpManager::new(
             BTreeMap::from([("filesystem".to_string(), config)]),
@@ -2159,5 +2211,37 @@ mod tests {
                 .iter()
                 .any(|item| matches!(item, ToolContent::Text(text) if text.contains("hello.txt")))
         );
+    }
+
+    #[test]
+    fn http_headers_include_custom_values() {
+        let config = McpServerConfig {
+            url: Some("https://example.test/mcp".to_string()),
+            headers: BTreeMap::from([
+                ("X-Project".to_string(), "demo".to_string()),
+                ("Authorization".to_string(), "Bearer custom".to_string()),
+            ]),
+            auth_token_env: Some("SHOULD_NOT_BE_READ".to_string()),
+            ..McpServerConfig::default()
+        };
+        let headers = http_headers(&config).expect("headers");
+        assert!(headers.contains(&("X-Project".to_string(), "demo".to_string())));
+        assert_eq!(
+            headers
+                .iter()
+                .filter(|(name, _)| name.eq_ignore_ascii_case("authorization"))
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn http_headers_reject_injection() {
+        let config = McpServerConfig {
+            url: Some("https://example.test/mcp".to_string()),
+            headers: BTreeMap::from([("X-Test".to_string(), "a\r\nInjected: 1".to_string())]),
+            ..McpServerConfig::default()
+        };
+        assert!(http_headers(&config).is_err());
     }
 }
