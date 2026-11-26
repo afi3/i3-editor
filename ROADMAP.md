@@ -9,11 +9,11 @@ verified before the next one started.
   engineering, correctness, daily-driver operations, performance, polish, and
   Git depth.
 - `v0.2.x` covers MCP and AI features. `v0.2.0` shipped the stdio MCP client;
-  `v0.2.1` ships the bounded agent harness, native tools, HTTP MCP, resources,
-  prompts, sampling, and approval-gated background agents. Persistent
-  objectives, keyring lookup, metadata context indexing, and write allowlists
-  are in the follow-up `main` work; richer dependency planning remains later.
-  Do not tag `v0.3.0` until that work lands.
+  `v0.2.1` shipped the bounded agent harness, native tools, HTTP MCP, resources,
+  prompts, sampling, and approval-gated background agents. `v0.2.2` completes
+  the macOS/Linux harness with automatic context, hard budgets, non-Rust LSP
+  verification, MCP subscriptions, and Windows source/keyring support.
+  Do not tag `v0.3.0` until the remaining `v0.2.x` work lands.
 
 ## Phase 1 — Terminal foundation and pane skeleton: done
 
@@ -941,6 +941,44 @@ and no-auto-apply boundaries.
 Risk: MCP servers are arbitrary code and model output is untrusted. Trust hashes,
 explicit tool confirmation, capability gating, context/tool budgets, audits,
 snapshot validation, and no unconfirmed write remain hard boundaries.
+
+## Release v0.2.2 — shipped
+
+Shipped as `v0.2.2` on 2026-11-26. This release completes the macOS/Linux agent
+harness work and adds Windows source support without Windows tests.
+
+### Shipped scope
+
+- Automatic context selection from the workspace path index, opt-in and capped
+  by file and character limits.
+- Hard session token and cost budgets that stop the next provider request and
+  close unresolved tool calls without running them.
+- LSP diagnostics appended to non-Rust native edits for open documents with a
+  configured language server; five-second timeout.
+- MCP HTTP custom headers, bearer-token environment auth, server-initiated SSE
+  sampling, resource subscriptions, update notifications, and list-change
+  notifications.
+- Windows Credential Manager keyring lookup and a Windows CI compile check and
+  release target. Windows tests remain skipped.
+- Objective queue auto-resume, richer Markdown tables/lists, and the earlier
+  v0.2.1 harness remain in this line.
+
+### Delivery checklist
+
+- [x] Full macOS/Linux suite and lint pass.
+- [x] Windows source typecheck and clippy pass in CI.
+- [x] README, ARCHITECTURE, and ROADMAP updated.
+- [x] Version `0.2.2` and tag `v0.2.2` point at the release commit.
+- [x] Release workflow builds Linux, macOS, and Windows assets.
+
+### Acceptance
+
+- [x] `cargo test` -> 458 passed, 1 ignored.
+- [x] `cargo clippy --all-targets --all-features` -> 0 warnings.
+- [x] `cargo fmt --check` -> clean.
+- [x] ForgeGuard gate -> 0 findings.
+- [x] Automatic context, LSP diagnostic, and MCP subscription behavior covered by tests.
+- [ ] Windows binary runtime test: intentionally skipped for this release.
 
 ## Verification commands
 
