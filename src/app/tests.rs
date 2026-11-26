@@ -140,6 +140,43 @@ fn markdown_headings_and_escapes_render_literally() {
 }
 
 #[test]
+fn ai_session_budget_stops_before_a_request() {
+    let (mut app, dir) = fixture("x");
+    app.state.config.ai.max_session_tokens = 10;
+    app.state.ai.prompt_tokens = 10;
+    app.start_ai_request();
+    assert!(app.ai_task.is_none());
+    assert!(app.ai_stream.is_none());
+    assert!(
+        app.state
+            .ai
+            .entries
+            .iter()
+            .any(|entry| entry.contains("session token budget reached"))
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn ai_session_cost_budget_stops_before_a_request() {
+    let (mut app, dir) = fixture("x");
+    app.state.config.ai.max_session_cost_usd = 0.01;
+    app.state.config.ai.input_cost_per_million = 1.0;
+    app.state.ai.prompt_tokens = 10_000;
+    app.start_ai_request();
+    assert!(app.ai_task.is_none());
+    assert!(app.ai_stream.is_none());
+    assert!(
+        app.state
+            .ai
+            .entries
+            .iter()
+            .any(|entry| entry.contains("session cost budget reached"))
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn typing_and_undo_round_trips() {
     let (mut app, dir) = fixture("hello\n");
     app.dispatch(Command::MoveCursor(crate::command::Move::DocEnd))

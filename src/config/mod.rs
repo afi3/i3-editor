@@ -124,6 +124,10 @@ pub struct AiConfig {
     pub max_tool_output_chars: usize,
     /// Maximum prior user turns retained in the request.
     pub max_history_turns: usize,
+    /// Stop the harness after this many actual session tokens; 0 is unlimited.
+    pub max_session_tokens: usize,
+    /// Stop the harness after this estimated session cost; 0 is unlimited.
+    pub max_session_cost_usd: f64,
     /// Optional `server/tool` allowlist; empty means every tool.
     pub allowed_tools: Vec<String>,
     /// `server/tool` entries that are never offered or called.
@@ -167,6 +171,8 @@ impl Default for AiConfig {
             max_context_tokens: 16_000,
             max_tool_output_chars: 20_000,
             max_history_turns: 24,
+            max_session_tokens: 0,
+            max_session_cost_usd: 0.0,
             allowed_tools: Vec::new(),
             denied_tools: Vec::new(),
             retry_attempts: 2,
@@ -744,6 +750,8 @@ pub fn load_from(path: &Path) -> (AppConfig, Vec<String>) {
     config.ai.max_context_tokens = config.ai.max_context_tokens.clamp(512, 1_000_000);
     config.ai.max_tool_output_chars = config.ai.max_tool_output_chars.clamp(500, 1_000_000);
     config.ai.max_history_turns = config.ai.max_history_turns.clamp(1, 500);
+    config.ai.max_session_tokens = config.ai.max_session_tokens.min(1_000_000_000);
+    config.ai.max_session_cost_usd = config.ai.max_session_cost_usd.max(0.0);
     config.ai.input_cost_per_million = config.ai.input_cost_per_million.max(0.0);
     config.ai.output_cost_per_million = config.ai.output_cost_per_million.max(0.0);
     config.ai.retry_attempts = config.ai.retry_attempts.clamp(0, 5);
@@ -778,6 +786,8 @@ const AI_KEYS: &[&str] = &[
     "max_context_tokens",
     "max_tool_output_chars",
     "max_history_turns",
+    "max_session_tokens",
+    "max_session_cost_usd",
     "allowed_tools",
     "denied_tools",
     "retry_attempts",
@@ -894,7 +904,7 @@ mod tests {
         let path = dir.join("config.toml");
         std::fs::write(
             &path,
-            "[ai]\nbase_url = \"http://localhost:11434/v1\"\nmodel = \"local\"\napi_key_env = \"LOCAL_KEY\"\ntimeout_secs = 9999\nmax_context_tokens = 4096\nmax_tool_output_chars = 1000\nmax_history_turns = 6\nallowed_tools = [\"mock/echo\"]\ndenied_tools = [\"mock/add\"]\nretry_attempts = 4\nretry_base_ms = 100\nretry_max_ms = 2000\npanel_width = 35\ninput_cost_per_million = 1.5\noutput_cost_per_million = 6.0\n",
+            "[ai]\nbase_url = \"http://localhost:11434/v1\"\nmodel = \"local\"\napi_key_env = \"LOCAL_KEY\"\ntimeout_secs = 9999\nmax_context_tokens = 4096\nmax_tool_output_chars = 1000\nmax_history_turns = 6\nmax_session_tokens = 9000\nmax_session_cost_usd = 0.25\nallowed_tools = [\"mock/echo\"]\ndenied_tools = [\"mock/add\"]\nretry_attempts = 4\nretry_base_ms = 100\nretry_max_ms = 2000\npanel_width = 35\ninput_cost_per_million = 1.5\noutput_cost_per_million = 6.0\n",
         )
         .expect("write");
         let (config, warnings) = load_from(&path);
@@ -906,6 +916,8 @@ mod tests {
         assert_eq!(config.ai.max_context_tokens, 4096);
         assert_eq!(config.ai.max_tool_output_chars, 1000);
         assert_eq!(config.ai.max_history_turns, 6);
+        assert_eq!(config.ai.max_session_tokens, 9000);
+        assert_eq!(config.ai.max_session_cost_usd, 0.25);
         assert_eq!(config.ai.allowed_tools, ["mock/echo"]);
         assert_eq!(config.ai.denied_tools, ["mock/add"]);
         assert_eq!(config.ai.retry_attempts, 4);

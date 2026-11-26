@@ -505,6 +505,8 @@ output_cost_per_million = 0.0
 max_context_tokens = 16000       # prompt budget; old turns are dropped
 max_tool_output_chars = 20000    # one MCP result kept in history
 max_history_turns = 24
+max_session_tokens = 0           # 0 = unlimited; stop before the next request
+max_session_cost_usd = 0.0       # 0 = unlimited; needs input/output pricing
 allowed_tools = []               # empty = every trusted tool; supports server/*
 denied_tools = ["filesystem/write_file"]
 retry_attempts = 2               # additional attempts for 429/5xx/transient curl
@@ -542,6 +544,11 @@ panel_width = 20                 # percent of terminal width
   `max_history_turns`; old turns are dropped and oversized tool text is
   truncated. One MCP result is capped by `max_tool_output_chars` before it
   enters the conversation.
+- `max_session_tokens` and `max_session_cost_usd` stop the harness before the
+  next provider request when actual reported usage reaches the cap; `0` means
+  unlimited. Cost requires `input_cost_per_million` and
+  `output_cost_per_million`. A budget stop marks a background objective blocked
+  and closes any pending tool calls without running them.
 - `allowed_tools` and `denied_tools` accept exact `server/tool` names or a
   trailing/leading `*` (for example `filesystem/*`). Blocked tools are not sent
   to the model; an unexpected call is rejected and recorded. Tool annotations
@@ -1002,6 +1009,8 @@ output_cost_per_million = 0.0
 max_context_tokens = 16000
 max_tool_output_chars = 20000
 max_history_turns = 24
+max_session_tokens = 0
+max_session_cost_usd = 0.0
 allowed_tools = []
 denied_tools = []
 retry_attempts = 2

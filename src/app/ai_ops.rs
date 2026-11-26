@@ -786,7 +786,48 @@ impl App {
         self.start_ai_question(question);
     }
 
+    fn ai_budget_reason(&self) -> Option<String> {
+        let tokens = self
+            .state
+            .ai
+            .prompt_tokens
+            .saturating_add(self.state.ai.completion_tokens);
+        let max_tokens = self.state.config.ai.max_session_tokens;
+        if max_tokens > 0 && tokens >= max_tokens as u64 {
+            return Some(format!(
+                "session token budget reached ({tokens}/{max_tokens})"
+            ));
+        }
+        let input_price = self.state.config.ai.input_cost_per_million;
+        let output_price = self.state.config.ai.output_cost_per_million;
+        let cost = (self.state.ai.prompt_tokens as f64 * input_price
+            + self.state.ai.completion_tokens as f64 * output_price)
+            / 1_000_000.0;
+        let max_cost = self.state.config.ai.max_session_cost_usd;
+        if max_cost > 0.0 && cost >= max_cost {
+            return Some(format!(
+                "session cost budget reached (${cost:.4}/${max_cost:.4})"
+            ));
+        }
+        None
+    }
+
+    fn stop_for_budget(&mut self, reason: &str) {
+        self.state.ai.entries.push(format!("[limit] {reason}"));
+        self.notify(reason);
+        if self.background_agent {
+            self.stop_background_with_error(reason);
+        } else {
+            self.state.ai.busy = false;
+        }
+        self.dirty = true;
+    }
+
     pub(crate) fn start_ai_request(&mut self) {
+        if let Some(reason) = self.ai_budget_reason() {
+            self.stop_for_budget(&reason);
+            return;
+        }
         if self.state.ai.rounds >= MAX_ROUNDS {
             self.state
                 .ai
@@ -1019,6 +1060,21 @@ impl App {
                 .ai
                 .entries
                 .extend(content.lines().map(str::to_string));
+        }
+        if let Some(reason) = self.ai_budget_reason() {
+            for call in &reply.tool_calls {
+                self.state.ai.conversation.push(json!({
+                    "role": "tool",
+                    "tool_call_id": call.id,
+                    "content": format!("Tool not run: {reason}")
+                }));
+                self.state
+                    .ai
+                    .entries
+                    .push(format!("[blocked] {}/{}: {reason}", call.name, call.id));
+            }
+            self.stop_for_budget(&reason);
+            return;
         }
         for call in reply.tool_calls {
             let Some((server, tool)) = self.state.ai.tool_map.get(&call.name).cloned() else {

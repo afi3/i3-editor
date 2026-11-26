@@ -917,7 +917,7 @@ and no-auto-apply boundaries.
 - [x] Background agents require approval before any destructive tool.
 - [x] Release version and tag are `0.2.1` / `v0.2.1`; the release workflow
   published four platform assets plus checksums (run `45714031032`).
-- [x] Actual provider usage and optional session cost metering in the panel title.
+- [x] Actual provider usage and optional session cost metering in the panel title; hard token/cost caps stop the next request.
 - [x] Rich Markdown blocks and inline styling in the AI transcript.
 - [x] Follow MCP resource and prompt pagination cursors.
 - [x] Add persistent objectives, OS keyring lookup on macOS/Linux/Windows, metadata context index, and write allowlists.
@@ -949,4 +949,4 @@ cargo clippy --all-targets --all-features
 cargo run -- --dump-keymap
 ```
 
-Last recorded run: `cargo test` → 453 passed (446 unit + 6 CLI process + 1 PTY smoke), `cargo clippy` → 0 warnings.
+Last recorded run: `cargo test` → 455 passed (448 unit + 6 CLI process + 1 PTY smoke), `cargo clippy` → 0 warnings.
