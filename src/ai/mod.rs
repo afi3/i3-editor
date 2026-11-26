@@ -120,7 +120,7 @@ fn keyring_lookup(service: &str, account: &str) -> Result<String, String> {
     {
         let mut command = Command::new("secret-tool");
         command.args(["lookup", "service", service, "account", account]);
-        return keyring_command(command);
+        keyring_command(command)
     }
     #[cfg(windows)]
     {
@@ -199,11 +199,9 @@ fn keyring_windows(service: &str, account: &str) -> Result<String, String> {
 
 #[cfg(windows)]
 fn decode_windows_credential(raw: &[u8]) -> String {
-    if raw.len() % 2 == 0 {
-        let units: Vec<u16> = raw
-            .chunks_exact(2)
-            .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
-            .collect();
+    if raw.len().is_multiple_of(2) {
+        let (pairs, _) = raw.as_chunks::<2>();
+        let units: Vec<u16> = pairs.iter().map(|pair| u16::from_le_bytes(*pair)).collect();
         if let Ok(text) = String::from_utf16(&units) {
             let text = text.trim_end_matches('\0').to_string();
             if !text.is_empty() {
