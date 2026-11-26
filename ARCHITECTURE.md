@@ -361,7 +361,9 @@ matching accepts exact names plus `*` prefix/suffix patterns.
 or HTTP endpoint per configured `[mcp.<name>]` server. A reader thread frames
 newline-delimited JSON-RPC messages for stdio; HTTP requests run in short-lived
 curl workers and accept JSON or SSE response frames, carrying an
-`Mcp-Session-Id` when the server returns one. `App::pump_mcp` drains events on
+`Mcp-Session-Id` when the server returns one. `auth_token_env` supplies a
+bearer token without putting it in config; `headers` adds explicit headers and
+takes precedence for `Authorization`. `App::pump_mcp` drains events on
 the UI thread. `initialize`
 precedes `tools/list` and `tools/call`; pending requests carry timeouts, stderr
 is kept in a bounded per-server log, and a crashed server is removed once.
