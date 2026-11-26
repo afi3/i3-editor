@@ -922,7 +922,7 @@ and no-auto-apply boundaries.
 - [x] Follow MCP resource and prompt pagination cursors.
 - [x] Add persistent objectives, OS keyring lookup, metadata context index, and write allowlists.
 - [x] Add MCP resource templates and pagination.
-- [x] Add an opt-in sequential objective queue.
+- [x] Add an opt-in sequential objective queue with automatic cross-session resume.
 - [x] Add aligned Markdown tables, MCP prompt argument forms, and objective dependencies.
 - [x] Add HTTP server-initiated SSE sampling and bearer-token auth.
 - [x] Add task/nested lists, strikethrough, and persisted queue state.
@@ -932,7 +932,6 @@ and no-auto-apply boundaries.
 ### Deferred to later v0.2.x
 
 - Richer Markdown extensions beyond task/nested lists and strikethrough.
-- Fully automatic cross-session queue resume.
 - MCP HTTP custom headers beyond bearer auth and Windows keyring support.
 
 Risk: MCP servers are arbitrary code and model output is untrusted. Trust hashes,

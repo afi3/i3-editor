@@ -607,8 +607,9 @@ same turn. Cancelling the AI turn kills a running check; non-Rust edits skip it.
   one as a background task. Objectives live in `agent_objectives.json` with
   `pending/running/done/blocked` status. With `agent_auto_queue = true`,
   `ai_queue_objectives` runs pending objectives sequentially and stops on the
-  first blocked result. Queue activity is persisted, so a later
-  `ai_queue_objectives` can continue pending work after restart.
+  first blocked result. Queue activity is persisted: with `agent_auto_queue`
+  on, a queue active at exit resumes on the next start, and objectives left
+  `running` are reset to `pending`.
   `ai_objective_link` stores dependencies using
   `objective-id: dependency-id,dependency-id` and rejects cycles.
 - `ai_index_project` builds a path+size-only workspace index. `ai_context_files`

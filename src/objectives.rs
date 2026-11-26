@@ -55,6 +55,17 @@ impl Store {
         id
     }
 
+    pub fn reset_running(&mut self) -> bool {
+        let mut changed = false;
+        for objective in &mut self.objectives {
+            if objective.status == "running" {
+                objective.status = "pending".to_string();
+                changed = true;
+            }
+        }
+        changed
+    }
+
     pub fn set_status(&mut self, id: u64, status: &str) {
         if let Some(objective) = self
             .objectives
@@ -113,10 +124,15 @@ mod tests {
         let id = store.add("inspect the project".to_string());
         assert_eq!(id, 1);
         assert_eq!(store.get(id).expect("objective").status, "pending");
+        store.set_status(id, "running");
+        assert!(store.reset_running());
+        assert_eq!(store.get(id).expect("objective").status, "pending");
         store.set_status(id, "done");
+        store.queue_active = true;
         let bytes = serde_json::to_vec(&store).expect("encode");
         let decoded = decode(&bytes).expect("decode");
         assert_eq!(decoded.get(id).expect("objective").status, "done");
+        assert!(decoded.queue_active);
         assert!(decode(r#"{"version":99,"next_id":1,"objectives":[]}"#.as_bytes()).is_none());
     }
 }

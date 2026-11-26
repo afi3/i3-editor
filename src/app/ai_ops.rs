@@ -380,6 +380,31 @@ impl App {
         self.dirty = true;
     }
 
+    pub(crate) fn resume_objective_queue(&mut self) {
+        if !self.state.config.ai.background_agents
+            || !self.state.config.ai.agent_auto_queue
+            || !self.objectives.queue_active
+        {
+            return;
+        }
+        let changed = self.objectives.reset_running();
+        if changed {
+            let _ = crate::objectives::save(&self.objectives);
+        }
+        if self
+            .objectives
+            .objectives
+            .iter()
+            .any(|objective| objective.status == "pending")
+        {
+            self.notify("resuming objective queue");
+            self.start_objective_queue();
+        } else {
+            self.objectives.queue_active = false;
+            let _ = crate::objectives::save(&self.objectives);
+        }
+    }
+
     pub(crate) fn start_objective_queue(&mut self) {
         if !self.state.config.ai.background_agents || !self.state.config.ai.agent_auto_queue {
             self.notify("enable background_agents and agent_auto_queue first");

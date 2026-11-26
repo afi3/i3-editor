@@ -321,6 +321,7 @@ impl App {
             watch_signature: None,
         };
         app.load_ai_history();
+        app.resume_objective_queue();
         if let Err(error) = app.apply_active_root() {
             app.state
                 .warnings
