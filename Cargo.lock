@@ -692,6 +692,7 @@ dependencies = [
  "unicode-segmentation",
  "unicode-width",
  "vt100",
+ "windows-sys",
 ]
 
 [[package]]

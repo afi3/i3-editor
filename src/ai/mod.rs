@@ -111,39 +111,108 @@ fn resolve_api_key(config: &AiConfig) -> Result<String, String> {
 
 fn keyring_lookup(service: &str, account: &str) -> Result<String, String> {
     #[cfg(target_os = "macos")]
-    let mut command = {
+    {
         let mut command = Command::new("security");
         command.args(["find-generic-password", "-s", service, "-a", account, "-w"]);
-        command
-    };
+        keyring_command(command)
+    }
     #[cfg(target_os = "linux")]
-    let mut command = {
+    {
         let mut command = Command::new("secret-tool");
         command.args(["lookup", "service", service, "account", account]);
-        command
-    };
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+        return keyring_command(command);
+    }
+    #[cfg(windows)]
+    {
+        keyring_windows(service, account)
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
     {
         let _ = (service, account);
-        return Err("OS keyring lookup is unsupported on this platform".to_string());
+        Err("OS keyring lookup is unsupported on this platform".to_string())
     }
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
-    {
-        let output = command
-            .output()
-            .map_err(|error| format!("keyring lookup: {error}"))?;
-        if !output.status.success() {
-            return Err(format!(
-                "keyring lookup failed: {}",
-                String::from_utf8_lossy(&output.stderr).trim()
-            ));
-        }
-        let key = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        if key.is_empty() {
-            return Err("keyring returned an empty key".to_string());
-        }
-        Ok(key)
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn keyring_command(mut command: Command) -> Result<String, String> {
+    let output = command
+        .output()
+        .map_err(|error| format!("keyring lookup: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "keyring lookup failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
     }
+    let key = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if key.is_empty() {
+        return Err("keyring returned an empty key".to_string());
+    }
+    Ok(key)
+}
+
+#[cfg(windows)]
+fn windows_keyring_target(service: &str, account: &str) -> String {
+    format!("{service}:{account}")
+}
+
+#[cfg(windows)]
+fn keyring_windows(service: &str, account: &str) -> Result<String, String> {
+    use std::ptr;
+    use std::slice;
+    use windows_sys::Win32::Foundation::{ERROR_NOT_FOUND, GetLastError};
+    use windows_sys::Win32::Security::Credentials::{
+        CRED_TYPE_GENERIC, CREDENTIALW, CredFree, CredReadW,
+    };
+
+    let target = windows_keyring_target(service, account);
+    let target: Vec<u16> = target.encode_utf16().chain(std::iter::once(0)).collect();
+    let mut credential: *mut CREDENTIALW = ptr::null_mut();
+    let ok = unsafe { CredReadW(target.as_ptr(), CRED_TYPE_GENERIC, 0, &mut credential) };
+    if ok == 0 {
+        let code = unsafe { GetLastError() };
+        return Err(if code == ERROR_NOT_FOUND {
+            format!("keyring credential not found: {service}:{account}")
+        } else {
+            format!("keyring lookup failed: Windows error {code}")
+        });
+    }
+    let credential_ptr = credential;
+    let credential = unsafe { &*credential_ptr };
+    let raw = if credential.CredentialBlobSize == 0 {
+        &[][..]
+    } else {
+        unsafe {
+            slice::from_raw_parts(
+                credential.CredentialBlob,
+                credential.CredentialBlobSize as usize,
+            )
+        }
+    };
+    let key = decode_windows_credential(raw);
+    unsafe { CredFree(credential_ptr as *const _) };
+    if key.is_empty() {
+        return Err("keyring returned an empty key".to_string());
+    }
+    Ok(key)
+}
+
+#[cfg(windows)]
+fn decode_windows_credential(raw: &[u8]) -> String {
+    if raw.len() % 2 == 0 {
+        let units: Vec<u16> = raw
+            .chunks_exact(2)
+            .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+            .collect();
+        if let Ok(text) = String::from_utf16(&units) {
+            let text = text.trim_end_matches('\0').to_string();
+            if !text.is_empty() {
+                return text;
+            }
+        }
+    }
+    let text = String::from_utf8_lossy(raw);
+    text.trim_end_matches('\0').to_string()
 }
 
 pub(crate) fn prepare_request(

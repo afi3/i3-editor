@@ -624,8 +624,10 @@ same turn. Cancelling the AI turn kills a running check; non-Rust edits skip it.
   lets you explicitly choose an indexed file and attach its contents to the
   next prompt; the index itself never stores file contents.
 - `keyring_service`/`keyring_account` read the API key from the OS keyring
-  (`security` on macOS, `secret-tool` on Linux). If configured but unavailable,
-  the request fails instead of silently using another key.
+  (`security` on macOS, `secret-tool` on Linux, Credential Manager on Windows).
+  Windows stores the credential under `service:account`; create it with
+  `cmdkey /generic:"service:account" /user:"account" /pass:"..."`. If configured
+  but unavailable, the request fails instead of silently using another key.
 - With `persist_history = true`, the transcript and conversation are saved to
   `<config>/i3-editor/ai_history.json` and restored at the next start.
   `ai_clear` removes both the visible history and that file. Tool output and

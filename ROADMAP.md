@@ -920,7 +920,7 @@ and no-auto-apply boundaries.
 - [x] Actual provider usage and optional session cost metering in the panel title.
 - [x] Rich Markdown blocks and inline styling in the AI transcript.
 - [x] Follow MCP resource and prompt pagination cursors.
-- [x] Add persistent objectives, OS keyring lookup, metadata context index, and write allowlists.
+- [x] Add persistent objectives, OS keyring lookup on macOS/Linux/Windows, metadata context index, and write allowlists.
 - [x] Add MCP resource templates and pagination.
 - [x] Add an opt-in sequential objective queue with automatic cross-session resume.
 - [x] Add aligned Markdown tables, MCP prompt argument forms, and objective dependencies.
@@ -933,7 +933,7 @@ and no-auto-apply boundaries.
 ### Deferred to later v0.2.x
 
 - Markdown footnotes and nested blockquotes.
-- Windows keyring support.
+- None planned for v0.2.x; remaining items are tracked above.
 
 Risk: MCP servers are arbitrary code and model output is untrusted. Trust hashes,
 explicit tool confirmation, capability gating, context/tool budgets, audits,
