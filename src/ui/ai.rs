@@ -176,27 +176,28 @@ pub(crate) fn max_scroll(state: &AppState) -> usize {
     build_rows(state).len().saturating_sub(height)
 }
 
-fn build_rows(state: &AppState) -> Vec<Line<'static>> {
+pub(crate) fn build_rows(state: &AppState) -> Vec<Line<'static>> {
     let width = state.ui.ai.width.saturating_sub(2) as usize;
     if width == 0 {
         return Vec::new();
     }
+    let lines: Vec<String> = state
+        .ai
+        .entries
+        .iter()
+        .flat_map(|entry| entry.split('\n'))
+        .map(str::to_string)
+        .collect();
     let mut rows = Vec::new();
     let mut in_code = false;
     let mut index = 0;
-    while index < state.ai.entries.len() {
-        if !in_code && is_table_line(&state.ai.entries[index]) {
+    while index < lines.len() {
+        if !in_code && is_table_line(&lines[index]) {
             let start = index;
-            index = table_end(&state.ai.entries, start);
-            push_table_rows(&mut rows, state, &state.ai.entries[start..index], width);
+            index = table_end(&lines, start);
+            push_table_rows(&mut rows, state, &lines[start..index], width);
         } else {
-            push_entry_rows(
-                &mut rows,
-                state,
-                &state.ai.entries[index],
-                width,
-                &mut in_code,
-            );
+            push_markdown_line(&mut rows, state, &lines[index], width, &mut in_code);
             index += 1;
         }
     }
@@ -216,9 +217,70 @@ fn table_end(entries: &[String], start: usize) -> usize {
         + start
 }
 
-fn update_widths(widths: &mut [usize], cells: &[String]) {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Align {
+    Left,
+    Center,
+    Right,
+}
+
+fn update_widths(widths: &mut [usize], cells: &[String], state: &AppState) {
     for (column, cell) in cells.iter().enumerate() {
-        widths[column] = widths[column].max(cell.chars().count());
+        widths[column] = widths[column].max(cell_width(state, cell));
+    }
+}
+
+fn cell_width(state: &AppState, cell: &str) -> usize {
+    inline_spans(state, cell, state.theme.base())
+        .iter()
+        .map(|span| display_width(&span.content))
+        .sum()
+}
+
+fn display_width(text: &str) -> usize {
+    text.chars()
+        .map(|ch| unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0))
+        .sum()
+}
+
+fn split_table_cells(line: &str) -> Vec<String> {
+    let inner = line.trim().trim_matches('|');
+    let mut cells = Vec::new();
+    let mut cell = String::new();
+    let mut chars = inner.chars();
+    while let Some(ch) = chars.next() {
+        if ch == '\\' {
+            cell.push(ch);
+            if let Some(next) = chars.next() {
+                cell.push(next);
+            }
+        } else if ch == '|' {
+            cells.push(cell.trim().to_string());
+            cell.clear();
+        } else {
+            cell.push(ch);
+        }
+    }
+    cells.push(cell.trim().to_string());
+    cells
+}
+
+fn is_separator_row(cells: &[String]) -> bool {
+    !cells.is_empty()
+        && cells.iter().all(|cell| {
+            let cell = cell.trim();
+            !cell.is_empty()
+                && cell.chars().any(|ch| ch == '-')
+                && cell.chars().all(|ch| ch == '-' || ch == ':' || ch == ' ')
+        })
+}
+
+fn table_align(cell: &str) -> Align {
+    let cell = cell.trim();
+    match (cell.starts_with(':'), cell.ends_with(':')) {
+        (true, true) => Align::Center,
+        (false, true) => Align::Right,
+        _ => Align::Left,
     }
 }
 
@@ -226,32 +288,86 @@ fn table_row_spans(
     state: &AppState,
     cells: &[String],
     widths: &[usize],
+    aligns: &[Align],
     separator: bool,
+    header: bool,
 ) -> Vec<Span<'static>> {
     let mut spans = vec![Span::styled("│", code_style(state))];
     for (column, width) in widths.iter().enumerate() {
-        let (cell, style) = table_cell(state, cells, column, *width, separator);
-        spans.push(Span::styled(cell, style));
+        if separator {
+            spans.push(Span::styled("─".repeat(*width), code_style(state)));
+        } else {
+            let cell = cells.get(column).map(String::as_str).unwrap_or_default();
+            let align = aligns.get(column).copied().unwrap_or(Align::Left);
+            spans.extend(table_cell_spans(state, cell, *width, align, header));
+        }
         spans.push(Span::styled("│", code_style(state)));
     }
     spans
 }
 
-fn table_cell(
+fn table_cell_spans(
     state: &AppState,
-    cells: &[String],
-    column: usize,
+    cell: &str,
     width: usize,
-    separator: bool,
-) -> (String, Style) {
-    if separator {
-        return ("─".repeat(width), code_style(state));
+    align: Align,
+    header: bool,
+) -> Vec<Span<'static>> {
+    let mut base = state.theme.base();
+    if header {
+        base = base.add_modifier(Modifier::BOLD);
     }
-    let cell = cells.get(column).cloned().unwrap_or_default();
-    let mut text: String = cell.chars().take(width).collect();
-    let used = text.chars().count();
-    text.push_str(&" ".repeat(width.saturating_sub(used)));
-    (text, state.theme.base())
+    let mut spans = inline_spans(state, cell, base);
+    truncate_spans(&mut spans, width);
+    let used: usize = spans.iter().map(|span| display_width(&span.content)).sum();
+    let padding = width.saturating_sub(used);
+    let (left, right) = match align {
+        Align::Left => (0, padding),
+        Align::Center => (padding / 2, padding - padding / 2),
+        Align::Right => (padding, 0),
+    };
+    let mut out = Vec::new();
+    if left > 0 {
+        out.push(Span::styled(" ".repeat(left), base));
+    }
+    out.extend(spans);
+    if right > 0 {
+        out.push(Span::styled(" ".repeat(right), base));
+    }
+    out
+}
+
+fn truncate_spans(spans: &mut Vec<Span<'static>>, width: usize) {
+    let mut remaining = width;
+    let mut out = Vec::new();
+    for span in spans.drain(..) {
+        if remaining == 0 {
+            break;
+        }
+        let (text, cells) = take_fitting(&span.content, remaining);
+        if !text.is_empty() {
+            out.push(Span::styled(text, span.style));
+            remaining -= cells;
+        }
+        if remaining == 0 {
+            break;
+        }
+    }
+    *spans = out;
+}
+
+fn take_fitting(text: &str, limit: usize) -> (String, usize) {
+    let mut out = String::new();
+    let mut used = 0usize;
+    for ch in text.chars() {
+        let cells = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+        if used + cells > limit {
+            break;
+        }
+        used += cells;
+        out.push(ch);
+    }
+    (out, used)
 }
 
 fn push_table_rows(
@@ -260,17 +376,15 @@ fn push_table_rows(
     block: &[String],
     width: usize,
 ) {
+    let mut aligns: Vec<Align> = Vec::new();
     let parsed: Vec<(Vec<String>, bool)> = block
         .iter()
         .map(|line| {
-            let inner = line.trim().trim_matches('|');
-            let cells: Vec<String> = inner
-                .split('|')
-                .map(|cell| cell.trim().to_string())
-                .collect();
-            let separator = cells.iter().all(|cell| {
-                !cell.is_empty() && cell.chars().all(|ch| ch == '-' || ch == ':' || ch == ' ')
-            });
+            let cells = split_table_cells(line);
+            let separator = is_separator_row(&cells);
+            if separator && aligns.is_empty() {
+                aligns = cells.iter().map(|cell| table_align(cell)).collect();
+            }
             (cells, separator)
         })
         .collect();
@@ -282,10 +396,11 @@ fn push_table_rows(
     if columns == 0 {
         return;
     }
+    aligns.resize(columns, Align::Left);
     let mut widths = vec![1usize; columns];
     for (cells, separator) in &parsed {
         if !separator {
-            update_widths(&mut widths, cells);
+            update_widths(&mut widths, cells, state);
         }
     }
     let border_width = columns + 1;
@@ -293,24 +408,14 @@ fn push_table_rows(
     for width in &mut widths {
         *width = (*width).min(max_cells.max(1));
     }
-    for (cells, separator) in parsed {
+    for (index, (cells, separator)) in parsed.iter().enumerate() {
+        let header =
+            !separator && index == 0 && parsed.get(1).is_some_and(|(_, separator)| *separator);
         push_styled(
             rows,
-            table_row_spans(state, &cells, &widths, separator),
+            table_row_spans(state, cells, &widths, &aligns, *separator, header),
             width,
         );
-    }
-}
-
-fn push_entry_rows(
-    rows: &mut Vec<Line<'static>>,
-    state: &AppState,
-    entry: &str,
-    width: usize,
-    in_code: &mut bool,
-) {
-    for raw in entry.split('\n') {
-        push_markdown_line(rows, state, raw, width, in_code);
     }
 }
 
@@ -332,12 +437,20 @@ fn push_markdown_line(
         return;
     }
     let base = state.theme.base();
-    if let Some(text) = text.strip_prefix("# ") {
-        let style = base
-            .fg(state.theme.explorer_dir)
-            .add_modifier(Modifier::BOLD);
-        push_styled(rows, inline_spans(state, text, style), width);
-        return;
+    let hashes = text.chars().take_while(|ch| *ch == '#').count();
+    if (1..=6).contains(&hashes) {
+        let rest = &text[hashes..];
+        if let Some(text) = rest.strip_prefix(' ') {
+            let style = base
+                .fg(if hashes == 1 {
+                    state.theme.explorer_dir
+                } else {
+                    state.theme.border_active
+                })
+                .add_modifier(Modifier::BOLD);
+            push_styled(rows, inline_spans(state, text, style), width);
+            return;
+        }
     }
     if text == "---" || text == "***" {
         push_styled(
@@ -391,8 +504,11 @@ fn push_markdown_line(
             return;
         }
     }
-    if let Some((prefix, text)) = ordered_prefix(&text) {
-        let mut spans = vec![Span::styled(prefix, base.fg(state.theme.explorer_dir))];
+    if let Some((prefix, text)) = ordered_prefix(trimmed) {
+        let mut spans = vec![Span::styled(
+            format!("{}{prefix}", " ".repeat(leading)),
+            base.fg(state.theme.explorer_dir),
+        )];
         spans.extend(inline_spans(state, text, base));
         push_styled(rows, spans, width);
         return;
@@ -420,6 +536,14 @@ fn inline_spans(state: &AppState, text: &str, base: Style) -> Vec<Span<'static>>
     let mut buffer = String::new();
     let mut index = 0usize;
     while index < chars.len() {
+        if chars[index] == '\\'
+            && let Some(next) = chars.get(index + 1).copied()
+            && is_markdown_escape(next)
+        {
+            buffer.push(next);
+            index += 2;
+            continue;
+        }
         if chars[index] == '*'
             && chars.get(index + 1) == Some(&'*')
             && let Some(end) = find_marker(&chars, index + 2, "**")
@@ -478,6 +602,29 @@ fn inline_spans(state: &AppState, text: &str, base: Style) -> Vec<Span<'static>>
     }
     push_text(&mut spans, &mut buffer, base);
     spans
+}
+
+fn is_markdown_escape(ch: char) -> bool {
+    matches!(
+        ch,
+        '\\' | '`'
+            | '*'
+            | '_'
+            | '{'
+            | '}'
+            | '['
+            | ']'
+            | '('
+            | ')'
+            | '#'
+            | '+'
+            | '-'
+            | '.'
+            | '!'
+            | '|'
+            | '>'
+            | '~'
+    )
 }
 
 fn find_char(chars: &[char], from: usize, needle: char) -> Option<usize> {
@@ -597,5 +744,36 @@ fn compact(tokens: usize) -> String {
         format!("{:.1}k", tokens as f64 / 1_000.0)
     } else {
         tokens.to_string()
+    }
+}
+
+#[cfg(test)]
+mod markdown_tests {
+    use super::*;
+
+    #[test]
+    fn table_cells_keep_escaped_pipes() {
+        let cells = split_table_cells(r"| a \| b | c |");
+        assert_eq!(cells, vec![r"a \| b".to_string(), "c".to_string()]);
+    }
+
+    #[test]
+    fn table_alignment_reads_colons() {
+        assert_eq!(table_align("---"), Align::Left);
+        assert_eq!(table_align(":---:"), Align::Center);
+        assert_eq!(table_align("---:"), Align::Right);
+    }
+
+    #[test]
+    fn ordered_prefix_allows_indentation() {
+        assert_eq!(ordered_prefix("2. item"), Some(("2. ".to_string(), "item")));
+        assert_eq!(ordered_prefix("2) item"), None);
+    }
+
+    #[test]
+    fn markdown_escapes_are_limited_to_punctuation() {
+        assert!(is_markdown_escape('*'));
+        assert!(is_markdown_escape('|'));
+        assert!(!is_markdown_escape('a'));
     }
 }

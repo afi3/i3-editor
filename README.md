@@ -544,10 +544,10 @@ panel_width = 20                 # percent of terminal width
 - The panel title starts with the configured model name, followed by estimated
   conversation tokens against the configured budget plus actual provider
   prompt/completion usage; if input/output pricing
-  is configured, it also shows an estimated session cost. Headings, lists,
-  blockquotes, aligned tables, task lists, nested lists, strikethrough,
-  fenced/inline code, bold/italic text, links, and user turns get Markdown
-  styling;
+  is configured, it also shows an estimated session cost. Heading levels, lists,
+  blockquotes, aligned tables with inline cell formatting, task lists, nested
+  and ordered lists, strikethrough, escaped punctuation, fenced/inline code,
+  bold/italic text, links, and user turns get Markdown styling;
   long transcript lines wrap inside the panel, and `Ctrl+Left`/`Ctrl+Right`
   scrolls horizontally when needed.
 - The default provider is OpenRouter (`https://openrouter.ai/api/v1`,

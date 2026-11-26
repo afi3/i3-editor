@@ -926,12 +926,13 @@ and no-auto-apply boundaries.
 - [x] Add aligned Markdown tables, MCP prompt argument forms, and objective dependencies.
 - [x] Add HTTP server-initiated SSE sampling and bearer-token auth.
 - [x] Add task/nested lists, strikethrough, and persisted queue state.
+- [x] Add heading levels, escaped punctuation, table alignment, inline table formatting, and nested ordered lists.
 - [x] Published aarch64 macOS asset passed its SHA-256 check and reports
   `i3-editor 0.2.1`.
 
 ### Deferred to later v0.2.x
 
-- Richer Markdown extensions beyond task/nested lists and strikethrough.
+- Markdown footnotes and nested blockquotes.
 - MCP HTTP custom headers beyond bearer auth and Windows keyring support.
 
 Risk: MCP servers are arbitrary code and model output is untrusted. Trust hashes,
@@ -948,4 +949,4 @@ cargo clippy --all-targets --all-features
 cargo run -- --dump-keymap
 ```
 
-Last recorded run: `cargo test` → 445 passed (438 unit + 6 CLI process + 1 PTY smoke), `cargo clippy` → 0 warnings.
+Last recorded run: `cargo test` → 451 passed (444 unit + 6 CLI process + 1 PTY smoke), `cargo clippy` → 0 warnings.

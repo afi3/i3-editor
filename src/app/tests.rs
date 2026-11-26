@@ -93,6 +93,53 @@ fn cursor(app: &App) -> usize {
 }
 
 #[test]
+fn markdown_tables_align_and_style_inline_cells() {
+    use ratatui::style::Modifier;
+    let (mut app, dir) = fixture("x");
+    app.state.ui.ai.width = 40;
+    app.state.ai.entries = vec!["| Name | Qty |\n|:---|---:|\n| **a** | 2 |".to_string()];
+    let rows = crate::ui::ai::build_rows(&app.state);
+    let rendered: Vec<String> = rows
+        .iter()
+        .map(|row| row.spans.iter().map(|span| span.content.as_ref()).collect())
+        .collect();
+    assert_eq!(rendered[0], "│Name│Qty│");
+    assert_eq!(rendered[1], "│────│───│");
+    assert_eq!(rendered[2], "│a   │  2│");
+    assert!(
+        rows[2]
+            .spans
+            .iter()
+            .any(|span| span.content == "a" && span.style.add_modifier.contains(Modifier::BOLD))
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn markdown_headings_and_escapes_render_literally() {
+    use ratatui::style::Modifier;
+    let (mut app, dir) = fixture("x");
+    app.state.ui.ai.width = 40;
+    app.state.ai.entries = vec!["## Title *x*".to_string(), "literal \\*star\\*".to_string()];
+    let rows = crate::ui::ai::build_rows(&app.state);
+    let rendered: Vec<String> = rows
+        .iter()
+        .map(|row| row.spans.iter().map(|span| span.content.as_ref()).collect())
+        .collect();
+    assert_eq!(rendered, vec!["Title x", "literal *star*"]);
+    assert!(rows[0].spans.iter().any(|span| {
+        span.content == "Title " && span.style.add_modifier.contains(Modifier::BOLD)
+    }));
+    assert!(
+        !rows[1]
+            .spans
+            .iter()
+            .any(|span| span.style.add_modifier.contains(Modifier::ITALIC))
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn typing_and_undo_round_trips() {
     let (mut app, dir) = fixture("hello\n");
     app.dispatch(Command::MoveCursor(crate::command::Move::DocEnd))
