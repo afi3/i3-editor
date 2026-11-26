@@ -267,6 +267,10 @@ impl LspManager {
         !self.configs.is_empty()
     }
 
+    pub fn supports(&self, path: &Path) -> bool {
+        self.config_key(path).is_some()
+    }
+
     /// Drop every server and start over against a new root or configuration.
     /// Open documents are reopened by the next `pump`.
     pub fn restart(&mut self, config: &LspConfig, root: PathBuf) {

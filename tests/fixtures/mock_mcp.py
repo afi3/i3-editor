@@ -53,7 +53,11 @@ for raw in sys.stdin:
                 "id": request_id,
                 "result": {
                     "protocolVersion": "2025-06-18",
-                    "capabilities": {"tools": {}, "sampling": {}},
+                    "capabilities": {
+                        "tools": {},
+                        "sampling": {},
+                        "resources": {"subscribe": True},
+                    },
                     "serverInfo": {"name": "mock", "version": "1.0"},
                 },
             }
@@ -169,6 +173,18 @@ for raw in sys.stdin:
                 },
             }
         )
+    elif method == "resources/subscribe":
+        uri = (request.get("params") or {}).get("uri", "mock://readme")
+        send({"jsonrpc": "2.0", "id": request_id, "result": {}})
+        send(
+            {
+                "jsonrpc": "2.0",
+                "method": "notifications/resources/updated",
+                "params": {"uri": uri},
+            }
+        )
+    elif method == "resources/unsubscribe":
+        send({"jsonrpc": "2.0", "id": request_id, "result": {}})
     elif method == "resources/read":
         send(
             {

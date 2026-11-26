@@ -68,6 +68,43 @@ pub fn build(root: &Path) -> Index {
     }
 }
 
+pub fn select(index: &Index, query: &str, limit: usize) -> Vec<Entry> {
+    let terms: Vec<String> = query
+        .split(|ch: char| !ch.is_alphanumeric() && ch != '_' && ch != '-')
+        .map(str::to_ascii_lowercase)
+        .filter(|term| term.len() >= 3)
+        .collect();
+    if terms.is_empty() || limit == 0 {
+        return Vec::new();
+    }
+    let mut scored: Vec<(usize, &Entry)> = index
+        .files
+        .iter()
+        .filter_map(|entry| {
+            let path = entry.path.to_ascii_lowercase();
+            let mut score = 0usize;
+            for term in &terms {
+                if path.contains(term) {
+                    score += 1;
+                }
+            }
+            (score > 0).then_some((score, entry))
+        })
+        .collect();
+    scored.sort_by(|left, right| {
+        right
+            .0
+            .cmp(&left.0)
+            .then_with(|| left.1.size.cmp(&right.1.size))
+            .then_with(|| left.1.path.cmp(&right.1.path))
+    });
+    scored
+        .into_iter()
+        .take(limit)
+        .map(|(_, entry)| entry.clone())
+        .collect()
+}
+
 pub fn load() -> Option<Index> {
     persistent::load_context::<Index>().filter(|index| index.version == VERSION)
 }

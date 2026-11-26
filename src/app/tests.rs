@@ -140,6 +140,50 @@ fn markdown_headings_and_escapes_render_literally() {
 }
 
 #[test]
+fn native_edit_waits_for_lsp_diagnostics() {
+    let (mut app, dir) = fixture("x\n");
+    let path = app
+        .state
+        .active_document()
+        .and_then(|document| document.path.clone())
+        .expect("path");
+    app.native_diagnostics = Some(super::DiagnosticWait {
+        path: path.clone(),
+        prefix: "edit ok".to_string(),
+        started: std::time::Instant::now(),
+    });
+    app.state.ai.waiting = Some(crate::state::AiWaiting {
+        id: "call-1".to_string(),
+        server: crate::native::SERVER.to_string(),
+        tool: "edit_file".to_string(),
+        capability: "destructive".to_string(),
+    });
+    app.state.ai.pending.push_back(crate::state::AiToolCall {
+        id: "call-2".to_string(),
+        server: crate::native::SERVER.to_string(),
+        tool: "read_file".to_string(),
+        capability: "read-only".to_string(),
+        arguments: serde_json::json!({"path": "note.txt"}),
+    });
+    app.finish_native_diagnostics(
+        path,
+        vec![crate::lsp::Diagnostic {
+            line: 0,
+            column: 1,
+            severity: crate::lsp::Severity::Error,
+            message: "bad syntax".to_string(),
+        }],
+    );
+    assert!(app.state.ai.conversation.iter().any(|message| {
+        message.get("content").and_then(|content| content.as_str())
+            == Some("edit ok\n\nLSP diagnostics:\n1:2: error: bad syntax")
+    }));
+    assert!(app.state.ai.waiting.is_none());
+    assert_eq!(app.state.ai.pending.len(), 1);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn ai_session_budget_stops_before_a_request() {
     let (mut app, dir) = fixture("x");
     app.state.config.ai.max_session_tokens = 10;

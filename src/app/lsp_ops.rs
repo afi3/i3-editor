@@ -31,6 +31,7 @@ impl App {
             self.state.documents.keys().copied().collect();
         self.state.lsp_diagnostics.retain(|id, _| open.contains(id));
         let mut pending_definition = None;
+        let mut diagnostic_updates = Vec::new();
         for event in events {
             match event {
                 Event::Diagnostics {
@@ -41,8 +42,9 @@ impl App {
                         if let Some(document) = self.state.documents.get(&id) {
                             convert_diagnostic_columns(document, &mut diagnostics);
                         }
-                        self.state.lsp_diagnostics.insert(id, diagnostics);
+                        self.state.lsp_diagnostics.insert(id, diagnostics.clone());
                     }
+                    diagnostic_updates.push((path, diagnostics));
                 }
                 Event::Completion(items) => {
                     let count = items.len();
@@ -60,6 +62,10 @@ impl App {
                 Event::Warning(message) => self.notify(message),
             }
         }
+        for (path, diagnostics) in diagnostic_updates {
+            self.finish_native_diagnostics(path, diagnostics);
+        }
+        self.expire_native_diagnostics();
         if let Some(location) = pending_definition {
             let result = match location {
                 Some(location) => self.goto_lsp_location(location),

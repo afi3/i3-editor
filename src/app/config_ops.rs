@@ -37,6 +37,8 @@ impl App {
                 self.state.explorer.root.clone(),
             );
         }
+        self.mcp_subscriptions.clear();
+        self.mcp_resource_view = None;
         self.apply_document_indents();
         self.state.ui.message = if warnings.is_empty() {
             "config reloaded".to_string()

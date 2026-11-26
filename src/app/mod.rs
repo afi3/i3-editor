@@ -72,9 +72,12 @@ impl App {
             sampling_task: None,
             native_check: None,
             native_check_output: None,
+            native_diagnostics: None,
             native_undo: Vec::new(),
             mcp_trusted: std::collections::HashSet::new(),
             mcp_recent: std::collections::BTreeMap::new(),
+            mcp_subscriptions: std::collections::BTreeSet::new(),
+            mcp_resource_view: None,
             persist_mcp_state: false,
             plugins: None,
             block_anchor: None,
@@ -93,7 +96,7 @@ impl App {
 use std::collections::HashMap;
 use std::io::Stdout;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
@@ -116,6 +119,12 @@ const SESSION_AUTOSAVE: Duration = Duration::from_secs(5);
 pub struct OpenTarget {
     pub path: PathBuf,
     pub line: Option<usize>,
+}
+
+pub(crate) struct DiagnosticWait {
+    pub path: PathBuf,
+    pub prefix: String,
+    pub started: Instant,
 }
 
 pub struct App {
@@ -164,11 +173,16 @@ pub struct App {
     pub(crate) sampling_task: Option<crate::ai::Task>,
     pub(crate) native_check: Option<crate::native::CheckTask>,
     pub(crate) native_check_output: Option<String>,
+    pub(crate) native_diagnostics: Option<DiagnosticWait>,
     pub(crate) native_undo: Vec<crate::native::UndoState>,
     /// Trusted MCP server config hashes for this session.
     pub(crate) mcp_trusted: std::collections::HashSet<String>,
     /// Recent MCP tool names per server.
     pub(crate) mcp_recent: std::collections::BTreeMap<String, Vec<String>>,
+    /// Explicit MCP resource subscriptions for this session.
+    pub(crate) mcp_subscriptions: std::collections::BTreeSet<(String, String)>,
+    /// Resource currently shown in the MCP overlay.
+    pub(crate) mcp_resource_view: Option<(String, String)>,
     /// Persist MCP trust/recent state; disabled in headless tests.
     pub(crate) persist_mcp_state: bool,
     /// Alt-drag block selection: pane, anchor line, anchor char column.
@@ -305,9 +319,12 @@ impl App {
             sampling_task: None,
             native_check: None,
             native_check_output: None,
+            native_diagnostics: None,
             native_undo: Vec::new(),
             mcp_trusted,
             mcp_recent,
+            mcp_subscriptions: std::collections::BTreeSet::new(),
+            mcp_resource_view: None,
             persist_mcp_state: true,
             plugins: None,
             block_anchor: None,
@@ -380,6 +397,8 @@ impl App {
                 self.state.explorer.root.clone(),
             );
         }
+        self.mcp_subscriptions.clear();
+        self.mcp_resource_view = None;
         self.apply_document_indents();
         Ok(())
     }

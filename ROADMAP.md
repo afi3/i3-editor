@@ -927,6 +927,9 @@ and no-auto-apply boundaries.
 - [x] Add HTTP server-initiated SSE sampling, bearer-token auth, and custom headers.
 - [x] Add task/nested lists, strikethrough, and persisted queue state.
 - [x] Add heading levels, escaped punctuation, table alignment, inline table formatting, and nested ordered lists.
+- [x] Add opt-in automatic context selection from the path index.
+- [x] Attach LSP diagnostics after non-Rust native edits.
+- [x] Add MCP resource subscriptions, updates, and list-change notifications.
 - [x] Published aarch64 macOS asset passed its SHA-256 check and reports
   `i3-editor 0.2.1`.
 
@@ -949,4 +952,4 @@ cargo clippy --all-targets --all-features
 cargo run -- --dump-keymap
 ```
 
-Last recorded run: `cargo test` → 455 passed (448 unit + 6 CLI process + 1 PTY smoke), `cargo clippy` → 0 warnings.
+Last recorded run: `cargo test` → 458 passed (451 unit + 6 CLI process + 1 PTY smoke), `cargo clippy` → 0 warnings.

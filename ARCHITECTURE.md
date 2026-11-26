@@ -411,7 +411,9 @@ compact diff before confirmation, and successful operations push an undo record;
 still matches.
 Rust edits in a Cargo workspace start a background `cargo check
 --message-format=short` (20-second timeout); its output is appended to the edit
-result before the next model turn.
+result before the next model turn. Non-Rust edits to an open document with a
+configured LSP server wait up to five seconds for fresh diagnostics and attach
+them to the tool result.
 The AI request uses SSE by default: `ai::stream` reads delta events from curl
 and `App::pump_ai` appends them live, while non-SSE responses fall back through
 the same reply parser. The AI transcript is pre-wrapped to the panel width and

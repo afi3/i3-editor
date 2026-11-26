@@ -175,6 +175,21 @@ pub enum Event {
         server: String,
         resources: Vec<Resource>,
     },
+    ResourceSubscribed {
+        server: String,
+        uri: String,
+    },
+    ResourceUnsubscribed {
+        server: String,
+        uri: String,
+    },
+    ResourceUpdated {
+        server: String,
+        uri: String,
+    },
+    ResourceListChanged {
+        server: String,
+    },
     Resource {
         server: String,
         uri: String,
@@ -213,6 +228,8 @@ enum ReplyKind {
     CallTool,
     ResourcesList,
     ResourceRead,
+    ResourceSubscribe,
+    ResourceUnsubscribe,
     ResourceTemplatesList,
     PromptsList,
     PromptGet,
@@ -282,6 +299,7 @@ struct Server {
     queued: VecDeque<Queued>,
     tools: Vec<Tool>,
     resources: Vec<Resource>,
+    resources_subscribe: bool,
     prompts: Vec<Prompt>,
     resource_pages: usize,
     prompt_pages: usize,
@@ -427,6 +445,37 @@ impl McpManager {
             "resources/read",
             json!({"uri": uri}),
             ReplyKind::ResourceRead,
+            Some(uri.to_string()),
+        )
+    }
+
+    pub fn supports_resource_subscriptions(&self, server: &str) -> bool {
+        self.servers
+            .get(server)
+            .is_some_and(|state| state.resources_subscribe)
+    }
+
+    pub fn subscribe_resource(&mut self, server: &str, uri: &str) -> Result<(), String> {
+        if !self.supports_resource_subscriptions(server) {
+            return Err(format!(
+                "MCP {server}: resource subscriptions are unsupported"
+            ));
+        }
+        self.request(
+            server,
+            "resources/subscribe",
+            json!({"uri": uri}),
+            ReplyKind::ResourceSubscribe,
+            Some(uri.to_string()),
+        )
+    }
+
+    pub fn unsubscribe_resource(&mut self, server: &str, uri: &str) -> Result<(), String> {
+        self.request(
+            server,
+            "resources/unsubscribe",
+            json!({"uri": uri}),
+            ReplyKind::ResourceUnsubscribe,
             Some(uri.to_string()),
         )
     }
@@ -710,7 +759,7 @@ impl McpManager {
         events: &mut Vec<Event>,
     ) {
         match pending.kind {
-            ReplyKind::Initialize => self.finish_initialize(name, events),
+            ReplyKind::Initialize => self.finish_initialize(name, result, events),
             ReplyKind::ToolsList => {
                 let tools = parse_tools(result);
                 if let Some(server) = self.servers.get_mut(name) {
@@ -734,6 +783,18 @@ impl McpManager {
             ReplyKind::ResourcesList => self.handle_resource_reply(name, None, result, events),
             ReplyKind::ResourceRead => {
                 self.handle_resource_reply(name, pending.tool, result, events)
+            }
+            ReplyKind::ResourceSubscribe => {
+                events.push(Event::ResourceSubscribed {
+                    server: name.to_string(),
+                    uri: pending.tool.unwrap_or_default(),
+                });
+            }
+            ReplyKind::ResourceUnsubscribe => {
+                events.push(Event::ResourceUnsubscribed {
+                    server: name.to_string(),
+                    uri: pending.tool.unwrap_or_default(),
+                });
             }
             ReplyKind::ResourceTemplatesList => {
                 events.push(Event::ResourceTemplates {
@@ -895,31 +956,53 @@ impl McpManager {
             self.handle_reply(name, pending, &result, events);
             return;
         }
-        if value.get("method").and_then(Value::as_str) == Some("notifications/tools/list_changed") {
-            events.push(Event::Warning(format!(
-                "MCP {name}: tool list changed; refresh tools"
-            )));
+        match value.get("method").and_then(Value::as_str) {
+            Some("notifications/resources/updated") => {
+                if let Some(uri) = value.pointer("/params/uri").and_then(Value::as_str) {
+                    events.push(Event::ResourceUpdated {
+                        server: name.to_string(),
+                        uri: uri.to_string(),
+                    });
+                }
+            }
+            Some("notifications/resources/list_changed") => {
+                events.push(Event::ResourceListChanged {
+                    server: name.to_string(),
+                });
+            }
+            Some("notifications/tools/list_changed") => {
+                events.push(Event::Warning(format!(
+                    "MCP {name}: tool list changed; refresh tools"
+                )));
+            }
+            _ => {}
         }
     }
 
-    fn finish_initialize(&mut self, name: &str, events: &mut Vec<Event>) {
+    fn finish_initialize(&mut self, name: &str, result: &Value, events: &mut Vec<Event>) {
+        let subscribe = result
+            .pointer("/capabilities/resources/subscribe")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
         let queued = {
             let Some(server) = self.servers.get_mut(name) else {
                 return;
             };
             server.initialized = true;
+            server.resources_subscribe = subscribe;
             if let Err(error) = send_notification(server, "notifications/initialized") {
                 events.push(Event::Warning(format!("MCP {name}: {error}")));
             }
+            let allow_sampling = self
+                .configs
+                .get(name)
+                .is_some_and(|config| config.allow_sampling);
             if let Transport::Http {
                 url,
                 session,
                 headers,
             } = &server.transport
-                && self
-                    .configs
-                    .get(name)
-                    .is_some_and(|config| config.allow_sampling)
+                && (allow_sampling || subscribe)
             {
                 server.http_stream = Some(spawn_http_stream(
                     url.clone(),
@@ -1016,6 +1099,7 @@ fn spawn_http_server(url: &str, headers: Vec<(String, String)>) -> Server {
         queued: VecDeque::new(),
         tools: Vec::new(),
         resources: Vec::new(),
+        resources_subscribe: false,
         prompts: Vec::new(),
         resource_pages: 0,
         prompt_pages: 0,
@@ -1416,6 +1500,7 @@ fn spawn_server(name: &str, config: &McpServerConfig, root: &Path) -> Result<Ser
         queued: VecDeque::new(),
         tools: Vec::new(),
         resources: Vec::new(),
+        resources_subscribe: false,
         prompts: Vec::new(),
         resource_pages: 0,
         prompt_pages: 0,
@@ -2150,6 +2235,43 @@ mod tests {
             |event| matches!(event, Event::Warning(message) if message.contains("too large"))
         ));
     }
+
+    #[test]
+    fn resource_subscriptions_round_trip_and_emit_updates() {
+        if !python_available() {
+            eprintln!("skipping MCP test: python3 unavailable");
+            return;
+        }
+        let mut manager = mock("normal");
+        manager.list_resources("mock").expect("list resources");
+        let events = wait_for(&mut manager, |event| {
+            matches!(event, Event::Resources { .. })
+        });
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, Event::Resources { .. }))
+        );
+        assert!(manager.supports_resource_subscriptions("mock"));
+        manager
+            .subscribe_resource("mock", "mock://readme")
+            .expect("subscribe");
+        let events = wait_for(&mut manager, |event| {
+            matches!(event, Event::ResourceUpdated { .. })
+        });
+        assert!(events.iter().any(|event| {
+            matches!(event, Event::ResourceUpdated { uri, .. } if uri == "mock://readme")
+        }));
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, Event::ResourceSubscribed { .. }))
+        );
+        manager
+            .unsubscribe_resource("mock", "mock://readme")
+            .expect("unsubscribe");
+    }
+
     #[test]
     #[ignore = "requires npx, network, and the filesystem MCP package"]
     fn real_filesystem_mcp_server() {

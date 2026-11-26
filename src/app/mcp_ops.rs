@@ -138,6 +138,8 @@ impl App {
                 self.state.explorer.root.clone(),
             );
         }
+        self.mcp_subscriptions.clear();
+        self.mcp_resource_view = None;
         self.state.mode = InputMode::Normal;
         self.start_mcp_flow(&name);
     }
@@ -148,6 +150,7 @@ impl App {
         };
         if super::help::read_only_key(view, combo) {
             self.state.mcp_view = None;
+            self.mcp_resource_view = None;
         }
         true
     }
@@ -192,36 +195,14 @@ impl App {
                 content,
                 is_error,
             } => self.handle_mcp_tool_result(&server, &tool, &content, is_error),
-            crate::mcp::Event::Resources { server, resources } => {
-                self.update_resource_prompt(&server, &resources);
-            }
-            crate::mcp::Event::Resource {
-                server,
-                uri,
-                content,
-                mime_type,
-            } => self.show_mcp_resource(&server, &uri, &content, &mime_type),
-            crate::mcp::Event::ResourceTemplates { server, templates } => {
-                let mut lines = vec![format!("MCP resource templates: {server}"), String::new()];
-                if templates.is_empty() {
-                    lines.push("no resource templates".to_string());
-                } else {
-                    for template in templates {
-                        lines.push(format!(
-                            "{} — {}{}",
-                            template.uri_template,
-                            template.name,
-                            if template.description.is_empty() {
-                                String::new()
-                            } else {
-                                format!(" — {}", template.description)
-                            }
-                        ));
-                    }
-                }
-                lines.push(String::new());
-                lines.push("Esc or q closes this overlay".to_string());
-                self.state.mcp_view = Some(HelpView { lines, scroll: 0 });
+            event @ (crate::mcp::Event::Resources { .. }
+            | crate::mcp::Event::ResourceSubscribed { .. }
+            | crate::mcp::Event::ResourceUnsubscribed { .. }
+            | crate::mcp::Event::ResourceUpdated { .. }
+            | crate::mcp::Event::ResourceListChanged { .. }
+            | crate::mcp::Event::Resource { .. }
+            | crate::mcp::Event::ResourceTemplates { .. }) => {
+                return self.handle_mcp_resource_event(event);
             }
             crate::mcp::Event::Prompts { server, prompts } => {
                 self.update_prompt_prompt(&server, &prompts);
@@ -237,6 +218,66 @@ impl App {
             crate::mcp::Event::Log { .. } => {}
         }
         false
+    }
+
+    fn handle_mcp_resource_event(&mut self, event: crate::mcp::Event) -> bool {
+        match event {
+            crate::mcp::Event::Resources { server, resources } => {
+                self.update_resource_prompt(&server, &resources);
+            }
+            crate::mcp::Event::ResourceSubscribed { server, uri } => {
+                self.mcp_subscriptions.insert((server.clone(), uri.clone()));
+                self.notify(format!("MCP resource subscribed: {uri}"));
+            }
+            crate::mcp::Event::ResourceUnsubscribed { server, uri } => {
+                self.mcp_subscriptions.remove(&(server, uri.clone()));
+                self.notify(format!("MCP resource unsubscribed: {uri}"));
+            }
+            crate::mcp::Event::ResourceUpdated { server, uri } => {
+                self.handle_mcp_resource_update(&server, &uri);
+            }
+            crate::mcp::Event::ResourceListChanged { server } => {
+                self.notify(format!("MCP {server}: resource list changed"));
+            }
+            crate::mcp::Event::Resource {
+                server,
+                uri,
+                content,
+                mime_type,
+            } => self.show_mcp_resource(&server, &uri, &content, &mime_type),
+            crate::mcp::Event::ResourceTemplates { server, templates } => {
+                self.show_mcp_resource_templates(&server, &templates);
+            }
+            _ => return false,
+        }
+        true
+    }
+
+    fn show_mcp_resource_templates(
+        &mut self,
+        server: &str,
+        templates: &[crate::mcp::ResourceTemplate],
+    ) {
+        let mut lines = vec![format!("MCP resource templates: {server}"), String::new()];
+        if templates.is_empty() {
+            lines.push("no resource templates".to_string());
+        } else {
+            for template in templates {
+                lines.push(format!(
+                    "{} — {}{}",
+                    template.uri_template,
+                    template.name,
+                    if template.description.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" — {}", template.description)
+                    }
+                ));
+            }
+        }
+        lines.push(String::new());
+        lines.push("Esc or q closes this overlay".to_string());
+        self.state.mcp_view = Some(HelpView { lines, scroll: 0 });
     }
 
     fn selected_server(prompt: &PromptState) -> Option<String> {
@@ -396,7 +437,33 @@ impl App {
         }
     }
 
+    fn handle_mcp_resource_update(&mut self, server: &str, uri: &str) {
+        if self
+            .mcp_resource_view
+            .as_ref()
+            .is_some_and(|(shown_server, shown_uri)| shown_server == server && shown_uri == uri)
+        {
+            if let Some(mcp) = self.mcp.as_mut() {
+                let _ = mcp.read_resource(server, uri);
+            }
+        } else {
+            self.notify(format!("MCP resource updated: {uri}"));
+        }
+    }
+
     fn show_mcp_resource(&mut self, server: &str, uri: &str, content: &str, mime_type: &str) {
+        self.mcp_resource_view = Some((server.to_string(), uri.to_string()));
+        if !self
+            .mcp_subscriptions
+            .contains(&(server.to_string(), uri.to_string()))
+            && self
+                .mcp
+                .as_ref()
+                .is_some_and(|mcp| mcp.supports_resource_subscriptions(server))
+            && let Some(mcp) = self.mcp.as_mut()
+        {
+            let _ = mcp.subscribe_resource(server, uri);
+        }
         let lines = vec![
             format!("Resource: {uri}"),
             format!("Server: {server}"),

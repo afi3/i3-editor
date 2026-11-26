@@ -245,10 +245,13 @@ impl App {
             task.cancel();
         }
         self.native_check_output = None;
+        self.native_diagnostics = None;
         if let Some(waiting) = self.state.ai.waiting.take() {
             if let Some(mcp) = self.mcp.as_mut() {
                 mcp.cancel_tool_call(&waiting.server);
             }
+            self.mcp_subscriptions
+                .retain(|(server, _)| server != &waiting.server);
             super::audit::result(&self.state, &waiting, "cancelled", None);
             self.state.ai.conversation.push(json!({
                 "role": "tool",
@@ -714,6 +717,44 @@ impl App {
         self.dirty = true;
     }
 
+    fn auto_ai_context(&mut self, query: &str) -> Vec<crate::state::AiAttachment> {
+        let Some(index) = crate::context_index::load() else {
+            return Vec::new();
+        };
+        let selected =
+            crate::context_index::select(&index, query, self.state.config.ai.auto_context_files);
+        let mut attached = Vec::new();
+        let mut used = 0usize;
+        for entry in selected {
+            let remaining = self.state.config.ai.auto_context_chars.saturating_sub(used);
+            if remaining == 0 {
+                break;
+            }
+            let Ok(text) = crate::native::read_source(&self.state.explorer.root, &entry.path)
+            else {
+                continue;
+            };
+            let text = crate::ai::truncate_text(
+                &text,
+                remaining.min(self.state.config.ai.max_tool_output_chars),
+            );
+            let chars = text.chars().count();
+            if chars == 0 {
+                continue;
+            }
+            used += chars;
+            self.state
+                .ai
+                .entries
+                .push(format!("[context] auto attached {}", entry.path));
+            attached.push(crate::state::AiAttachment {
+                path: format!("{} (auto)", entry.path),
+                text,
+            });
+        }
+        attached
+    }
+
     fn submit_panel_input(&mut self) {
         if self.background_agent {
             self.notify("background agent is active; approve or deny its pending tool");
@@ -732,8 +773,14 @@ impl App {
         if question.is_empty() && attachments.is_empty() {
             return;
         }
+        let auto = if attachments.is_empty() && self.state.config.ai.auto_context {
+            self.auto_ai_context(&question)
+        } else {
+            Vec::new()
+        };
         let context = attachments
             .iter()
+            .chain(auto.iter())
             .map(|attachment| {
                 format!(
                     "<context path=\"{}\">\n{}\n</context>",
@@ -1253,6 +1300,28 @@ impl App {
                         .push("[check] cargo check...".to_string());
                     return;
                 }
+                if (call.tool == "edit_file" || call.tool == "write_file")
+                    && let Some(raw) = call.arguments.get("path").and_then(Value::as_str)
+                    && let Ok(path) = crate::native::resolve_path(&root, raw)
+                    && self.state.documents.values().any(|document| {
+                        document
+                            .path
+                            .as_deref()
+                            .is_some_and(|open| super::same_path(open, &path))
+                    })
+                    && self.lsp.as_ref().is_some_and(|lsp| lsp.supports(&path))
+                {
+                    self.native_diagnostics = Some(super::DiagnosticWait {
+                        path,
+                        prefix: text,
+                        started: std::time::Instant::now(),
+                    });
+                    self.state
+                        .ai
+                        .entries
+                        .push("[check] LSP diagnostics...".to_string());
+                    return;
+                }
                 self.finish_ai_tool(
                     crate::native::SERVER,
                     &call.tool,
@@ -1269,6 +1338,65 @@ impl App {
                 );
             }
         }
+    }
+
+    pub(crate) fn finish_native_diagnostics(
+        &mut self,
+        path: std::path::PathBuf,
+        diagnostics: Vec<crate::lsp::Diagnostic>,
+    ) {
+        let Some(wait) = self.native_diagnostics.as_ref() else {
+            return;
+        };
+        if !super::same_path(&wait.path, &path) {
+            return;
+        }
+        let wait = self.native_diagnostics.take().expect("checked");
+        let Some(waiting) = self.state.ai.waiting.take() else {
+            return;
+        };
+        let tool = waiting.tool.clone();
+        let errors = diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.severity == crate::lsp::Severity::Error);
+        let text = format!(
+            "{}\n\nLSP diagnostics:\n{}",
+            wait.prefix,
+            format_diagnostics(&diagnostics)
+        );
+        self.state.ai.waiting = Some(waiting);
+        self.finish_ai_tool(
+            crate::native::SERVER,
+            &tool,
+            &[ToolContent::Text(text)],
+            errors,
+        );
+        self.dirty = true;
+    }
+
+    pub(crate) fn expire_native_diagnostics(&mut self) {
+        let Some(wait) = self.native_diagnostics.as_ref() else {
+            return;
+        };
+        if wait.started.elapsed() < std::time::Duration::from_secs(5) {
+            return;
+        }
+        let wait = self.native_diagnostics.take().expect("checked");
+        let Some(waiting) = self.state.ai.waiting.take() else {
+            return;
+        };
+        let tool = waiting.tool.clone();
+        self.state.ai.waiting = Some(waiting);
+        self.finish_ai_tool(
+            crate::native::SERVER,
+            &tool,
+            &[ToolContent::Text(format!(
+                "{}\n\nLSP diagnostics: timed out",
+                wait.prefix
+            ))],
+            false,
+        );
+        self.dirty = true;
     }
 
     pub(crate) fn pump_native_check(&mut self) {
@@ -1527,6 +1655,29 @@ impl App {
     }
 }
 
+fn format_diagnostics(diagnostics: &[crate::lsp::Diagnostic]) -> String {
+    if diagnostics.is_empty() {
+        return "(none)".to_string();
+    }
+    diagnostics
+        .iter()
+        .map(|diagnostic| {
+            let severity = match diagnostic.severity {
+                crate::lsp::Severity::Error => "error",
+                crate::lsp::Severity::Warning => "warning",
+                crate::lsp::Severity::Info => "info",
+            };
+            format!(
+                "{}:{}: {severity}: {}",
+                diagnostic.line + 1,
+                diagnostic.column + 1,
+                diagnostic.message
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 fn add_tool_definitions(
     server: &str,
     server_tools: &[crate::mcp::Tool],
@@ -1616,4 +1767,21 @@ fn char_byte(text: &str, char_index: usize) -> usize {
     text.char_indices()
         .nth(char_index)
         .map_or(text.len(), |(byte, _)| byte)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn diagnostics_format_with_one_based_positions() {
+        let diagnostics = vec![crate::lsp::Diagnostic {
+            line: 2,
+            column: 4,
+            severity: crate::lsp::Severity::Error,
+            message: "unknown name".to_string(),
+        }];
+        assert_eq!(format_diagnostics(&diagnostics), "3:5: error: unknown name");
+        assert_eq!(format_diagnostics(&[]), "(none)");
+    }
 }

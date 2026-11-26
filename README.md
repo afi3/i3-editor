@@ -437,6 +437,10 @@ X-Project = "demo"             # extra headers for HTTP MCP
 # Authorization = "Bearer ..." # overrides auth_token_env
 ```
 
+- Reading a resource subscribes to it automatically when the server advertises
+  `resources.subscribe`. `notifications/resources/updated` refreshes the open
+  resource overlay, `notifications/resources/list_changed` reports a list
+  change, and subscriptions are dropped when the server restarts.
 - `F1` → `mcp_add` starts the wizard. Choose `filesystem`, enter a directory
   (prefilled with the workspace root), or choose `everything` for a protocol
   demo; the wizard writes `<config>/i3-editor/mcp.toml`.
@@ -460,7 +464,9 @@ X-Project = "demo"             # extra headers for HTTP MCP
 - A tool result opens in a read-only overlay. It cannot edit a buffer or run a
   shell command automatically. `Esc` or `q` closes the overlay.
 - HTTP transport posts JSON-RPC requests to `url`, accepts JSON or SSE
-  responses, and forwards an `Mcp-Session-Id` returned by the server.
+  responses, and forwards an `Mcp-Session-Id` returned by the server. When the
+  server advertises resource subscriptions, the SSE stream opens after
+  initialization even if sampling is disabled.
   `headers` adds request headers to normal requests, SSE streams, and
   sampling responses; a configured `Authorization` header takes precedence
   over `auth_token_env`. Header names and values are validated before use,
@@ -505,6 +511,9 @@ output_cost_per_million = 0.0
 max_context_tokens = 16000       # prompt budget; old turns are dropped
 max_tool_output_chars = 20000    # one MCP result kept in history
 max_history_turns = 24
+auto_context = false             # attach matching indexed files on submit
+auto_context_files = 4
+auto_context_chars = 12000
 max_session_tokens = 0           # 0 = unlimited; stop before the next request
 max_session_cost_usd = 0.0       # 0 = unlimited; needs input/output pricing
 allowed_tools = []               # empty = every trusted tool; supports server/*
@@ -523,6 +532,11 @@ panel_width = 20                 # percent of terminal width
   the selected text, and `ai_clear_context` drops pending attachments. Attached
   context is prefixed to the next user message as explicit `<context>` blocks
   and is consumed by that turn.
+- With `auto_context = true`, `ai_index_project` must have built the path index.
+  On submit, the harness attaches matching indexed files by path/name terms,
+  up to `auto_context_files` and `auto_context_chars`; explicit attachments
+  suppress automatic ones for that turn. Files are read through the workspace
+  boundary and invalid or oversized files are skipped.
 - Type a message and press `Enter` to send. Use `Shift+Enter`, `Alt+Enter`, or
   `Ctrl+J` for a newline; the input grows up to six wrapped rows. If trusted MCP
   servers are still reading their tool lists, the question waits and is sent
@@ -606,7 +620,10 @@ The harness also exposes two built-in tools, independent of MCP:
 After editing a Rust file in a workspace with `Cargo.toml`, the harness starts
 `cargo check --message-format=short` in a worker (20-second timeout). Its output
 is appended to the edit tool result, so the model can fix compile errors in the
-same turn. Cancelling the AI turn kills a running check; non-Rust edits skip it.
+same turn. Cancelling the AI turn kills a running check. For an open non-Rust
+file with a configured language server, the harness waits up to five seconds
+for the next published diagnostics and appends them to the edit result; an
+unavailable server or timeout does not block the turn.
 - The API key is read from `api_key_env`; leave it empty for a local
   OpenAI-compatible server without authentication.
 - Requests use SSE streaming by default, so assistant text appears as deltas
@@ -1009,6 +1026,9 @@ output_cost_per_million = 0.0
 max_context_tokens = 16000
 max_tool_output_chars = 20000
 max_history_turns = 24
+auto_context = false
+auto_context_files = 4
+auto_context_chars = 12000
 max_session_tokens = 0
 max_session_cost_usd = 0.0
 allowed_tools = []
