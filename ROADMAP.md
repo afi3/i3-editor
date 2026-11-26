@@ -970,6 +970,7 @@ harness work and adds Windows source support without Windows tests.
 - [x] README, ARCHITECTURE, and ROADMAP updated.
 - [x] Version `0.2.2` and tag `v0.2.2` point at the release commit.
 - [x] Release workflow builds Linux, macOS, and Windows assets.
+- [x] Release workflow run `45732012920` published five assets plus checksums.
 
 ### Acceptance
 
@@ -978,6 +979,8 @@ harness work and adds Windows source support without Windows tests.
 - [x] `cargo fmt --check` -> clean.
 - [x] ForgeGuard gate -> 0 findings.
 - [x] Automatic context, LSP diagnostic, and MCP subscription behavior covered by tests.
+- [x] aarch64 macOS asset passed its SHA-256 check and reports `i3-editor 0.2.2`.
+- [x] Both Linux tarball checksums and the Windows zip checksum verified.
 - [ ] Windows binary runtime test: intentionally skipped for this release.
 
 ## Verification commands

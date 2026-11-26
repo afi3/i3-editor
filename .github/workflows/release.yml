@@ -85,7 +85,12 @@ jobs:
           $asset = "i3-editor-${{ matrix.target }}.zip"
           Compress-Archive -Path "target/${{ matrix.target }}/release/i3-editor.exe" -DestinationPath "dist/$asset" -Force
           $hash = (Get-FileHash "dist/$asset" -Algorithm SHA256).Hash.ToLower()
-          "$hash  $asset" | Set-Content -Path "dist/$asset.sha256" -Encoding ascii
+          $line = $hash + "  " + $asset + "`n"
+          [System.IO.File]::WriteAllText(
+            (Join-Path (Resolve-Path dist) "$asset.sha256"),
+            $line,
+            [System.Text.Encoding]::ASCII
+          )
 
       - uses: actions/upload-artifact@v4
         with:
