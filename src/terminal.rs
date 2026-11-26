@@ -63,6 +63,7 @@ fn install_panic_hook(keyboard_enhancement: bool) {
 }
 
 /// Restore the terminal when the process is terminated by a signal.
+#[cfg(unix)]
 pub fn install_signal_restore(keyboard_enhancement: bool) -> io::Result<()> {
     let mut signals = signal_hook::iterator::Signals::new([
         signal_hook::consts::SIGTERM,
@@ -75,5 +76,10 @@ pub fn install_signal_restore(keyboard_enhancement: bool) -> io::Result<()> {
             std::process::exit(130);
         }
     });
+    Ok(())
+}
+
+#[cfg(not(unix))]
+pub fn install_signal_restore(_keyboard_enhancement: bool) -> io::Result<()> {
     Ok(())
 }

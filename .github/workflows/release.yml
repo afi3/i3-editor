@@ -24,11 +24,13 @@ jobs:
           - { os: ubuntu-22.04, target: aarch64-unknown-linux-gnu, cross: true }
           - { os: macos-15-intel, target: x86_64-apple-darwin }
           - { os: macos-15, target: aarch64-apple-darwin }
+          - { os: windows-latest, target: x86_64-pc-windows-msvc }
     steps:
       - uses: actions/checkout@v4
 
       - name: Tag matches Cargo.toml
         if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
         run: |
           set -eu
           tag="${GITHUB_REF_NAME#v}"
@@ -46,6 +48,7 @@ jobs:
         if: matrix.cross
 
       - name: Build
+        shell: bash
         run: |
           set -eu
           if [ "${{ matrix.cross }}" = "true" ]; then
@@ -54,7 +57,9 @@ jobs:
             cargo build --release --locked --target "${{ matrix.target }}"
           fi
 
-      - name: Package
+      - name: Package (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
         run: |
           set -eu
           version="${GITHUB_REF_NAME#v}"
@@ -71,6 +76,16 @@ jobs:
             ( cd dist && shasum -a 256 "i3-editor-${{ matrix.target }}.tar.gz" \
                 > "i3-editor-${{ matrix.target }}.tar.gz.sha256" )
           fi
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          $asset = "i3-editor-${{ matrix.target }}.zip"
+          Compress-Archive -Path "target/${{ matrix.target }}/release/i3-editor.exe" -DestinationPath "dist/$asset" -Force
+          $hash = (Get-FileHash "dist/$asset" -Algorithm SHA256).Hash.ToLower()
+          "$hash  $asset" | Set-Content -Path "dist/$asset.sha256" -Encoding ascii
 
       - uses: actions/upload-artifact@v4
         with:

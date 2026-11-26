@@ -1089,8 +1089,9 @@ git tag -a v0.2.1 -m "v0.2.1"
 git push origin main
 git push origin v0.2.1
 
-# 3. the release workflow builds four targets and publishes assets:
-#    i3-editor-<target>.tar.gz + .sha256
+# 3. the release workflow builds five targets and publishes assets:
+#    i3-editor-<target>.tar.gz + .sha256 on Unix
+#    i3-editor-<target>.zip + .sha256 on Windows
 gh release view v0.2.1
 
 # 4. verify the updater against the published release

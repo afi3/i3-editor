@@ -349,6 +349,12 @@ pub fn config_dir() -> Option<PathBuf> {
     {
         return Some(PathBuf::from(xdg).join("i3-editor"));
     }
+    #[cfg(windows)]
+    if let Some(appdata) = std::env::var_os("APPDATA")
+        && !appdata.is_empty()
+    {
+        return Some(PathBuf::from(appdata).join("i3-editor"));
+    }
     std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config").join("i3-editor"))
 }
 
