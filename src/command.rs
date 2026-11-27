@@ -499,6 +499,10 @@ impl Command {
             Command::PrevTerminal => ("prev_terminal", "Previous terminal tab"),
             Command::TerminalRename => ("rename_terminal", "Rename the active terminal tab"),
             Command::SelectTheme => ("select_theme", "Pick a theme from the themes directory"),
+            Command::NextAiProvider => (
+                "next_ai_provider",
+                "Switch to the next configured AI provider",
+            ),
             _ => return None,
         })
     }

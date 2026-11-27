@@ -16,9 +16,21 @@ impl App {
         let Some(base) = crate::recovery::default_dir() else {
             return;
         };
-        self.swap_dir = Some(dir.clone());
-        let recovered =
-            crate::recovery::recover_from(&dir, &mut self.state.documents, &mut self.state.ids);
+        let instance = match crate::recovery::Instance::claim(&base) {
+            Ok(instance) => instance,
+            Err(error) => {
+                self.notify(format!("swap directory unavailable: {error}"));
+                return;
+            }
+        };
+        let dir = instance.dir().to_path_buf();
+        self.swap = Some(instance);
+        let recovered = crate::recovery::recover_from(
+            &base,
+            &dir,
+            &mut self.state.documents,
+            &mut self.state.ids,
+        );
         if recovered.is_empty() {
             return;
         }

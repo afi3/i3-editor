@@ -1537,6 +1537,122 @@ mod strict_tests {
     }
 
     #[test]
+    fn an_active_provider_overrides_the_top_level_ai_settings() {
+        let dir = config_dir("provider");
+        let path = dir.join("config.toml");
+        std::fs::write(
+            &path,
+            "[ai]\nmodel = \"legacy\"\nactive_provider = \"openrouter\"\n\
+             [ai.providers.openrouter]\nbase_url = \"https://example.test/v1\"\n\
+             model = \"or-model\"\napi_key_env = \"OR_KEY\"\n",
+        )
+        .expect("write");
+        let (config, warnings) = load_from(&path);
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(config.ai.base_url, "https://example.test/v1");
+        assert_eq!(config.ai.model, "or-model");
+        assert_eq!(config.ai.api_key_env, "OR_KEY");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn an_unknown_active_provider_is_reported_and_ignored() {
+        let dir = config_dir("provider-missing");
+        let path = dir.join("config.toml");
+        std::fs::write(
+            &path,
+            "[ai]\nmodel = \"legacy\"\nactive_provider = \"nope\"\n",
+        )
+        .expect("write");
+        let (config, warnings) = load_from(&path);
+        assert!(
+            warnings
+                .iter()
+                .any(|warning| warning.contains("active_provider")),
+            "{warnings:?}"
+        );
+        assert_eq!(config.ai.model, "legacy");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn persisting_a_provider_updates_or_creates_the_ai_table() {
+        let dir = config_dir("provider-persist");
+        let path = dir.join("config.toml");
+        std::fs::write(&path, "[editor]\ntab_size = 4\n\n[ai]\nmodel = \"m\"\n").expect("write");
+
+        persist_active_provider_at(&path, "alpha").expect("persist");
+        let text = std::fs::read_to_string(&path).expect("read");
+        assert!(text.contains("active_provider = \"alpha\""), "{text}");
+        assert!(
+            text.contains("model = \"m\"") && text.contains("[editor]"),
+            "{text}"
+        );
+
+        persist_active_provider_at(&path, "beta").expect("replace");
+        let text = std::fs::read_to_string(&path).expect("read");
+        assert_eq!(text.matches("active_provider").count(), 1, "{text}");
+        assert!(text.contains("active_provider = \"beta\""), "{text}");
+
+        let fresh = dir.join("fresh.toml");
+        persist_active_provider_at(&fresh, "gamma").expect("create");
+        let text = std::fs::read_to_string(&fresh).expect("read");
+        assert!(
+            text.contains("[ai]") && text.contains("active_provider = \"gamma\""),
+            "{text}"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn the_config_directory_is_created_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = std::env::temp_dir().join(format!("i3-cfgdir-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("dir");
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+
+        create_private_dir(&dir);
+        let mode = std::fs::metadata(&dir)
+            .expect("metadata")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o700);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_plaintext_api_key_in_a_shared_config_is_reported() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = std::env::temp_dir().join(format!("i3-cfg-key-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("dir");
+        let path = dir.join("config.toml");
+        std::fs::write(&path, "[ai]\napi_key = \"sk-test\"\n").expect("write");
+
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).expect("chmod");
+        let (config, warnings) = load_from(&path);
+        assert_eq!(config.ai.api_key, "sk-test");
+        assert!(
+            warnings.iter().any(|warning| warning.contains("api_key")),
+            "{warnings:?}"
+        );
+
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).expect("chmod");
+        let (_, warnings) = load_from(&path);
+        assert!(
+            !warnings.iter().any(|warning| warning.contains("api_key")),
+            "{warnings:?}"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
     fn unknown_section_is_reported() {
         let dir = config_dir("section");
         let path = dir.join("config.toml");

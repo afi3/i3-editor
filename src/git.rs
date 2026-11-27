@@ -131,9 +131,42 @@ pub fn tree_marks(
     let status = run(
         binary,
         repo,
-        &["diff", "HEAD", "--no-color", "--unified=0", "--", &relative],
-    )?;
-    Ok(parse_marks(&output, path))
+        &["-c", "core.quotePath=false", "status", "--porcelain"],
+    )
+    .unwrap_or_default();
+    let untracked: HashSet<&str> = status
+        .lines()
+        .filter_map(|line| line.strip_prefix("?? "))
+        .collect();
+    let diff = run(
+        binary,
+        repo,
+        &[
+            "-c",
+            "core.quotePath=false",
+            "diff",
+            "HEAD",
+            "--no-color",
+            "--unified=0",
+        ],
+    )
+    .unwrap_or_default();
+    let mut marks = HashMap::new();
+    for (path, relative) in wanted {
+        let lines = if untracked.contains(relative.as_str()) {
+            let count = std::fs::read_to_string(&path)
+                .map(|text| text.lines().count())
+                .unwrap_or(0)
+                .max(1);
+            vec![Some(Change::Added); count]
+        } else {
+            section(&diff, &relative)
+                .map(|section| parse_marks(section, &path))
+                .unwrap_or_default()
+        };
+        marks.insert(path, lines);
+    }
+    marks
 }
 
 /// Background marker pass for the documents on screen.

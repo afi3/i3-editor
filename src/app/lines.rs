@@ -41,8 +41,11 @@ impl App {
                         document.len_chars()
                     };
                     let previous_start = document.char_of_line(start_line - 1);
-                    let block = document.rope.slice(line_start..block_end).to_string();
-                    let previous = document.rope.slice(previous_start..line_start).to_string();
+                    let block = document.rope().slice(line_start..block_end).to_string();
+                    let previous = document
+                        .rope()
+                        .slice(previous_start..line_start)
+                        .to_string();
                     let text = if block.ends_with('\n') {
                         format!("{block}{previous}")
                     } else {

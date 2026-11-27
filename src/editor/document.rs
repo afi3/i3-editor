@@ -110,6 +110,9 @@ pub struct Document {
     pub folded: Vec<Range<usize>>,
     /// Highlighting memo; derived from `rope`, never part of the file identity.
     pub(crate) syntax: RefCell<SyntaxCache>,
+    /// Generation counter for the rope; bumped by every text change so
+    /// observers such as the language server can skip unchanged buffers.
+    pub(crate) revision: u64,
     /// Modification time and size seen at the last load or save, to detect
     /// writes made by other programs.
     pub(crate) disk_modified: Option<SystemTime>,
@@ -146,6 +149,7 @@ impl Document {
             history: History::default(),
             folded: Vec::new(),
             syntax: RefCell::new(SyntaxCache::default()),
+            revision: 0,
             disk_modified: None,
             disk_len: 0,
         }
@@ -165,6 +169,7 @@ impl Document {
             history: History::default(),
             folded: Vec::new(),
             syntax: RefCell::new(SyntaxCache::default()),
+            revision: 0,
             disk_modified: None,
             disk_len: 0,
         };
@@ -203,6 +208,7 @@ impl Document {
             history: History::default(),
             folded: Vec::new(),
             syntax: RefCell::new(SyntaxCache::default()),
+            revision: 0,
             disk_modified: None,
             disk_len: 0,
         };
@@ -247,6 +253,18 @@ impl Document {
             text.pop();
         }
         text
+    }
+
+    /// Length of `line` without its terminator, without materializing it.
+    pub fn line_len(&self, line: usize) -> usize {
+        let slice = self
+            .rope
+            .line(line.min(self.line_count().saturating_sub(1)));
+        let mut len = slice.len_chars();
+        while len > 0 && matches!(slice.char(len - 1), '\n' | '\r') {
+            len -= 1;
+        }
+        len
     }
 
     /// Line terminator used for newly inserted lines.
@@ -1279,6 +1297,52 @@ mod tests {
         let spans = document.syntax_spans_range(0, 2);
         assert!(!spans[0].iter().any(|span| span.kind == TokenKind::Comment));
         assert!(spans[0].iter().any(|span| span.kind == TokenKind::Keyword));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_new_file_takes_its_mode_from_the_umask() {
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+
+        let dir = std::env::temp_dir().join(format!("i3-mode-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("dir");
+        let reference = dir.join("reference");
+        std::fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .mode(0o666)
+            .open(&reference)
+            .expect("reference");
+        let expected = std::fs::metadata(&reference)
+            .expect("metadata")
+            .permissions()
+            .mode()
+            & 0o777;
+
+        let target = dir.join("fresh.txt");
+        write_atomic(&target, b"x").expect("write");
+        let actual = std::fs::metadata(&target)
+            .expect("metadata")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(actual, expected, "new files must follow the process umask");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn line_len_matches_the_stripped_line_text() {
+        for text in ["a\nb\n", "a\r\nb\r\n", "no-newline", "ünïcode\n\r\n"] {
+            let document = Document::from_text(DocumentId(1), text, None);
+            for line in 0..document.line_count() {
+                assert_eq!(
+                    document.line_len(line),
+                    document.line_text(line).chars().count(),
+                    "{text:?} line {line}"
+                );
+            }
+        }
     }
 
     #[test]

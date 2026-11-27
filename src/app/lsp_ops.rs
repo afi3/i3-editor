@@ -397,7 +397,25 @@ impl App {
                 let document = popup.document;
                 let revision = popup.revision;
                 self.state.completions = None;
-                let result = self.insert_text(&item.insert);
+                let current = self
+                    .state
+                    .documents
+                    .get(&document)
+                    .map(|document| document.revision);
+                if current != Some(revision) || self.state.active_document_id() != Some(document) {
+                    return true;
+                }
+                let result = match item.range {
+                    Some(range)
+                        if self
+                            .state
+                            .focused_pane()
+                            .is_some_and(|pane| pane.extra.is_empty()) =>
+                    {
+                        self.apply_completion_range(document, range, &item.insert)
+                    }
+                    _ => self.insert_text(&item.insert),
+                };
                 self.finish(result);
             }
             _ => {

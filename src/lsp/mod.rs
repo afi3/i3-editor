@@ -356,6 +356,17 @@ impl LspManager {
         self.config_key(path).is_some()
     }
 
+    /// Canonical path for `path`, cached; `pump` resolves paths every frame.
+    fn canonical(&mut self, path: &Path) -> PathBuf {
+        if let Some(cached) = self.canonical_paths.get(path) {
+            return cached.clone();
+        }
+        let resolved = canonical(path);
+        self.canonical_paths
+            .insert(path.to_path_buf(), resolved.clone());
+        resolved
+    }
+
     /// Drop every server and start over against a new root or configuration.
     /// Open documents are reopened by the next `pump`.
     pub fn restart(&mut self, config: &LspConfig, root: PathBuf) {

@@ -27,6 +27,59 @@ pub fn default_dir() -> Option<PathBuf> {
     crate::config::config_dir().map(|dir| dir.join("swap"))
 }
 
+/// This process's swap directory, owned for as long as the lock is held.
+pub struct Instance {
+    dir: PathBuf,
+    /// Held for the process lifetime; dropping it releases the lock.
+    _lock: File,
+}
+
+impl Instance {
+    pub fn claim(base: &Path) -> std::io::Result<Self> {
+        std::fs::create_dir_all(base)?;
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|elapsed| elapsed.as_nanos())
+            .unwrap_or_default();
+        let dir = claim_dir(base, stamp)?;
+        let lock = File::options()
+            .create_new(true)
+            .write(true)
+            .open(dir.join(LOCK_NAME))?;
+        match lock.try_lock() {
+            Ok(()) => Ok(Self { dir, _lock: lock }),
+            Err(std::fs::TryLockError::WouldBlock) => {
+                Err(std::io::Error::other("swap directory is already locked"))
+            }
+            Err(std::fs::TryLockError::Error(error)) => Err(error),
+        }
+    }
+
+    pub fn dir(&self) -> &Path {
+        &self.dir
+    }
+
+    /// Remove this instance's swaps after a graceful exit.
+    pub fn release(self) {
+        drop(self._lock);
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
+}
+
+fn claim_dir(base: &Path, stamp: u128) -> std::io::Result<PathBuf> {
+    let mut suffix = 0u32;
+    loop {
+        let candidate = base.join(format!("{}-{stamp}-{suffix}", std::process::id()));
+        match std::fs::create_dir(&candidate) {
+            Ok(()) => return Ok(candidate),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists && suffix < 64 => {
+                suffix += 1;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
 /// Write every dirty document and drop swaps for documents that are no longer
 /// dirty. `dir` is this instance's own subdirectory. Callers treat failure as a
 /// warning, not a fatal error.
@@ -109,6 +162,28 @@ pub fn recover_from(
         })
         .collect();
     let mut recovered = Vec::new();
+    for dir in sources {
+        recover_dir(&dir, own, documents, ids, &mut open_paths, &mut recovered);
+    }
+    for dir in abandoned {
+        if !has_swaps(&dir) {
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+    recovered
+}
+
+fn recover_dir(
+    dir: &Path,
+    own: &Path,
+    documents: &mut HashMap<DocumentId, Document>,
+    ids: &mut Ids,
+    open_paths: &mut HashMap<PathBuf, DocumentId>,
+    recovered: &mut Vec<DocumentId>,
+) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
     for entry in entries.flatten() {
         let name = entry.file_name().to_string_lossy().into_owned();
         let Some(path) = path_from_name(&name) else {
@@ -332,6 +407,11 @@ mod tests {
         let restored = documents.get_mut(&recovered[0]).expect("document");
         assert_eq!(restored.rope().to_string(), "one\nx");
         assert!(restored.dirty);
+        assert_eq!(
+            swaps(instance.dir()).len(),
+            1,
+            "adopted swap moves into own dir"
+        );
 
         restored.save().expect("save");
         write_to(instance.dir(), documents.values()).expect("prune");
@@ -380,6 +460,109 @@ mod tests {
             "a live instance's swaps are not adopted"
         );
         assert_eq!(swaps(first.dir()).len(), 1);
+        std::fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn a_graceful_exit_leaves_other_instances_alone() {
+        let base = dir("exit");
+        let file = base.join("note.txt");
+        std::fs::write(&file, "one\n").expect("seed");
+        let mut document = Document::open(DocumentId(1), file).expect("open");
+        document.insert(4, "x", 0, (0, 0));
+
+        let first = Instance::claim(&base).expect("first");
+        let second = Instance::claim(&base).expect("second");
+        write_to(first.dir(), [&document].into_iter()).expect("swap");
+        write_to(second.dir(), std::iter::empty::<&Document>()).expect("prune");
+
+        second.release();
+        assert_eq!(swaps(first.dir()).len(), 1);
+        std::fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn a_stale_swap_is_reported() {
+        let base = dir("stale");
+        let file = base.join("note.txt");
+        std::fs::write(&file, "one\n").expect("seed");
+        let mut document = Document::open(DocumentId(1), file.clone()).expect("open");
+        document.insert(4, "x", 0, (0, 0));
+
+        let instance = Instance::claim(&base).expect("swap");
+        write_to(instance.dir(), [&document].into_iter()).expect("swap");
+        assert!(!swap_is_stale(instance.dir(), &file));
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        std::fs::write(&file, "newer\n").expect("external write");
+        assert!(swap_is_stale(instance.dir(), &file));
+        std::fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn a_swap_remembers_the_disk_state_it_was_based_on() {
+        let base = dir("stamp");
+        let file = base.join("note.txt");
+        std::fs::write(&file, "one\n").expect("seed");
+        let mut document = Document::open(DocumentId(1), file.clone()).expect("open");
+        document.insert(4, "x", 0, (0, 0));
+        assert!(!document.disk_changed());
+
+        let crashed = Instance::claim(&base).expect("swap");
+        write_to(crashed.dir(), [&document].into_iter()).expect("swap");
+        drop(crashed);
+        // Another program writes the file after the swap was taken.
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        std::fs::write(&file, "external\n").expect("external write");
+
+        let instance = Instance::claim(&base).expect("swap");
+        let mut documents = HashMap::new();
+        let mut ids = Ids::default();
+        let recovered = recover_from(&base, instance.dir(), &mut documents, &mut ids);
+        assert_eq!(recovered.len(), 1);
+        let restored = &documents[&recovered[0]];
+        assert_eq!(restored.rope().to_string(), "one\nx");
+        assert!(
+            restored.disk_changed(),
+            "a swap must keep the stamp it was written against"
+        );
+        std::fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn a_swap_without_a_stamp_still_reads_as_text() {
+        let base = dir("legacy");
+        let file = base.join("note.txt");
+        std::fs::write(&file, "one\n").expect("seed");
+        let instance = Instance::claim(&base).expect("swap");
+        // Pre-directory layout: the swap sits directly in the base directory.
+        std::fs::write(base.join(swap_name(&file)), "legacy body\n").expect("swap");
+
+        let mut documents = HashMap::new();
+        let mut ids = Ids::default();
+        let recovered = recover_from(&base, instance.dir(), &mut documents, &mut ids);
+        assert_eq!(recovered.len(), 1);
+        let restored = &documents[&recovered[0]];
+        assert_eq!(restored.rope().to_string(), "legacy body\n");
+        assert!(restored.dirty);
+        std::fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn a_swap_payload_is_plain_buffer_text() {
+        let base = dir("plain");
+        let file = base.join("note.txt");
+        std::fs::write(&file, "one\n").expect("seed");
+        let mut document = Document::open(DocumentId(1), file.clone()).expect("open");
+        document.insert(4, "x", 0, (0, 0));
+
+        let instance = Instance::claim(&base).expect("swap");
+        write_to(instance.dir(), [&document].into_iter()).expect("swap");
+        let payload = std::fs::read_to_string(instance.dir().join(swap_name(&file))).expect("swap");
+        assert_eq!(
+            payload, "one\nx",
+            "an older build must read the buffer as-is"
+        );
+        assert!(instance.dir().join(stamp_name(&file)).exists());
         std::fs::remove_dir_all(&base).ok();
     }
 }

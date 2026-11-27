@@ -124,6 +124,20 @@ pub fn default_path() -> Option<PathBuf> {
     crate::config::config_dir().map(|dir| dir.join("session.toml"))
 }
 
+/// Session file for one workspace root. Two editors in different projects then
+/// keep their own layout instead of overwriting a single shared file. Keyed by
+/// the canonical root so a symlinked path lands on the same file.
+pub fn path_for(root: &Path) -> Option<PathBuf> {
+    use sha2::{Digest, Sha256};
+    let root = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+    let digest = Sha256::digest(root.to_string_lossy().as_bytes());
+    let tag: String = digest[..8]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    crate::config::config_dir().map(|dir| dir.join(format!("session-{tag}.toml")))
+}
+
 /// Restore the session for this directory. Warnings are returned for the status
 /// bar; a missing or foreign session is not an error.
 pub fn restore(state: &mut AppState) -> Vec<String> {
