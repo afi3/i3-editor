@@ -6,10 +6,12 @@
 //! runs until the `lsp_install` command is invoked.
 
 use std::fs;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
+use std::time::{Duration, Instant};
 
 use crate::config::LspServerConfig;
 
@@ -19,6 +21,9 @@ const NPM_TYPESCRIPT_LS: &str = "typescript-language-server@5.3.0";
 const NPM_YAML_LS: &str = "yaml-language-server@1.19.2";
 const NPM_DOCKER_LS: &str = "dockerfile-language-server-nodejs@0.15.0";
 const PIP_PYTHON_LS: &str = "python-lsp-server==1.15.0";
+
+/// npm/pip may take minutes on a cold cache; anything past this is hung.
+const INSTALL_TIMEOUT: Duration = Duration::from_secs(600);
 
 #[derive(Clone, Copy, Debug)]
 pub struct Provider {
@@ -348,31 +353,97 @@ fn run(program: &str, args: &[&str]) -> Result<String, String> {
 }
 
 fn run_path(program: &Path, args: &[&str], cwd: Option<&Path>) -> Result<String, String> {
+    run_with_timeout(program, args, cwd, INSTALL_TIMEOUT)
+}
+
+/// Run a child with a deadline. Output goes to temp files instead of pipes so a
+/// chatty installer cannot fill a pipe buffer and look hung, and a process that
+/// never exits is killed instead of blocking the worker forever — which used to
+/// leave "install already running" stuck for the rest of the session.
+fn run_with_timeout(
+    program: &Path,
+    args: &[&str],
+    cwd: Option<&Path>,
+    timeout: Duration,
+) -> Result<String, String> {
+    let mut stdout = tempfile::tempfile().map_err(|error| format!("scratch: {error}"))?;
+    let mut stderr = tempfile::tempfile().map_err(|error| format!("scratch: {error}"))?;
     let mut command = Command::new(program);
     command
         .args(args)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+        .stdout(Stdio::from(
+            stdout
+                .try_clone()
+                .map_err(|error| format!("scratch: {error}"))?,
+        ))
+        .stderr(Stdio::from(
+            stderr
+                .try_clone()
+                .map_err(|error| format!("scratch: {error}"))?,
+        ));
     if let Some(cwd) = cwd {
         command.current_dir(cwd);
     }
-    let output = command
-        .output()
+    let mut child = command
+        .spawn()
         .map_err(|error| format!("{}: {error}", program.display()))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let first = stderr
-            .lines()
-            .find(|line| !line.trim().is_empty())
-            .unwrap_or("");
-        return Err(format!("{} failed: {}", program.display(), first.trim()));
+    let deadline = Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                let mut out = String::new();
+                let mut err = String::new();
+                let _ = stdout.seek(SeekFrom::Start(0));
+                let _ = stdout.read_to_string(&mut out);
+                let _ = stderr.seek(SeekFrom::Start(0));
+                let _ = stderr.read_to_string(&mut err);
+                if !status.success() {
+                    let first = err
+                        .lines()
+                        .find(|line| !line.trim().is_empty())
+                        .unwrap_or("");
+                    return Err(format!("{} failed: {}", program.display(), first.trim()));
+                }
+                return Ok(out);
+            }
+            Ok(None) if Instant::now() < deadline => {
+                thread::sleep(Duration::from_millis(50));
+            }
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!(
+                    "{} timed out after {}s",
+                    program.display(),
+                    timeout.as_secs()
+                ));
+            }
+            Err(error) => return Err(format!("{}: {error}", program.display())),
+        }
     }
-    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[cfg(unix)]
+    fn a_hung_installer_is_killed_at_the_deadline() {
+        let started = Instant::now();
+        let error = run_with_timeout(
+            Path::new("sh"),
+            &["-c", "sleep 5"],
+            None,
+            Duration::from_millis(150),
+        )
+        .expect_err("must time out");
+        assert!(error.contains("timed out"), "{error}");
+        assert!(
+            started.elapsed() < Duration::from_secs(3),
+            "the kill must happen at the deadline"
+        );
+    }
 
     #[test]
     fn providers_match_extensions_and_dockerfile_names() {

@@ -192,12 +192,28 @@ impl ExplorerState {
 
     pub fn create(&mut self, path: &Path, directory: bool) -> Result<PathBuf> {
         let path = path.to_path_buf();
-        if path.file_name().is_none() {
+        let Some(name) = path.file_name().map(|name| name.to_owned()) else {
             return Err(Error::InvalidPath(path));
-        }
+        };
         if path.exists() {
             return Err(Error::AlreadyExists(path));
         }
+        // Resolve the parent so `..` and symlinks cannot place the entry outside
+        // the workspace; `duplicate` already confines itself the same way.
+        let root = self
+            .root
+            .canonicalize()
+            .unwrap_or_else(|_| self.root.clone());
+        let parent = path
+            .parent()
+            .ok_or_else(|| Error::InvalidPath(path.clone()))?;
+        let parent = parent
+            .canonicalize()
+            .map_err(|error| Error::io("create", parent, error))?;
+        if !parent.starts_with(&root) {
+            return Err(Error::InvalidPath(path));
+        }
+        let path = parent.join(name);
         let result = if directory {
             std::fs::create_dir(&path)
         } else {
@@ -397,6 +413,38 @@ mod tests {
 
         assert!(explorer.duplicate(&source).is_err());
         assert!(!dir.join("secret copy.txt").exists());
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::remove_dir_all(&outside).ok();
+    }
+}
+#[cfg(test)]
+mod create_guard_tests {
+    use super::*;
+
+    #[test]
+    fn create_refuses_paths_outside_the_root() {
+        let dir = std::env::temp_dir().join(format!("i3-explorer-create-{}", std::process::id()));
+        let outside =
+            std::env::temp_dir().join(format!("i3-explorer-outside-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&outside);
+        std::fs::create_dir_all(&dir).expect("dir");
+        std::fs::create_dir_all(&outside).expect("outside");
+        let mut explorer = ExplorerState::new(dir.clone(), false).expect("explorer");
+
+        let escaped = outside.join("escape.txt");
+        assert!(explorer.create(&escaped, false).is_err());
+        assert!(!escaped.exists(), "nothing may be created outside the root");
+
+        let traversal = dir.join("..").join("traversal.txt");
+        assert!(explorer.create(&traversal, false).is_err());
+        assert!(!dir.join("..").join("traversal.txt").exists());
+
+        let inside = dir.join("new.txt");
+        let created = explorer.create(&inside, false).expect("create inside");
+        assert!(created.is_file());
+        assert!(created.starts_with(dir.canonicalize().expect("canonical")));
+
         std::fs::remove_dir_all(&dir).ok();
         std::fs::remove_dir_all(&outside).ok();
     }
