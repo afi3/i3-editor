@@ -129,6 +129,7 @@ fn build_index(
     let mut embedded = 0usize;
     let mut indexed = 0usize;
     let mut failed = 0usize;
+    let mut too_large = 0usize;
     let mut last_error: Option<String> = None;
     for (file, text) in &files {
         let hash = hash_text(text);
@@ -148,7 +149,13 @@ fn build_index(
         }
         let chunks: Vec<crate::semantic::Chunk> = crate::semantic::chunk(file, text, 40)
             .into_iter()
-            .filter(|chunk| chunk.text.chars().count() <= max_chars)
+            .filter(|chunk| {
+                let fits = chunk.text.chars().count() <= max_chars;
+                if !fits {
+                    too_large += 1;
+                }
+                fits
+            })
             .collect();
         if chunks.is_empty() {
             continue;
@@ -196,6 +203,9 @@ fn build_index(
     }
     if failed > 0 {
         summary.push_str(&format!(", {failed} chunk(s) failed"));
+    }
+    if too_large > 0 {
+        summary.push_str(&format!(", {too_large} chunk(s) too large"));
     }
     Ok(summary)
 }

@@ -1068,6 +1068,10 @@ impl App {
     }
 
     pub(crate) fn start_ai_request(&mut self) {
+        // A live task must never be replaced: dropping it cancels the request.
+        if self.ai_task.is_some() {
+            return;
+        }
         if self.ai_compact_dropped.is_some() {
             return;
         }

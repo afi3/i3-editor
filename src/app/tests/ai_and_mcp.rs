@@ -876,6 +876,111 @@ fn a_failed_batch_keeps_the_index_built_so_far() {
 }
 
 #[test]
+fn oversized_chunks_are_reported() {
+    let _guard = crate::semantic::lock_for_test();
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
+    let address = listener.local_addr().expect("address");
+    std::thread::spawn(move || {
+        let Ok((mut stream, _)) = listener.accept() else {
+            return;
+        };
+        let mut request = [0u8; 8192];
+        let _ = stream.read(&mut request);
+        let body = r#"{"data":[{"index":0,"embedding":[1,0]}]}"#;
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        let _ = stream.write_all(response.as_bytes());
+    });
+
+    // 40 short lines fill the first chunk; the 600-char line is its own chunk and
+    // cannot fit the 500-char budget, so it must be counted, not dropped silently.
+    let mut text = String::new();
+    for line in 0..40 {
+        text.push_str(&format!("line {line}\n"));
+    }
+    text.push_str(&"x".repeat(600));
+    text.push('\n');
+
+    let (mut app, dir) = fixture(&text);
+    app.state.config.ai = crate::ai::test_config(format!("http://{address}/v1"));
+    app.state.config.ai.api_key = "test-key".to_string();
+    app.state.config.ai.embedding_model = "mock-embed".to_string();
+    app.state.config.ai.semantic_max_chars = 500;
+    let index_path = dir.join("semantic_index.json");
+    crate::semantic::use_path_for_test(Some(index_path.clone()));
+
+    app.dispatch(Command::AiSemanticIndex).expect("index");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    while std::time::Instant::now() < deadline && app.semantic_index_task.is_some() {
+        app.pump_semantic();
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(app.semantic_index_task.is_none(), "build did not finish");
+    assert!(
+        app.state.ui.message.contains("1 chunk(s) too large"),
+        "{}",
+        app.state.ui.message
+    );
+    let index = crate::semantic::Index::load(&index_path).expect("index");
+    assert_eq!(index.entries.len(), 1);
+
+    crate::semantic::use_path_for_test(None);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn a_live_request_is_not_replaced() {
+    use std::io::Read;
+    use std::net::TcpListener;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::{Duration, Instant};
+
+    let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
+    let address = listener.local_addr().expect("address");
+    let connections = Arc::new(AtomicUsize::new(0));
+    let seen = Arc::clone(&connections);
+    std::thread::spawn(move || {
+        listener.set_nonblocking(true).ok();
+        let deadline = Instant::now() + Duration::from_millis(900);
+        while Instant::now() < deadline {
+            match listener.accept() {
+                Ok((mut stream, _)) => {
+                    seen.fetch_add(1, Ordering::Relaxed);
+                    let mut request = [0u8; 8192];
+                    let _ = stream.read(&mut request);
+                    // Hold the connection so the client task stays alive.
+                    std::thread::sleep(Duration::from_millis(300));
+                }
+                Err(_) => std::thread::sleep(Duration::from_millis(10)),
+            }
+        }
+    });
+
+    let (mut app, dir) = fixture("x\n");
+    app.state.config.ai = crate::ai::test_config(format!("http://{address}/v1"));
+    app.state.config.ai.api_key = "test-key".to_string();
+    app.state.config.ai.retry_attempts = 0;
+
+    app.finish_ai_question("first".to_string(), Vec::new());
+    assert!(app.ai_task.is_some(), "the first request must be live");
+    app.finish_ai_question("second".to_string(), Vec::new());
+
+    std::thread::sleep(Duration::from_millis(400));
+    assert_eq!(
+        connections.load(Ordering::Relaxed),
+        1,
+        "a live request must not be replaced by a second one"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn the_subscription_picker_releases_one_entry() {
     let (mut app, dir) = fixture("x\n");
     app.mcp_subscriptions
