@@ -13,7 +13,22 @@ const MAX_BYTES: u64 = 1 << 20;
 
 /// `<config>/i3-editor/log.jsonl`, when a config directory is resolvable.
 pub fn path() -> Option<PathBuf> {
+    #[cfg(test)]
+    if let Ok(override_path) = TEST_PATH.lock()
+        && let Some(path) = override_path.as_ref()
+    {
+        return Some(path.clone());
+    }
     crate::config::config_dir().map(|dir| dir.join("log.jsonl"))
+}
+
+#[cfg(test)]
+static TEST_PATH: std::sync::Mutex<Option<PathBuf>> = std::sync::Mutex::new(None);
+
+/// Point the logger at `path` for one test, or back at the real location.
+#[cfg(test)]
+pub(crate) fn use_path_for_test(path: Option<PathBuf>) {
+    *TEST_PATH.lock().expect("log path override") = path;
 }
 
 /// Record one event; failures are ignored on purpose, logging must never abort

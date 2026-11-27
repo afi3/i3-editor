@@ -298,6 +298,63 @@ fn ai_commands_open_and_toggle_the_panel() {
 }
 
 #[test]
+fn blocked_calls_and_model_requests_reach_the_log_file() {
+    let (app, dir) = fixture("x\n");
+    let log = dir.join("log.jsonl");
+    crate::logging::use_path_for_test(Some(log.clone()));
+
+    crate::app::audit::blocked(
+        &app.state,
+        "call-9",
+        "native",
+        "write_file",
+        &serde_json::json!({"path": "new.txt"}),
+        "tool policy",
+    );
+    crate::app::audit::model_request(
+        &app.state,
+        &crate::app::audit::ModelRequest {
+            round: 2,
+            model: "mock-model",
+            original_messages: 4,
+            sent_messages: 3,
+            estimated_tokens: 120,
+            latency: std::time::Duration::from_millis(7),
+            stop: "tool_calls",
+            prompt_tokens: Some(100),
+            completion_tokens: Some(20),
+            tool_calls: 1,
+        },
+    );
+
+    crate::logging::use_path_for_test(None);
+    let text = std::fs::read_to_string(&log).expect("log file");
+    let events: Vec<serde_json::Value> = text
+        .lines()
+        .filter_map(|line| serde_json::from_str(line).ok())
+        .collect();
+    assert!(
+        events.iter().any(|event| {
+            event["event"] == "tool_blocked"
+                && event["tool"] == "write_file"
+                && event["reason"] == "tool policy"
+                && event.get("arguments").is_none()
+        }),
+        "arguments must stay out of the file: {events:?}"
+    );
+    assert!(
+        events.iter().any(|event| {
+            event["event"] == "model_request"
+                && event["model"] == "mock-model"
+                && event["round"] == 2
+                && event["latency_ms"] == 7
+        }),
+        "{events:?}"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn releasing_mcp_subscriptions_clears_their_bookkeeping() {
     let (mut app, dir) = fixture("x\n");
     app.mcp_subscriptions
