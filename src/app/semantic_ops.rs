@@ -1,6 +1,56 @@
 //! Semantic-memory commands: build the embedding index and feed it to prompts.
+//!
+//! Query embedding runs on its own thread: a provider round-trip must never
+//! freeze the editor while a prompt is submitted.
+
+use std::sync::mpsc::{self, Receiver};
+
+use crate::config::AiConfig;
+use crate::state::AiAttachment;
 
 use super::App;
+
+/// Semantic hits for one question, plus the notes worth showing in the panel.
+pub(crate) struct Hit {
+    pub(crate) attachments: Vec<AiAttachment>,
+    pub(crate) notes: Vec<String>,
+}
+
+/// One in-flight query embedding, holding the question it belongs to.
+pub(crate) struct QueryTask {
+    pub(crate) question: String,
+    pub(crate) attachments: Vec<AiAttachment>,
+    rx: Receiver<Hit>,
+}
+
+impl QueryTask {
+    /// Start the embedding thread. Lexical attachments are carried along so the
+    /// finished prompt keeps whatever the UI thread already gathered.
+    pub(crate) fn spawn(
+        config: AiConfig,
+        model: String,
+        question: String,
+        attachments: Vec<AiAttachment>,
+        used: usize,
+    ) -> Self {
+        let (tx, rx) = mpsc::channel();
+        let query = question.clone();
+        let _ = std::thread::Builder::new()
+            .name("i3-semantic-query".to_string())
+            .spawn(move || {
+                let _ = tx.send(semantic_hits(&config, &model, &query, used));
+            });
+        Self {
+            question,
+            attachments,
+            rx,
+        }
+    }
+
+    pub(crate) fn try_recv(&self) -> Option<Hit> {
+        self.rx.try_recv().ok()
+    }
+}
 
 impl App {
     /// Rebuild the semantic index from open documents. Explicit on purpose: every
@@ -109,69 +159,89 @@ impl App {
         }
     }
 
-    /// Chunks closest to `query`, appended to the auto context while it fits.
-    pub(crate) fn semantic_ai_context(
-        &mut self,
-        query: &str,
-        used: &mut usize,
-    ) -> Vec<crate::state::AiAttachment> {
-        let Some(path) = crate::semantic::default_path() else {
-            return Vec::new();
+    /// Finish the question once its query embedding lands. Does nothing while the
+    /// task is still running, so the loop keeps drawing and taking input.
+    pub(crate) fn pump_semantic(&mut self) {
+        let Some(task) = self.semantic_task.as_ref() else {
+            return;
         };
-        let Some(index) = crate::semantic::Index::load(&path) else {
-            self.state
-                .ai
-                .entries
-                .push("[context] semantic index missing".to_string());
-            return Vec::new();
+        let Some(hit) = task.try_recv() else {
+            return;
         };
-        let model = self.state.config.ai.embedding_model.trim().to_string();
-        if model.is_empty() || model != index.model {
-            self.state.ai.entries.push(format!(
-                "[context] semantic index uses model {}; rebuild it",
-                index.model
-            ));
-            return Vec::new();
+        let task = self.semantic_task.take().expect("checked above");
+        for note in hit.notes {
+            self.state.ai.entries.push(note);
         }
-        let Ok(mut vectors) = crate::ai::embed(&self.state.config.ai, &model, &[query.to_string()])
-        else {
-            return Vec::new();
-        };
-        let Some(query_vector) = vectors.pop() else {
-            return Vec::new();
-        };
-        let budget = self.state.config.ai.semantic_max_chars.max(500);
-        let mut attached = Vec::new();
-        for entry in crate::semantic::top_k(
-            &index,
-            &query_vector,
-            self.state.config.ai.semantic_top_k,
-            0.2,
-        ) {
-            let remaining = budget.saturating_sub(*used);
-            if remaining == 0 {
-                break;
-            }
-            let text = crate::ai::truncate_text(&entry.chunk.text, remaining);
-            let chars = text.chars().count();
-            if chars == 0 {
-                continue;
-            }
-            *used += chars;
-            let label = format!(
-                "{}:{}-{} (semantic)",
-                entry.chunk.path.display(),
-                entry.chunk.start_line + 1,
-                entry.chunk.end_line
-            );
-            self.state
-                .ai
-                .entries
-                .push(format!("[context] semantic attached {label}"));
-            attached.push(crate::state::AiAttachment { path: label, text });
-        }
-        attached
+        let question = task.question;
+        let mut attachments = task.attachments;
+        attachments.extend(hit.attachments);
+        self.finish_ai_question(question, attachments);
+        self.dirty = true;
     }
+}
+
+fn semantic_hits(config: &AiConfig, model: &str, query: &str, used: usize) -> Hit {
+    let mut notes = Vec::new();
+    let Some(path) = crate::semantic::default_path() else {
+        return Hit {
+            attachments: Vec::new(),
+            notes,
+        };
+    };
+    let Some(index) = crate::semantic::Index::load(&path) else {
+        notes.push("[context] semantic index missing".to_string());
+        return Hit {
+            attachments: Vec::new(),
+            notes,
+        };
+    };
+    if model.is_empty() || model != index.model {
+        notes.push(format!(
+            "[context] semantic index uses model {}; rebuild it",
+            index.model
+        ));
+        return Hit {
+            attachments: Vec::new(),
+            notes,
+        };
+    }
+    let Ok(mut vectors) = crate::ai::embed(config, model, &[query.to_string()]) else {
+        notes.push("[context] semantic query embedding failed".to_string());
+        return Hit {
+            attachments: Vec::new(),
+            notes,
+        };
+    };
+    let Some(query_vector) = vectors.pop() else {
+        return Hit {
+            attachments: Vec::new(),
+            notes,
+        };
+    };
+    let budget = config.semantic_max_chars.max(500);
+    let mut used = used;
+    let mut attachments = Vec::new();
+    for entry in crate::semantic::top_k(&index, &query_vector, config.semantic_top_k, 0.2) {
+        let remaining = budget.saturating_sub(used);
+        if remaining == 0 {
+            break;
+        }
+        let text = crate::ai::truncate_text(&entry.chunk.text, remaining);
+        let chars = text.chars().count();
+        if chars == 0 {
+            continue;
+        }
+        used += chars;
+        let label = format!(
+            "{}:{}-{} (semantic)",
+            entry.chunk.path.display(),
+            entry.chunk.start_line + 1,
+            entry.chunk.end_line
+        );
+        notes.push(format!("[context] semantic attached {label}"));
+        attachments.push(AiAttachment { path: label, text });
+    }
+    Hit { attachments, notes }
 }
 
 fn hash_text(text: &str) -> String {

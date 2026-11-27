@@ -66,6 +66,7 @@ impl App {
             last_swap: std::time::Instant::now(),
             lsp: None,
             mcp: None,
+            semantic_task: None,
             ai_task: None,
             ai_stream: None,
             ai_streamed: false,
@@ -195,6 +196,8 @@ pub struct App {
     pub(crate) lsp: Option<crate::lsp::LspManager>,
     /// MCP servers configured for this workspace.
     pub(crate) mcp: Option<crate::mcp::McpManager>,
+    /// In-flight semantic query embedding; `None` when idle.
+    pub(crate) semantic_task: Option<crate::app::semantic_ops::QueryTask>,
     /// Running AI request, if any.
     pub(crate) ai_task: Option<crate::ai::Task>,
     pub(crate) ai_stream: Option<crate::ai::StreamTask>,
@@ -351,6 +354,7 @@ impl App {
             last_swap: std::time::Instant::now(),
             lsp: None,
             mcp: None,
+            semantic_task: None,
             ai_task: None,
             ai_stream: None,
             ai_streamed: false,
@@ -497,6 +501,7 @@ impl App {
             self.pump_lsp();
             self.pump_mcp();
             self.pump_ai();
+            self.pump_semantic();
             self.pump_native_check();
             self.pump_native_verify();
             self.pump_sampling();

@@ -26,6 +26,16 @@ static TEST_PATH: std::sync::Mutex<Option<PathBuf>> = std::sync::Mutex::new(None
 
 /// Point the index at `path` for one test, or back at the real location.
 #[cfg(test)]
+#[cfg(test)]
+static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Serialise tests that move the index path; the override is process-global.
+#[cfg(test)]
+pub(crate) fn lock_for_test() -> std::sync::MutexGuard<'static, ()> {
+    TEST_LOCK.lock().expect("semantic test lock")
+}
+
+#[cfg(test)]
 pub(crate) fn use_path_for_test(path: Option<PathBuf>) {
     *TEST_PATH.lock().expect("semantic path override") = path;
 }

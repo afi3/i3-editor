@@ -422,6 +422,7 @@ fn watcher_faults_are_logged() {
 
 #[test]
 fn semantic_index_and_status_report_the_built_index() {
+    let _guard = crate::semantic::lock_for_test();
     use std::io::{Read, Write};
     use std::net::TcpListener;
 
@@ -465,6 +466,7 @@ Connection: close
 
 #[test]
 fn an_unchanged_file_is_embedded_only_once() {
+    let _guard = crate::semantic::lock_for_test();
     use std::io::{Read, Write};
     use std::net::TcpListener;
 
@@ -522,6 +524,7 @@ fn an_unchanged_file_is_embedded_only_once() {
 
 #[test]
 fn semantic_memory_attaches_the_closest_chunk() {
+    let _guard = crate::semantic::lock_for_test();
     use std::io::{Read, Write};
     use std::net::TcpListener;
     use std::time::{Duration, Instant};
@@ -575,6 +578,7 @@ fn semantic_memory_attaches_the_closest_chunk() {
     ));
     let deadline = Instant::now() + Duration::from_secs(15);
     while Instant::now() < deadline {
+        app.pump_semantic();
         app.pump_ai();
         if app
             .state
@@ -596,6 +600,109 @@ fn semantic_memory_attaches_the_closest_chunk() {
         "{:?}",
         app.state.ai.entries
     );
+
+    crate::semantic::use_path_for_test(None);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn semantic_query_embedding_does_not_block_the_editor() {
+    let _guard = crate::semantic::lock_for_test();
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::time::{Duration, Instant};
+
+    let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
+    let address = listener.local_addr().expect("address");
+    std::thread::spawn(move || {
+        for (body, delay) in [
+            (r#"{"data":[{"index":0,"embedding":[1,0]}]}"#, 300u64),
+            (
+                r#"{"choices":[{"message":{"role":"assistant","content":"ok"}}]}"#,
+                0u64,
+            ),
+        ] {
+            let Ok((mut stream, _)) = listener.accept() else {
+                return;
+            };
+            let mut request = [0u8; 16384];
+            let _ = stream.read(&mut request);
+            std::thread::sleep(Duration::from_millis(delay));
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            let _ = stream.write_all(response.as_bytes());
+        }
+    });
+
+    let (mut app, dir) = fixture("x\n");
+    app.state.config.ai = crate::ai::test_config(format!("http://{address}/v1"));
+    app.state.config.ai.api_key = "test-key".to_string();
+    app.state.config.ai.embedding_model = "mock-embed".to_string();
+    app.state.config.ai.semantic_memory = true;
+    app.state.config.ai.semantic_top_k = 1;
+    let index_path = dir.join("semantic_index.json");
+    crate::semantic::use_path_for_test(Some(index_path.clone()));
+    let mut index = crate::semantic::Index::empty("mock-embed");
+    index.entries.push(crate::semantic::Entry {
+        chunk: crate::semantic::Chunk {
+            path: dir.join("note.txt"),
+            start_line: 0,
+            end_line: 1,
+            text: "the needle".to_string(),
+        },
+        vector: vec![1.0, 0.0],
+    });
+    index.save(&index_path).expect("seed");
+
+    app.dispatch(Command::AiChat).expect("panel");
+    app.state.ai.input = "where is the needle".to_string();
+    app.state.ai.cursor = app.state.ai.input.chars().count();
+    app.handle_key(ratatui::crossterm::event::KeyEvent::new(
+        ratatui::crossterm::event::KeyCode::Enter,
+        ratatui::crossterm::event::KeyModifiers::NONE,
+    ));
+
+    assert!(
+        app.semantic_task.is_some(),
+        "the question must be deferred to the worker"
+    );
+    assert!(
+        !app.state
+            .ai
+            .conversation
+            .iter()
+            .any(|message| message["role"] == "user"),
+        "the request must not start before the embedding arrives: {:?}",
+        app.state.ai.conversation
+    );
+
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while Instant::now() < deadline {
+        app.pump_semantic();
+        app.pump_ai();
+        if app
+            .state
+            .ai
+            .conversation
+            .iter()
+            .any(|message| message.to_string().contains("(semantic)"))
+        {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(
+        app.state
+            .ai
+            .conversation
+            .iter()
+            .any(|message| message.to_string().contains("(semantic)")),
+        "{:?}",
+        app.state.ai.conversation
+    );
+    assert!(app.semantic_task.is_none(), "the task must be consumed");
 
     crate::semantic::use_path_for_test(None);
     std::fs::remove_dir_all(&dir).ok();

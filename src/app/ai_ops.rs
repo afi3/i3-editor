@@ -896,9 +896,6 @@ impl App {
                 text,
             });
         }
-        if self.state.config.ai.semantic_memory {
-            attached.extend(self.semantic_ai_context(query, &mut used));
-        }
         attached
     }
 
@@ -920,16 +917,67 @@ impl App {
         if question.is_empty() && attachments.is_empty() {
             return;
         }
-        let auto = if attachments.is_empty()
-            && (self.state.config.ai.auto_context || self.state.config.ai.semantic_memory)
+        if attachments.is_empty()
+            && self.state.config.ai.semantic_memory
+            && !self.state.config.ai.embedding_model.trim().is_empty()
+            && self.semantic_task.is_none()
         {
+            let lexical = if self.state.config.ai.auto_context {
+                self.auto_ai_context(&question)
+            } else {
+                Vec::new()
+            };
+            let used = lexical
+                .iter()
+                .map(|attachment| attachment.text.chars().count())
+                .sum();
+            let model = self.state.config.ai.embedding_model.trim().to_string();
+            self.state
+                .ai
+                .entries
+                .push(format!("[context] embedding the question for {model}"));
+            self.semantic_task = Some(crate::app::semantic_ops::QueryTask::spawn(
+                self.state.config.ai.clone(),
+                model,
+                question.clone(),
+                lexical,
+                used,
+            ));
+            self.consume_ai_input(&question);
+            self.dirty = true;
+            return;
+        }
+        let auto = if attachments.is_empty() && self.state.config.ai.auto_context {
             self.auto_ai_context(&question)
         } else {
             Vec::new()
         };
+        let mut all = attachments;
+        all.extend(auto);
+        self.consume_ai_input(&question);
+        self.finish_ai_question(question, all);
+    }
+
+    /// Clear the input row after the question was taken.
+    fn consume_ai_input(&mut self, question: &str) {
+        self.state.ai.input.clear();
+        self.state.ai.cursor = 0;
+        self.state.ai.scroll = 0;
+        self.state.ai.scroll_x = 0;
+        if !question.is_empty() {
+            self.state.ai.entries.push(format!("> {question}"));
+        }
+    }
+
+    /// Turn a finished question plus its context into a request, or queue it
+    /// while the tool list is still loading.
+    pub(crate) fn finish_ai_question(
+        &mut self,
+        question: String,
+        attachments: Vec<crate::state::AiAttachment>,
+    ) {
         let context = attachments
             .iter()
-            .chain(auto.iter())
             .map(|attachment| {
                 format!(
                     "<context path=\"{}\">\n{}\n</context>",
@@ -945,13 +993,6 @@ impl App {
         } else {
             format!("{context}\n\n{question}")
         };
-        self.state.ai.input.clear();
-        self.state.ai.cursor = 0;
-        self.state.ai.scroll = 0;
-        self.state.ai.scroll_x = 0;
-        if !question.is_empty() {
-            self.state.ai.entries.push(format!("> {question}"));
-        }
         self.prime_ai_tools();
         if self.ai_tools_pending() {
             self.state.ai.entries.push("[tools] loading...".to_string());
