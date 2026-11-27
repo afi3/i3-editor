@@ -52,9 +52,15 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       # Windows is compile-checked, not supported: this job exists so the
-      # `#[cfg(not(unix))]` paths never rot. Unix-only tests are gated.
+      # `#[cfg(not(unix))]` paths and the C dependencies never rot. Unix-only
+      # tests are gated with `#[cfg(unix)]`, so `--all-targets` compiles here.
       - name: Check
-        run: cargo check --all-targets --locked
+        run: cargo check --all-targets --all-features --locked
+
+      # `check` never links; building the binary is what proves the vendored C
+      # dependencies (tree-sitter, Lua) produce a Windows executable.
+      - name: Link the binary
+        run: cargo build --locked --bin i3-editor
 
   audit:
     name: audit
