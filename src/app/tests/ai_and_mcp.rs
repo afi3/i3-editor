@@ -784,6 +784,98 @@ fn semantic_query_embedding_does_not_block_the_editor() {
 }
 
 #[test]
+fn embeddings_retry_a_transient_failure() {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
+    let address = listener.local_addr().expect("address");
+    std::thread::spawn(move || {
+        for (status, body) in [
+            ("500 Internal Server Error", ""),
+            ("200 OK", r#"{"data":[{"index":0,"embedding":[1,0]}]}"#),
+        ] {
+            let Ok((mut stream, _)) = listener.accept() else {
+                return;
+            };
+            let mut request = [0u8; 8192];
+            let _ = stream.read(&mut request);
+            let response = format!(
+                "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            let _ = stream.write_all(response.as_bytes());
+        }
+    });
+
+    let mut config = crate::ai::test_config(format!("http://{address}/v1"));
+    config.api_key = "test-key".to_string();
+    config.retry_attempts = 1;
+    config.retry_base_ms = 10;
+    let vectors =
+        crate::ai::embed(&config, "mock-embed", &["x".to_string()]).expect("retry succeeds");
+    assert_eq!(vectors, vec![vec![1.0, 0.0]]);
+}
+
+#[test]
+fn a_failed_batch_keeps_the_index_built_so_far() {
+    let _guard = crate::semantic::lock_for_test();
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
+    let address = listener.local_addr().expect("address");
+    let data: Vec<serde_json::Value> = (0..16)
+        .map(|index| serde_json::json!({"index": index, "embedding": [1.0, 0.0]}))
+        .collect();
+    let first_body = serde_json::json!({"data": data}).to_string();
+    std::thread::spawn(move || {
+        for (status, body) in [
+            ("200 OK", first_body.as_str()),
+            ("500 Internal Server Error", ""),
+        ] {
+            let Ok((mut stream, _)) = listener.accept() else {
+                return;
+            };
+            let mut request = [0u8; 32768];
+            let _ = stream.read(&mut request);
+            let response = format!(
+                "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            let _ = stream.write_all(response.as_bytes());
+        }
+    });
+
+    let text: String = (0..700).map(|line| format!("line {line}\n")).collect();
+    let (mut app, dir) = fixture(&text);
+    app.state.config.ai = crate::ai::test_config(format!("http://{address}/v1"));
+    app.state.config.ai.api_key = "test-key".to_string();
+    app.state.config.ai.embedding_model = "mock-embed".to_string();
+    app.state.config.ai.retry_attempts = 0;
+    let index_path = dir.join("semantic_index.json");
+    crate::semantic::use_path_for_test(Some(index_path.clone()));
+
+    app.dispatch(Command::AiSemanticIndex).expect("index");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    while std::time::Instant::now() < deadline && app.semantic_index_task.is_some() {
+        app.pump_semantic();
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(app.semantic_index_task.is_none(), "build did not finish");
+    assert!(
+        app.state.ui.message.contains("2 chunk(s) failed"),
+        "the failed batch must be reported: {}",
+        app.state.ui.message
+    );
+    let index = crate::semantic::Index::load(&index_path).expect("index");
+    assert_eq!(index.entries.len(), 16, "the successful batch is kept");
+
+    crate::semantic::use_path_for_test(None);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn the_subscription_picker_releases_one_entry() {
     let (mut app, dir) = fixture("x\n");
     app.mcp_subscriptions

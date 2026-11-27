@@ -241,6 +241,23 @@ pub fn embed(config: &AiConfig, model: &str, inputs: &[String]) -> Result<Vec<Ve
     ));
     curl_config.push_str(&format!("max-time = {}\n", config.timeout_secs.max(1)));
 
+    // Same policy as chat: retry_attempts extra tries with a fixed backoff. A
+    // single 5xx used to discard an entire index build.
+    let attempts = config.retry_attempts.saturating_add(1).max(1);
+    let mut last_error = "embeddings failed".to_string();
+    for attempt in 0..attempts {
+        match embed_once(&curl_config, inputs) {
+            Ok(vectors) => return Ok(vectors),
+            Err(error) => last_error = error,
+        }
+        if attempt + 1 < attempts {
+            thread::sleep(Duration::from_millis(config.retry_base_ms.max(10)));
+        }
+    }
+    Err(last_error)
+}
+
+fn embed_once(curl_config: &str, inputs: &[String]) -> Result<Vec<Vec<f32>>, String> {
     let mut child = Command::new("curl")
         .args(["--silent", "--show-error", "--config", "-"])
         .stdin(Stdio::piped())

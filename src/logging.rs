@@ -76,7 +76,6 @@ pub fn append(path: &Path, name: &str, data: Value) -> std::io::Result<()> {
         .append(true)
         .open(path)?;
     file.write_all(format!("{record}\n").as_bytes())?;
-    let _ = file.sync_data();
     #[cfg(unix)]
     if needs_private {
         use std::os::unix::fs::PermissionsExt;

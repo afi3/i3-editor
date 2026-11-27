@@ -128,6 +128,8 @@ fn build_index(
     let mut reused = 0usize;
     let mut embedded = 0usize;
     let mut indexed = 0usize;
+    let mut failed = 0usize;
+    let mut last_error: Option<String> = None;
     for (file, text) in &files {
         let hash = hash_text(text);
         hashes.insert(file.clone(), hash.clone());
@@ -151,21 +153,32 @@ fn build_index(
         if chunks.is_empty() {
             continue;
         }
-        indexed += 1;
+        let before = entries.len();
         for batch in chunks.chunks(16) {
             let inputs: Vec<String> = batch.iter().map(|chunk| chunk.text.clone()).collect();
-            let vectors = crate::ai::embed(config, model, &inputs)?;
-            embedded += batch.len();
-            for (chunk, vector) in batch.iter().zip(vectors) {
-                entries.push(crate::semantic::Entry {
-                    chunk: chunk.clone(),
-                    vector,
-                });
+            match crate::ai::embed(config, model, &inputs) {
+                Ok(vectors) => {
+                    embedded += batch.len();
+                    for (chunk, vector) in batch.iter().zip(vectors) {
+                        entries.push(crate::semantic::Entry {
+                            chunk: chunk.clone(),
+                            vector,
+                        });
+                    }
+                }
+                // Keep what worked: a failed batch is reported, not fatal.
+                Err(error) => {
+                    failed += batch.len();
+                    last_error = Some(error);
+                }
             }
+        }
+        if entries.len() > before {
+            indexed += 1;
         }
     }
     if entries.is_empty() {
-        return Err("open a file to index".to_string());
+        return Err(last_error.unwrap_or_else(|| "open a file to index".to_string()));
     }
     let mut index = crate::semantic::Index::empty(model);
     index.entries = entries;
@@ -180,6 +193,9 @@ fn build_index(
     );
     if unreadable > 0 {
         summary.push_str(&format!(", {unreadable} skipped"));
+    }
+    if failed > 0 {
+        summary.push_str(&format!(", {failed} chunk(s) failed"));
     }
     Ok(summary)
 }
