@@ -107,6 +107,7 @@ fn build_index(
     let mut hashes = std::collections::BTreeMap::new();
     let mut reused = 0usize;
     let mut embedded = 0usize;
+    let mut indexed = 0usize;
     for (file, text) in files {
         let hash = hash_text(text);
         hashes.insert(file.clone(), hash.clone());
@@ -130,6 +131,7 @@ fn build_index(
         if chunks.is_empty() {
             continue;
         }
+        indexed += 1;
         for batch in chunks.chunks(16) {
             let inputs: Vec<String> = batch.iter().map(|chunk| chunk.text.clone()).collect();
             let vectors = crate::ai::embed(config, model, &inputs)?;
@@ -154,7 +156,7 @@ fn build_index(
     Ok(format!(
         "semantic index: {} chunks from {} file(s), {embedded} embedded, {reused} reused",
         index.entries.len(),
-        files.len()
+        indexed
     ))
 }
 

@@ -453,6 +453,14 @@ Connection: close
     app.state.config.ai.embedding_model = "mock-embed".to_string();
     crate::semantic::use_path_for_test(Some(dir.join("semantic_index.json")));
     crate::logging::use_path_for_test(Some(dir.join("log.jsonl")));
+    // A blank buffer has no chunks, so it must not inflate the summary.
+    let blank = dir.join("blank.txt");
+    std::fs::write(&blank, "\n\n\n").expect("blank");
+    let blank_id = app.state.ids.document();
+    app.state.documents.insert(
+        blank_id,
+        crate::editor::document::Document::open(blank_id, blank).expect("open blank"),
+    );
     app.dispatch(Command::AiSemanticIndex).expect("index");
     assert!(
         app.semantic_index_task.is_some(),
@@ -469,6 +477,11 @@ Connection: close
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
     assert!(app.semantic_index_task.is_none(), "build did not finish");
+    assert!(
+        app.state.ui.message.contains("from 1 file(s)"),
+        "a blank buffer must not be counted: {}",
+        app.state.ui.message
+    );
     app.dispatch(Command::AiSemanticStatus).expect("status");
     assert!(
         app.state.ui.message.contains("semantic index: 1 chunks"),
