@@ -234,22 +234,34 @@ fn install_npm(
         let npm =
             find_on_path("npm").ok_or_else(|| format!("npm is required to install {binary}"))?;
         status(tx, &format!("installing {binary} with npm"));
-        let prefix_arg = prefix.to_string_lossy().into_owned();
-        let mut args = vec![
-            "install",
-            "--prefix",
-            prefix_arg.as_str(),
-            "--no-audit",
-            "--no-fund",
-            "--omit=dev",
-        ];
-        args.extend_from_slice(packages);
-        run_path(&npm, &args, None)?;
+        let args = npm_install_args(&prefix.to_string_lossy(), packages);
+        let borrowed: Vec<&str> = args.iter().map(String::as_str).collect();
+        run_path(&npm, &borrowed, None)?;
     }
     if !command.is_file() {
         return Err(format!("npm completed but {binary} was not created"));
     }
     Ok(server(provider, &command, &["--stdio"]))
+}
+
+/// Install arguments for a pinned package set. `--ignore-scripts` keeps the
+/// registry from running `postinstall` code as the user; none of the pinned
+/// servers needs a lifecycle script to work.
+fn npm_install_args(prefix: &str, packages: &[&str]) -> Vec<String> {
+    let mut args: Vec<String> = [
+        "install",
+        "--prefix",
+        prefix,
+        "--no-audit",
+        "--no-fund",
+        "--omit=dev",
+        "--ignore-scripts",
+    ]
+    .iter()
+    .map(|arg| (*arg).to_string())
+    .collect();
+    args.extend(packages.iter().map(|package| (*package).to_string()));
+    args
 }
 
 fn install_lua(
@@ -426,6 +438,21 @@ fn run_with_timeout(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn npm_installs_skip_lifecycle_scripts() {
+        let args = npm_install_args("/tmp/prefix", &["yaml-language-server@1.19.2"]);
+        assert!(args.iter().any(|arg| arg == "--ignore-scripts"), "{args:?}");
+        assert!(
+            args.iter().any(|arg| arg == "yaml-language-server@1.19.2"),
+            "{args:?}"
+        );
+        assert!(
+            args.windows(2)
+                .any(|pair| pair == ["--prefix", "/tmp/prefix"]),
+            "{args:?}"
+        );
+    }
 
     #[test]
     #[cfg(unix)]

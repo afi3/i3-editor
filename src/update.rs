@@ -134,10 +134,38 @@ fn is_newer(latest: &str, current: &str) -> bool {
                 // A final release supersedes its pre-releases.
                 (None, Some(_)) => true,
                 (Some(_), None) => false,
-                (Some(latest), Some(current)) => latest > current,
+                (Some(latest), Some(current)) => compare_prerelease(latest, current).is_gt(),
             }
         }
         _ => latest.trim_start_matches('v') != current,
+    }
+}
+
+/// SemVer precedence for dot-separated identifiers: numeric fields compare as
+/// numbers, so `alpha.10` is newer than `alpha.9`.
+fn compare_prerelease(left: &str, right: &str) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+
+    let mut left = left.split('.');
+    let mut right = right.split('.');
+    loop {
+        match (left.next(), right.next()) {
+            (None, None) => return Ordering::Equal,
+            (None, Some(_)) => return Ordering::Less,
+            (Some(_), None) => return Ordering::Greater,
+            (Some(left), Some(right)) => {
+                let order = match (left.parse::<u64>(), right.parse::<u64>()) {
+                    (Ok(left), Ok(right)) => left.cmp(&right),
+                    // Numeric identifiers have lower precedence than text.
+                    (Ok(_), Err(_)) => Ordering::Less,
+                    (Err(_), Ok(_)) => Ordering::Greater,
+                    (Err(_), Err(_)) => left.cmp(right),
+                };
+                if order != Ordering::Equal {
+                    return order;
+                }
+            }
+        }
     }
 }
 
@@ -277,7 +305,18 @@ fn install_binary(new: &Path, current: &Path) -> Result<()> {
     temporary
         .persist(current)
         .map_err(|error| Error::io("replace", current, error.error))?;
+    sync_dir(parent);
     Ok(())
+}
+
+/// Flush the directory entry so the rename survives a crash; best effort.
+fn sync_dir(dir: &Path) {
+    #[cfg(unix)]
+    if let Ok(handle) = std::fs::File::open(dir) {
+        let _ = handle.sync_all();
+    }
+    #[cfg(not(unix))]
+    let _ = dir;
 }
 
 fn scratch_dir() -> Result<tempfile::TempDir> {
@@ -415,5 +454,21 @@ mod tests {
             .collect();
         assert!(leftovers.is_empty(), "{leftovers:?}");
         std::fs::remove_dir_all(&dir).ok();
+    }
+}
+
+#[cfg(test)]
+mod prerelease_tests {
+    use super::*;
+
+    #[test]
+    fn prereleases_compare_numerically() {
+        assert!(is_newer("0.3.0-alpha.10", "0.3.0-alpha.9"));
+        assert!(!is_newer("0.3.0-alpha.9", "0.3.0-alpha.10"));
+        assert!(is_newer("0.3.0-beta", "0.3.0-alpha.10"));
+        assert!(is_newer("0.3.0-alpha.1", "0.3.0-alpha"));
+        // A final release supersedes its pre-release, never the other way.
+        assert!(is_newer("0.3.0", "0.3.0-rc.1"));
+        assert!(!is_newer("0.3.0-rc.1", "0.3.0"));
     }
 }
