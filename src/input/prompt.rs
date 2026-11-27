@@ -20,6 +20,7 @@ pub enum PromptKind {
     SaveAs,
     Overwrite,
     ExternalChange,
+    LargeFile,
     NewFile,
     NewDir,
     Rename,
@@ -244,6 +245,7 @@ impl PromptKind {
             PromptKind::RenameWorkspace => "Rename Workspace",
             PromptKind::TerminalRename => "Rename Terminal",
             PromptKind::Recovery => "Recover unsaved changes",
+            PromptKind::LargeFile => "Large file: open read-only?",
             _ => "",
         }
     }
@@ -260,6 +262,7 @@ impl PromptKind {
             | PromptKind::Overwrite
             | PromptKind::ExternalChange
             | PromptKind::Recovery
+            | PromptKind::LargeFile
             | PromptKind::McpTrust
             | PromptKind::McpConfirm => 0,
             _ => 1,
@@ -285,6 +288,7 @@ impl PromptKind {
                 | PromptKind::QuitDirty
                 | PromptKind::QuitConfirm
                 | PromptKind::ExternalChange
+                | PromptKind::LargeFile
                 | PromptKind::SelectWorkspace
                 | PromptKind::McpTrust
                 | PromptKind::McpTools

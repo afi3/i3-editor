@@ -305,7 +305,7 @@ impl ExplorerState {
         self.rebuild();
     }
 
-    /// Root plus every expanded directory; non-recursive watchers follow these.
+    /// Root plus every expanded directory; the non-recursive fallback follows these.
     pub fn watched_dirs(&self) -> Vec<PathBuf> {
         let mut dirs = Vec::with_capacity(self.expanded.len() + 1);
         dirs.push(self.root.clone());

@@ -65,6 +65,8 @@ fn fixture(text: &str) -> (App, PathBuf) {
         git_diff: None,
         help: None,
         mcp_view: None,
+        rules_view: None,
+        trace_view: None,
         ai: crate::state::AiPanel::default(),
         hunks: None,
         plugin_status: Vec::new(),
@@ -1752,18 +1754,6 @@ fn editorconfig_and_language_defaults_drive_tab_insertion() {
 }
 
 #[test]
-fn files_above_the_size_limit_are_refused() {
-    let (mut app, dir) = fixture("x\n");
-    let path = dir.join("huge.bin");
-    let file = std::fs::File::create(&path).expect("huge");
-    file.set_len(crate::editor::document::MAX_FILE_BYTES + 1)
-        .expect("size");
-    let error = app.open_document(path).expect_err("too large");
-    assert!(error.to_string().contains("too large"), "{error}");
-    std::fs::remove_dir_all(&dir).ok();
-}
-
-#[test]
 fn cli_targets_open_multiple_files_as_tabs_and_jump_to_a_line() {
     let (mut app, dir) = fixture("one\n");
     let second = dir.join("second.txt");
@@ -3116,6 +3106,166 @@ fn ai_tool_audit_redacts_arguments_and_records_denial() {
 }
 
 #[test]
+fn overflowing_history_is_summarized_before_the_request() {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::time::{Duration, Instant};
+
+    let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
+    let address = listener.local_addr().expect("address");
+    std::thread::spawn(move || {
+        let bodies = [
+            r#"{"choices":[{"message":{"role":"assistant","content":"earlier summary"}}]}"#,
+            r#"{"choices":[{"message":{"role":"assistant","content":"final answer"}}]}"#,
+        ];
+        for body in bodies {
+            let Ok((mut stream, _)) = listener.accept() else {
+                return;
+            };
+            let mut request = [0u8; 16384];
+            let _ = stream.read(&mut request);
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            let _ = stream.write_all(response.as_bytes());
+        }
+    });
+    let (mut app, dir) = fixture("x\n");
+    let config_path = dir.join("config.toml");
+    app.state.config_path = Some(config_path.clone());
+    let mut config = crate::ai::test_config(format!("http://{address}/v1"));
+    config.stream = false;
+    config.compact_history = true;
+    config.max_history_turns = 1;
+    app.state.config.ai = config;
+    app.state.ai.conversation.push(serde_json::json!({
+        "role": "user",
+        "content": "old question",
+    }));
+    app.state.ai.conversation.push(serde_json::json!({
+        "role": "assistant",
+        "content": "old answer",
+    }));
+    app.state.ai.conversation.push(serde_json::json!({
+        "role": "user",
+        "content": "new question",
+    }));
+    app.start_ai_request();
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline
+        && !app
+            .state
+            .ai
+            .conversation
+            .iter()
+            .any(|message| message["content"] == "final answer")
+    {
+        app.pump_ai();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(
+        app.state
+            .ai
+            .conversation
+            .iter()
+            .any(|message| message["content"] == "final answer"),
+        "{:?}",
+        app.state.ai.conversation
+    );
+    let summary = app
+        .state
+        .ai
+        .conversation
+        .iter()
+        .find(|message| message["role"] == "system")
+        .expect("summary");
+    assert!(
+        summary["content"]
+            .as_str()
+            .is_some_and(|text| text.contains("earlier summary")),
+        "{summary}"
+    );
+    assert!(
+        !app.state
+            .ai
+            .conversation
+            .iter()
+            .any(|message| message["content"] == "old question")
+    );
+    assert!(
+        !app.state
+            .ai
+            .conversation
+            .iter()
+            .any(|message| message["content"] == "old answer")
+    );
+
+    let audit =
+        std::fs::read_to_string(config_path.with_file_name("audit.jsonl")).expect("audit log");
+    let stops: Vec<String> = audit
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .filter(|record| record["event"] == "model_request")
+        .filter_map(|record| record["stop"].as_str().map(str::to_string))
+        .collect();
+    assert!(stops.contains(&"compact".to_string()), "{stops:?}");
+    assert!(stops.contains(&"reply".to_string()), "{stops:?}");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn model_trace_records_latency_usage_and_lists_in_overlay() {
+    use std::time::Duration;
+
+    let (mut app, dir) = fixture("x\n");
+    let config_path = dir.join("config.toml");
+    app.state.config_path = Some(config_path.clone());
+    let call = super::audit::ModelRequest {
+        round: 2,
+        model: "mock-model",
+        original_messages: 10,
+        sent_messages: 6,
+        estimated_tokens: 1234,
+        latency: Duration::from_millis(456),
+        stop: "reply",
+        prompt_tokens: Some(100),
+        completion_tokens: Some(20),
+        tool_calls: 1,
+    };
+    super::audit::model_request(&app.state, &call);
+
+    let audit =
+        std::fs::read_to_string(config_path.with_file_name("audit.jsonl")).expect("audit log");
+    let record: serde_json::Value =
+        serde_json::from_str(audit.lines().next().expect("record")).expect("json record");
+    assert_eq!(record["event"], "model_request");
+    assert_eq!(record["round"], 2);
+    assert_eq!(record["model"], "mock-model");
+    assert_eq!(record["messages"]["sent"], 6);
+    assert_eq!(record["estimated_tokens"], 1234);
+    assert_eq!(record["latency_ms"], 456);
+    assert_eq!(record["stop"], "reply");
+    assert_eq!(record["prompt_tokens"], 100);
+    assert_eq!(record["completion_tokens"], 20);
+    assert_eq!(record["tool_calls"], 1);
+    assert!(record.get("content").is_none());
+
+    app.dispatch(Command::AiTrace).expect("trace overlay");
+    let view = app.state.trace_view.as_ref().expect("trace view");
+    let line = &view.lines[0];
+    assert!(line.contains("r2"), "{line}");
+    assert!(line.contains("mock-model"), "{line}");
+    assert!(line.contains("6/10 msg"), "{line}");
+    assert!(line.contains("456ms"), "{line}");
+    assert!(line.contains("reply"), "{line}");
+    assert!(line.contains("100+20 tok"), "{line}");
+    assert!(line.contains("1 tool(s)"), "{line}");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn ai_tool_output_is_capped_before_history() {
     use crate::mcp::ToolContent;
     use crate::state::AiWaiting;
@@ -3556,6 +3706,258 @@ fn overwrite_after_an_external_change_writes_the_buffer() {
 }
 
 #[test]
+fn quick_open_index_tracks_watcher_paths_without_a_rescan() {
+    use crate::app::QuickOpenIndex;
+
+    let (mut app, dir) = fixture("x\n");
+    let workspace = app.state.workspaces.active().id;
+    app.watchers = vec![(
+        workspace,
+        crate::watch::Watcher::new(&dir, None).expect("watch"),
+    )];
+    app.quick_open_candidates();
+
+    let root = dir.canonicalize().expect("canonical root");
+    let nested = root.join("nested");
+    std::fs::create_dir_all(&nested).expect("nested");
+    let deep = nested.join("deep.txt");
+    std::fs::write(&deep, "x\n").expect("deep");
+    app.update_quick_open(std::slice::from_ref(&deep));
+    let files = app.quick_open_candidates();
+    assert!(files.contains(&"nested/deep.txt".to_string()), "{files:?}");
+
+    std::fs::remove_file(&deep).expect("remove");
+    app.update_quick_open(std::slice::from_ref(&deep));
+    let files = app.quick_open_candidates();
+    assert!(!files.contains(&"nested/deep.txt".to_string()), "{files:?}");
+
+    // Backends that report only the changed directory still reconcile it.
+    let root_file = root.join("root.txt");
+    std::fs::write(&root_file, "x\n").expect("root file");
+    app.update_quick_open(std::slice::from_ref(&root));
+    let files = app.quick_open_candidates();
+    assert!(files.contains(&"root.txt".to_string()), "{files:?}");
+    std::fs::remove_file(&root_file).expect("remove root file");
+    app.update_quick_open(std::slice::from_ref(&root));
+    let files = app.quick_open_candidates();
+    assert!(!files.contains(&"root.txt".to_string()), "{files:?}");
+
+    // Ignored directories never enter the list.
+    std::fs::write(root.join(".gitignore"), "target/\n").expect("ignore");
+    std::fs::create_dir_all(root.join("target")).expect("target");
+    let built = root.join("target/out.bin");
+    std::fs::write(&built, "x").expect("built");
+    app.state.explorer.refresh();
+    app.update_quick_open(std::slice::from_ref(&built));
+    let files = app.quick_open_candidates();
+    assert!(!files.contains(&"target/out.bin".to_string()), "{files:?}");
+
+    // The cache survives an explorer revision change; only events edit it.
+    app.quick_open_files = Some(QuickOpenIndex {
+        files: vec!["kept.txt".to_string()],
+        truncated: false,
+    });
+    app.state.explorer.rebuild();
+    assert_eq!(app.quick_open_candidates(), vec!["kept.txt".to_string()]);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn quick_open_scan_reports_truncation() {
+    let (app, dir) = fixture("x\n");
+    std::fs::write(dir.join("a.txt"), "a\n").expect("a");
+    std::fs::write(dir.join("b.txt"), "b\n").expect("b");
+    let (files, truncated) = app.scan_quick_open_limit(2);
+    assert_eq!(files.len(), 2);
+    assert!(truncated);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn recursive_watcher_lists_files_in_unexpanded_directories() {
+    use std::time::{Duration, Instant};
+
+    let (mut app, dir) = fixture("x\n");
+    let workspace = app.state.workspaces.active().id;
+    app.watchers = vec![(
+        workspace,
+        crate::watch::Watcher::new(&dir, None).expect("watch"),
+    )];
+    app.quick_open_candidates();
+
+    let nested = dir.canonicalize().expect("canonical").join("nested");
+    std::fs::create_dir_all(&nested).expect("nested");
+    std::fs::write(nested.join("deep.txt"), "x\n").expect("deep");
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut listed = false;
+    while Instant::now() < deadline && !listed {
+        app.pump_watcher();
+        listed = app
+            .quick_open_candidates()
+            .iter()
+            .any(|file| file == "nested/deep.txt");
+        if !listed {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+    assert!(listed, "nested file never reached quick open");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn verify_tool_is_registered_only_when_configured_and_allowed() {
+    let (mut app, dir) = fixture("x\n");
+    let verify = crate::config::VerifyConfig {
+        command: "cargo".to_string(),
+        args: vec!["test".to_string()],
+        timeout_secs: 120,
+        sandbox: false,
+    };
+    app.state
+        .config
+        .ai
+        .verify
+        .insert("test".to_string(), verify);
+
+    let tools = app.ai_tool_definitions();
+    let definition = tools
+        .iter()
+        .find(|tool| tool["function"]["name"] == "native__verify")
+        .expect("verify tool");
+    assert_eq!(
+        definition["function"]["parameters"]["properties"]["name"]["enum"][0],
+        "test"
+    );
+
+    app.state
+        .config
+        .ai
+        .denied_tools
+        .push("native/verify".to_string());
+    assert!(
+        !app.ai_tool_definitions()
+            .iter()
+            .any(|tool| tool["function"]["name"] == "native__verify")
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn workspace_rules_are_injected_into_the_system_prompt_and_overlay() {
+    let (mut app, dir) = fixture("x\n");
+    std::fs::write(dir.join("AGENTS.md"), "Use tabs.\nPrefer small diffs.\n").expect("rules");
+    std::fs::write(dir.join("MEMORY.md"), "Remember the flaky test.\n").expect("memory");
+
+    let prompt = app.ai_system_prompt();
+    assert!(
+        prompt.contains("<workspace_rules source=\"AGENTS.md\">"),
+        "{prompt}"
+    );
+    assert!(prompt.contains("Prefer small diffs."), "{prompt}");
+    assert!(
+        prompt.contains("<workspace_memory source=\"MEMORY.md\">"),
+        "{prompt}"
+    );
+    assert!(prompt.contains("Remember the flaky test."), "{prompt}");
+
+    app.state.ai.conversation.push(serde_json::json!({
+        "role": "user",
+        "content": "hi",
+    }));
+    let messages = app.ai_request_messages();
+    assert_eq!(messages[0]["role"], "system");
+    assert!(
+        messages[0]["content"]
+            .as_str()
+            .is_some_and(|text| text.contains("Use tabs."))
+    );
+
+    app.dispatch(Command::AiRules).expect("rules overlay");
+    let view = app.state.rules_view.as_ref().expect("rules view");
+    assert!(view.lines.iter().any(|line| line.contains("AGENTS.md")));
+    assert!(view.lines.iter().any(|line| line == "Use tabs."));
+    assert!(view.lines.iter().any(|line| line.contains("MEMORY.md")));
+    assert!(
+        view.lines
+            .iter()
+            .any(|line| line == "Remember the flaky test.")
+    );
+
+    app.state.config.ai.workspace_rules = false;
+    app.state.config.ai.workspace_memory = false;
+    let prompt = app.ai_system_prompt();
+    assert!(!prompt.contains("Use tabs."), "{prompt}");
+    assert!(!prompt.contains("Remember the flaky test."), "{prompt}");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn large_files_open_read_only_and_refuse_edits_and_saves() {
+    let (mut app, dir) = fixture("x\n");
+    let path = dir.join("huge.log");
+    let file = std::fs::File::create(&path).expect("create");
+    file.set_len(17 << 20).expect("size");
+    drop(file);
+
+    app.open_document(path.clone()).expect("prompt");
+    {
+        let InputMode::Prompt(prompt) = &app.state.mode else {
+            panic!("large-file prompt missing");
+        };
+        assert_eq!(prompt.kind, crate::input::PromptKind::LargeFile);
+        assert!(prompt.candidates[0].starts_with("Open read-only"));
+    }
+    app.submit_prompt().expect("open");
+
+    let id = app.state.active_document_id().expect("doc");
+    assert!(app.state.documents[&id].read_only);
+    assert_eq!(app.state.documents[&id].len_chars(), 17 << 20);
+    let before = app.state.documents[&id].len_chars();
+    app.dispatch(Command::InsertText("x".to_string()))
+        .expect("refused insertion");
+    assert_eq!(app.state.documents[&id].len_chars(), before);
+    assert!(
+        app.state.ui.message.contains("read-only"),
+        "{}",
+        app.state.ui.message
+    );
+    let error = app.dispatch(Command::Save).expect_err("save refused");
+    assert!(error.to_string().contains("read-only"), "{error}");
+    app.dispatch(Command::GoToSymbol).expect("symbols refused");
+    assert!(!app.state.mode.is_prompt());
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn files_above_the_read_only_cap_are_refused() {
+    let (mut app, dir) = fixture("x\n");
+    let path = dir.join("huge.bin");
+    let file = std::fs::File::create(&path).expect("create");
+    file.set_len((256 << 20) + 1).expect("size");
+    drop(file);
+    let error = app.open_document(path).expect_err("refused");
+    assert!(error.to_string().contains("too large"), "{error}");
+    assert_eq!(app.state.documents.len(), 1);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn cancelling_the_large_file_prompt_opens_nothing() {
+    let (mut app, dir) = fixture("x\n");
+    let path = dir.join("huge.log");
+    let file = std::fs::File::create(&path).expect("create");
+    file.set_len(17 << 20).expect("size");
+    drop(file);
+
+    app.open_document(path).expect("prompt");
+    app.cancel_prompt();
+    assert!(app.pending_large_open.is_none());
+    assert_eq!(app.state.documents.len(), 1);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn watcher_reloads_a_clean_buffer_and_refreshes_the_explorer() {
     use std::time::{Duration, Instant};
 
@@ -3868,7 +4270,7 @@ fn go_to_symbol_jumps_to_the_definition() {
 }
 
 #[test]
-fn toggle_fold_hides_the_block_and_an_edit_clears_it() {
+fn toggle_fold_hides_the_block_and_typing_in_the_header_keeps_it() {
     let (mut app, dir) = fixture("fn alpha() {\n    one();\n    two();\n}\n\nafter\n");
     let id = app.state.active_document_id().expect("doc");
     app.state.documents.get_mut(&id).expect("doc").path = Some(dir.join("note.rs"));
@@ -3889,7 +4291,9 @@ fn toggle_fold_hides_the_block_and_an_edit_clears_it() {
 
     app.dispatch(Command::InsertText("x".to_string()))
         .expect("type");
-    assert!(app.state.active_document().expect("doc").folded.is_empty());
+    let document = app.state.active_document().expect("doc");
+    assert_eq!(document.folded, vec![0..3]);
+    assert!(document.is_hidden(1));
     std::fs::remove_dir_all(&dir).ok();
 }
 
@@ -4757,6 +5161,72 @@ fn help_lists_active_bindings_and_closes_with_escape() {
     assert_eq!(app.state.help.as_ref().expect("help").scroll, 1);
     app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     assert!(app.state.help.is_none());
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn wheel_over_read_only_overlays_scrolls_them_not_the_document() {
+    use ratatui::crossterm::event::MouseEventKind;
+
+    let text = (0..60).map(|n| format!("line {n}\n")).collect::<String>();
+    let (mut app, dir) = fixture(&text);
+    let pane_id = app.state.focused_pane_id().expect("pane");
+    let column = 40;
+    let row = 12;
+
+    app.dispatch(Command::Help).expect("help");
+    wheel(&mut app, MouseEventKind::ScrollDown, column, row);
+    assert_eq!(app.state.help.as_ref().expect("help").scroll, 3);
+    assert_eq!(app.state.panes[&pane_id].scroll_top, 0);
+
+    app.state.help = None;
+    app.state.git_diff = Some(crate::state::DiffView {
+        title: " diff ".to_string(),
+        lines: (0..60).map(|n| format!("line {n}")).collect(),
+        scroll: 0,
+    });
+    wheel(&mut app, MouseEventKind::ScrollDown, column, row);
+    assert_eq!(app.state.git_diff.as_ref().expect("diff").scroll, 3);
+    assert_eq!(app.state.panes[&pane_id].scroll_top, 0);
+
+    app.state.git_diff = None;
+    app.state.mcp_view = Some(crate::state::HelpView {
+        lines: (0..60).map(|n| format!("line {n}")).collect(),
+        scroll: 0,
+    });
+    wheel(&mut app, MouseEventKind::ScrollDown, column, row);
+    assert_eq!(app.state.mcp_view.as_ref().expect("mcp").scroll, 3);
+    assert_eq!(app.state.panes[&pane_id].scroll_top, 0);
+
+    app.state.mcp_view = None;
+    app.state.hunks = Some(crate::state::HunkPicker {
+        title: "hunk".to_string(),
+        relative: "note.txt".to_string(),
+        stage: true,
+        hunks: vec![crate::git::Hunk {
+            header: "@@ -1 +1 @@".to_string(),
+            lines: (0..20).map(|n| format!("line {n}")).collect(),
+            patch: String::new(),
+        }],
+        selected: 0,
+        scroll: 0,
+    });
+    wheel(&mut app, MouseEventKind::ScrollDown, column, row);
+    assert_eq!(app.state.hunks.as_ref().expect("hunks").scroll, 3);
+    assert_eq!(app.state.panes[&pane_id].scroll_top, 0);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn click_on_a_read_only_overlay_does_not_move_the_cursor() {
+    use ratatui::crossterm::event::KeyModifiers;
+
+    let (mut app, dir) = fixture("alpha\nbeta\n");
+    app.dispatch(Command::Help).expect("help");
+    let before = cursor(&app);
+    click(&mut app, 40, 12, KeyModifiers::NONE);
+    assert_eq!(cursor(&app), before);
+    assert!(app.state.help.is_some());
     std::fs::remove_dir_all(&dir).ok();
 }
 

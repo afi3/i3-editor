@@ -19,6 +19,8 @@ use regex::RegexBuilder;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
+use crate::config::VerifyConfig;
+
 pub const SERVER: &str = "native";
 pub const MAX_FILE_BYTES: u64 = 16 << 20;
 pub const READ_LINES: usize = 400;
@@ -28,7 +30,7 @@ pub const CHECK_TIMEOUT: Duration = Duration::from_secs(20);
 pub fn capability(tool: &str) -> &'static str {
     match tool {
         "read_file" | "search" => "read-only",
-        "edit_file" | "write_file" => "destructive",
+        "edit_file" | "write_file" | "verify" => "destructive",
         _ => "unknown",
     }
 }
@@ -39,6 +41,7 @@ pub fn description(tool: &str) -> &'static str {
         "edit_file" => "Replace lines validated by snapshot and line hashes",
         "write_file" => "Create or replace a file with explicit content",
         "search" => "Search project files with ignore and regex",
+        "verify" => "Run a configured verification command by name",
         _ => "Native tool",
     }
 }
@@ -50,6 +53,22 @@ pub fn tools() -> Vec<(&'static str, Value)> {
         ("write_file", write_file_schema()),
         ("search", search_schema()),
     ]
+}
+
+/// Schema for the configured verification commands. The model selects a name;
+/// it never supplies a command line.
+pub fn verify_schema(names: &[String]) -> Value {
+    serde_json::json!({
+        "type": "object",
+        "properties": {
+            "name": {
+                "type": "string",
+                "enum": names,
+                "description": "Configured verification command"
+            }
+        },
+        "required": ["name"]
+    })
 }
 
 fn read_file_schema() -> Value {
@@ -274,6 +293,204 @@ impl Drop for CheckTask {
     fn drop(&mut self) {
         self.cancel();
     }
+}
+
+pub struct VerifyTask {
+    receiver: Receiver<VerifyResult>,
+    cancel: Arc<AtomicBool>,
+}
+
+#[derive(Debug)]
+pub struct VerifyResult {
+    pub success: bool,
+    pub output: String,
+}
+
+impl VerifyTask {
+    pub fn spawn(root: PathBuf, name: String, spec: VerifyConfig, max_chars: usize) -> Self {
+        let (sender, receiver) = mpsc::channel();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let flag = Arc::clone(&cancel);
+        let _ = std::thread::Builder::new()
+            .name("i3-ai-verify".to_string())
+            .spawn(move || {
+                let result = run_verify(&root, &name, &spec, max_chars, &flag);
+                let _ = sender.send(result);
+            });
+        Self { receiver, cancel }
+    }
+
+    pub fn try_recv(&self) -> Option<VerifyResult> {
+        self.receiver.try_recv().ok()
+    }
+
+    pub fn cancel(&self) {
+        self.cancel.store(true, Ordering::Relaxed);
+    }
+}
+
+impl Drop for VerifyTask {
+    fn drop(&mut self) {
+        self.cancel();
+    }
+}
+
+fn run_verify(
+    root: &Path,
+    name: &str,
+    spec: &VerifyConfig,
+    max_chars: usize,
+    cancel: &AtomicBool,
+) -> VerifyResult {
+    let started = Instant::now();
+    let mut command = match verify_command(root, spec) {
+        Ok(command) => command,
+        Err(error) => {
+            return VerifyResult {
+                success: false,
+                output: format!("verify {name}: {error}"),
+            };
+        }
+    };
+    command
+        .current_dir(root)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .env_clear();
+    for key in ["PATH", "HOME", "TMPDIR", "LANG", "LC_ALL"] {
+        if let Some(value) = std::env::var_os(key) {
+            command.env(key, value);
+        }
+    }
+    let mut child = match command.spawn() {
+        Ok(child) => child,
+        Err(error) => {
+            return VerifyResult {
+                success: false,
+                output: format!("verify {name}: cannot start {}: {error}", spec.command),
+            };
+        }
+    };
+    let timeout = Duration::from_secs(spec.timeout_secs.max(1));
+    let deadline = Instant::now() + timeout;
+    loop {
+        if cancel.load(Ordering::Relaxed) {
+            let _ = child.kill();
+            let _ = child.wait();
+            return VerifyResult {
+                success: false,
+                output: format!("verify {name}: cancelled"),
+            };
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return VerifyResult {
+                success: false,
+                output: format!("verify {name}: timed out after {}s", spec.timeout_secs),
+            };
+        }
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) => thread::sleep(Duration::from_millis(20)),
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return VerifyResult {
+                    success: false,
+                    output: format!("verify {name}: {error}"),
+                };
+            }
+        }
+    }
+    let output = match child.wait_with_output() {
+        Ok(output) => output,
+        Err(error) => {
+            return VerifyResult {
+                success: false,
+                output: format!("verify {name}: {error}"),
+            };
+        }
+    };
+    let mut text = String::from_utf8_lossy(&output.stderr).into_owned();
+    text.push_str(&String::from_utf8_lossy(&output.stdout));
+    if text.trim().is_empty() {
+        text = "(no output)".to_string();
+    }
+    let text = crate::ai::truncate_text(&text, max_chars);
+    VerifyResult {
+        success: output.status.success(),
+        output: format!(
+            "verify {name}: {} in {:.1}s\n{text}",
+            if output.status.success() {
+                "passed"
+            } else {
+                "failed"
+            },
+            started.elapsed().as_secs_f64()
+        ),
+    }
+}
+
+fn verify_command(root: &Path, spec: &VerifyConfig) -> Result<Command, String> {
+    if !spec.sandbox {
+        let mut command = Command::new(&spec.command);
+        command.args(&spec.args);
+        return Ok(command);
+    }
+    sandboxed_verify_command(root, spec)
+}
+
+#[cfg(target_os = "macos")]
+fn sandboxed_verify_command(root: &Path, spec: &VerifyConfig) -> Result<Command, String> {
+    let root = root.display().to_string().replace('"', "");
+    let profile = format!(
+        "(version 1)\n\
+         (deny default)\n\
+         (allow process*)\n\
+         (allow sysctl-read)\n\
+         (allow file-read*)\n\
+         (allow file-write* (subpath \"{root}\") (subpath \"/tmp\") \
+         (subpath \"/private/tmp\") (subpath \"/var/folders\") \
+         (subpath \"/private/var/folders\") (literal \"/dev/null\") \
+         (literal \"/dev/tty\"))\n"
+    );
+    let mut command = Command::new("sandbox-exec");
+    command.args(["-p", &profile]);
+    command.arg(&spec.command).args(&spec.args);
+    Ok(command)
+}
+
+#[cfg(target_os = "linux")]
+fn sandboxed_verify_command(root: &Path, spec: &VerifyConfig) -> Result<Command, String> {
+    let root = root.to_string_lossy().into_owned();
+    let mut command = Command::new("bwrap");
+    command.args([
+        "--ro-bind",
+        "/",
+        "/",
+        "--bind",
+        &root,
+        &root,
+        "--dev",
+        "/dev",
+        "--proc",
+        "/proc",
+        "--tmpfs",
+        "/tmp",
+        "--unshare-net",
+        "--die-with-parent",
+        "--chdir",
+        &root,
+    ]);
+    command.arg(&spec.command).args(&spec.args);
+    Ok(command)
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+fn sandboxed_verify_command(_root: &Path, _spec: &VerifyConfig) -> Result<Command, String> {
+    Err("sandboxed verification is unsupported on this platform".to_string())
 }
 
 fn run_cargo_check(root: &Path, timeout: Duration, cancel: &AtomicBool) -> CheckResult {
@@ -882,6 +1099,108 @@ mod tests {
         let error = edit_file(&root, &edit).expect_err("stale");
         assert!(error.contains("stale hash"), "{error}");
         assert_eq!(fs::read_to_string(&path).expect("read"), original);
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    fn wait_verify(task: &VerifyTask) -> VerifyResult {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            if let Some(result) = task.try_recv() {
+                return result;
+            }
+            assert!(Instant::now() < deadline, "verify task did not finish");
+            thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    fn verify_config(command: &str, args: &[&str], timeout_secs: u64) -> VerifyConfig {
+        VerifyConfig {
+            command: command.to_string(),
+            args: args.iter().map(|arg| arg.to_string()).collect(),
+            timeout_secs,
+            sandbox: false,
+        }
+    }
+
+    #[test]
+    fn verify_runs_a_configured_command_and_reports_failure() {
+        let (root, _) = workspace();
+        let task = VerifyTask::spawn(
+            root.clone(),
+            "fail".to_string(),
+            verify_config("sh", &["-c", "echo verified; exit 3"], 5),
+            1_000,
+        );
+        let result = wait_verify(&task);
+        assert!(!result.success);
+        assert!(
+            result.output.contains("verify fail: failed"),
+            "{}",
+            result.output
+        );
+        assert!(result.output.contains("verified"), "{}", result.output);
+        assert_eq!(capability("verify"), "destructive");
+        assert_eq!(
+            verify_schema(&["test".to_string()])["properties"]["name"]["enum"][0],
+            "test"
+        );
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn verify_times_out_and_truncates_output() {
+        let (root, _) = workspace();
+        let timeout = VerifyTask::spawn(
+            root.clone(),
+            "slow".to_string(),
+            verify_config("sh", &["-c", "sleep 5"], 1),
+            1_000,
+        );
+        let started = Instant::now();
+        let result = wait_verify(&timeout);
+        assert!(!result.success);
+        assert!(result.output.contains("timed out"), "{}", result.output);
+        assert!(started.elapsed() < Duration::from_secs(4));
+
+        let truncated = VerifyTask::spawn(
+            root.clone(),
+            "noisy".to_string(),
+            verify_config("sh", &["-c", "yes 0123456789 | head -n 200"], 5),
+            50,
+        );
+        let result = wait_verify(&truncated);
+        assert!(result.output.ends_with("[truncated]"), "{}", result.output);
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn sandboxed_verify_denies_writes_outside_the_workspace() {
+        if std::process::Command::new("sandbox-exec")
+            .arg("-h")
+            .output()
+            .is_err()
+        {
+            eprintln!("skipping sandbox test: sandbox-exec unavailable");
+            return;
+        }
+        let (root, _) = workspace();
+        let home = std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("/tmp"));
+        let outside = home.join(format!("i3-sandbox-{}.txt", std::process::id()));
+        std::fs::remove_file(&outside).ok();
+        let script = format!(
+            "echo inside > inside.txt; echo outside > \"$HOME/{}\"",
+            outside.file_name().expect("name").to_string_lossy()
+        );
+        let mut spec = verify_config("sh", &["-c", &script], 5);
+        spec.sandbox = true;
+        let task = VerifyTask::spawn(root.clone(), "sandbox".to_string(), spec, 2_000);
+        let result = wait_verify(&task);
+        assert!(!result.success, "{}", result.output);
+        assert!(root.join("inside.txt").is_file());
+        assert!(!outside.exists(), "sandbox allowed a write to HOME");
         std::fs::remove_dir_all(root).ok();
     }
 }

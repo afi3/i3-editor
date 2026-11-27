@@ -37,6 +37,8 @@ pub enum Error {
         size: u64,
         limit: u64,
     },
+    #[error("{0}")]
+    ReadOnly(String),
     #[error("terminal error: {0}")]
     Terminal(#[from] std::io::Error),
     #[error("{0}")]

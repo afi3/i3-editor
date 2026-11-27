@@ -1,19 +1,19 @@
 # Roadmap
 
-Status of the phases defined in `MASTER.md`. Each phase was implemented and
-verified before the next one started.
+Status of the phases defined in `MASTER.md`. Each completed phase was
+implemented and verified before the next one started.
 
 ## Version policy
 
-- `v0.1.x` is the current hardening and feature-completion line: release
-  engineering, correctness, daily-driver operations, performance, polish, and
-  Git depth.
-- `v0.2.x` covers MCP and AI features. `v0.2.0` shipped the stdio MCP client;
-  `v0.2.1` shipped the bounded agent harness, native tools, HTTP MCP, resources,
-  prompts, sampling, and approval-gated background agents. `v0.2.2` completes
-  the macOS/Linux harness with automatic context, hard budgets, non-Rust LSP
-  verification, MCP subscriptions, and Windows source/keyring support.
-  Do not tag `v0.3.0` until the remaining `v0.2.x` work lands.
+- `v0.1.x` was the hardening and feature-completion line: release engineering,
+  correctness, daily-driver operations, performance, polish, and Git depth.
+- `v0.2.x` is the active line. `v0.2.0` shipped the stdio MCP client; `v0.2.1`
+  shipped the bounded agent harness, native tools, HTTP MCP, resources, prompts,
+  sampling, and approval-gated background agents. `v0.2.2` completes the
+  macOS/Linux harness with automatic context, hard budgets, non-Rust LSP
+  verification, MCP subscriptions, and macOS/Linux keyring support. Maturity
+  work after `v0.2.2` ships as `v0.2.3`, `v0.2.4`, and so on; no `v0.3.0` is
+  planned. Supported run targets are macOS and Linux.
 
 ## Phase 1 — Terminal foundation and pane skeleton: done
 
@@ -920,7 +920,7 @@ and no-auto-apply boundaries.
 - [x] Actual provider usage and optional session cost metering in the panel title; hard token/cost caps stop the next request.
 - [x] Rich Markdown blocks and inline styling in the AI transcript.
 - [x] Follow MCP resource and prompt pagination cursors.
-- [x] Add persistent objectives, OS keyring lookup on macOS/Linux/Windows, metadata context index, and write allowlists.
+- [x] Add persistent objectives, OS keyring lookup on macOS/Linux, metadata context index, and write allowlists.
 - [x] Add MCP resource templates and pagination.
 - [x] Add an opt-in sequential objective queue with automatic cross-session resume.
 - [x] Add aligned Markdown tables, MCP prompt argument forms, and objective dependencies.
@@ -945,7 +945,7 @@ snapshot validation, and no unconfirmed write remain hard boundaries.
 ## Release v0.2.2 — shipped
 
 Shipped as `v0.2.2` on 2026-11-26. This release completes the macOS/Linux agent
-harness work and adds Windows source support without Windows tests.
+harness work.
 
 ### Shipped scope
 
@@ -958,19 +958,16 @@ harness work and adds Windows source support without Windows tests.
 - MCP HTTP custom headers, bearer-token environment auth, server-initiated SSE
   sampling, resource subscriptions, update notifications, and list-change
   notifications.
-- Windows Credential Manager keyring lookup and a Windows CI compile check and
-  release target. Windows tests remain skipped.
 - Objective queue auto-resume, richer Markdown tables/lists, and the earlier
   v0.2.1 harness remain in this line.
 
 ### Delivery checklist
 
 - [x] Full macOS/Linux suite and lint pass.
-- [x] Windows source typecheck and clippy pass in CI.
 - [x] README, ARCHITECTURE, and ROADMAP updated.
 - [x] Version `0.2.2` and tag `v0.2.2` point at the release commit.
-- [x] Release workflow builds Linux, macOS, and Windows assets.
-- [x] Release workflow run `45732012920` published five assets plus checksums.
+- [x] Release workflow builds Linux and macOS assets.
+- [x] Release workflow run `45732012920` published four assets plus checksums.
 
 ### Acceptance
 
@@ -980,8 +977,215 @@ harness work and adds Windows source support without Windows tests.
 - [x] ForgeGuard gate -> 0 findings.
 - [x] Automatic context, LSP diagnostic, and MCP subscription behavior covered by tests.
 - [x] aarch64 macOS asset passed its SHA-256 check and reports `i3-editor 0.2.2`.
-- [x] Both Linux tarball checksums and the Windows zip checksum verified.
-- [ ] Windows binary runtime test: intentionally skipped for this release.
+- [x] Both Linux tarball checksums verified.
+
+## Phase 9 — Feature maturity: complete (awaiting v0.2.3)
+
+`v0.2.2` closed the MCP/AI line. The project stays on `v0.2.x`; this phase is a
+maturity pass over features that already ship, split into functional
+correctness and UI/UX consistency. No new subsystem is added.
+
+### Platform scope
+
+Windows support is removed: the CI job, release target and packaging, the
+`windows-sys` Credential Manager lookup, the `APPDATA` config path, the
+`%COMSPEC%` shell fallback, and the Windows install/keyring docs. Supported run
+targets are macOS and Linux.
+
+### Landed
+
+- **Read-only large-file mode** (2026-11-27). Files above 16 MiB open read-only
+  after a confirmation prompt, stream into the rope, skip syntax/LSP/folds/
+  symbols, and refuse edits and saves; above 256 MiB they are refused. Covered
+  by `read_only_documents_refuse_mutation_and_saving`,
+  `large_files_open_read_only_and_refuse_edits_and_saves`,
+  `files_above_the_read_only_cap_are_refused`, and
+  `cancelling_the_large_file_prompt_opens_nothing`.
+- **Overlay input ownership** (2026-11-27). The wheel scrolls the topmost
+  read-only overlay (help, diff, log, MCP, hunk picker) instead of leaking to
+  the document underneath, and a click inside one never moves the cursor in the
+  buffer below. Covered by
+  `wheel_over_read_only_overlays_scrolls_them_not_the_document` and
+  `click_on_a_read_only_overlay_does_not_move_the_cursor`.
+- **Folds and symbols survive editing** (2026-11-27). Closed folds re-anchor
+  across edits: an edit above shifts the range, a header edit keeps the fold
+  with a shifted body, and an edit touching hidden lines opens only that fold.
+  Folds persist per file in `session.toml` and are clamped on restore. Grammar
+  tags queries supplement the node-kind table for Rust, Python,
+  JavaScript/TypeScript, Go, C, and Lua. Covered by
+  `folds_shift_with_edits_above_them`,
+  `editing_a_fold_header_keeps_it_closed`,
+  `editing_a_fold_body_opens_only_that_fold`,
+  `restored_folds_are_clamped_to_the_file`,
+  `session_round_trip_restores_layout_tabs_and_cursor`, and
+  `tags_queries_add_definitions_the_kind_table_misses`.
+- **Live workspace contents** (2026-11-27). Workspace watchers are recursive,
+  with a per-directory fallback and one warning when the OS refuses. The
+  quick-open list is maintained from watcher events, caps at 50,000 paths, and
+  reports truncation. Covered by
+  `workspace_watchers_are_recursive_and_skip_dir_sync`,
+  `quick_open_index_tracks_watcher_paths_without_a_rescan`,
+  `recursive_watcher_lists_files_in_unexpanded_directories`, and
+  `quick_open_scan_reports_truncation`.
+- **LSP incremental text sync** (2026-11-27). `didChange` follows the server's
+  `textDocumentSync` capability: incremental servers receive one contiguous
+  UTF-16 range computed from the last sent text, full-sync servers receive the
+  whole document, and `None` suppresses changes. Covered by
+  `incremental_diffs_are_contiguous_and_utf16`,
+  `sync_kind_follows_the_server_capability`, and
+  `incremental_sync_sends_only_the_edited_range`.
+
+### Delivery checklist
+
+- [x] Recursive watcher with ignore filtering, fallback warning, and event
+      coalescing covered by tests.
+- [x] Quick-open list updated by events; delete/rename targets removed; 50,000
+      cap status reported.
+- [x] Fold re-anchoring, edit behavior, session persistence, and tag-query
+      symbols covered by tests.
+- [x] Incremental `didChange` ranges asserted against a scripted server.
+- [x] Large-file prompt, read-only state, streaming load, and cap covered by
+      tests.
+- [x] Overlay wheel and click routing covered by app-level mouse tests.
+- [x] Windows support removed (CI, release target, keyring, config/shell
+      branches, docs).
+- [x] README known limitations, ARCHITECTURE decisions, and this roadmap
+      updated.
+- [x] Full suite, fmt, clippy, MSRV 1.91, audit, and gate pass.
+- [ ] First shipped slice tagged `v0.2.3`; later slices stay in `v0.2.x`.
+
+### Acceptance
+
+- [x] Creating a file under an unexpanded directory makes it appear in quick
+      open without a manual refresh; deleting it removes it; churn under an
+      ignored directory does not refresh the explorer.
+- [x] Editing above a closed fold keeps it closed; editing inside it opens only
+      that fold; reopening the file restores its persisted folds.
+- [x] An edit sends only the changed range when the server advertises
+      incremental sync.
+- [x] A 17 MiB file opens read-only, scrolls, and finds; an edit or save is
+      refused in the status bar; a 256 MiB file is refused with one byte over.
+- [x] The wheel over the help, diff, log, MCP, and hunk overlays scrolls the
+      overlay and leaves the document scroll position unchanged.
+- [x] Gate reports no errors or warnings.
+
+## Phase 10 — Agent grounding and verification: complete (awaiting release)
+
+Phase 9 closed the harness maturity gaps. This phase adds the missing grounding
+and verification pieces without turning the editor into a general agent runtime.
+It stays on `v0.2.x`.
+
+### Landed
+
+- **System prompt and workspace rules** (2026-11-27). Requests prepend a fixed
+  system message plus `<workspace_rules>` from `AGENTS.md`/`CLAUDE.md`; the
+  loader caps at 16 KiB, prefers `AGENTS.md`, reports invalid UTF-8, and
+  `ai_rules` shows the source and text. History trimming preserves the system
+  message. Covered by `agents_wins_over_claude`, `claude_is_the_fallback`,
+  `oversized_rules_are_truncated_without_splitting_a_character`,
+  `invalid_utf8_is_reported_without_text`,
+  `workspace_rules_are_injected_into_the_system_prompt_and_overlay`, and
+  `keeps_the_system_prompt_while_trimming_history`.
+- **Named verification commands** (2026-11-27). `[ai.verify.<name>]` entries add
+  one `native__verify` tool; the model selects a configured name, never a
+  command line. `VerifyTask` runs the executable without a shell in the
+  workspace, uses the MCP environment allowlist, kills on timeout/cancel, and
+  caps output. Approval and the tool policy still apply. Covered by
+  `verify_commands_parse_and_are_bounded`,
+  `verify_tool_is_registered_only_when_configured_and_allowed`,
+  `verify_runs_a_configured_command_and_reports_failure`, and
+  `verify_times_out_and_truncates_output`.
+- **Model-call tracing** (2026-11-27). Each request writes a `model_request`
+  audit record with round, model, sent/original messages, estimated tokens,
+  latency, stop reason (`reply`, `budget`, `error`, `cancelled`), actual usage,
+  and tool-call count; message content is not stored. `ai_trace` shows the last
+  20 records read from the audit tail. Covered by
+  `trim_stats_report_context_drops` and
+  `model_trace_records_latency_usage_and_lists_in_overlay`.
+
+### Delivery checklist
+
+- [x] System prompt and workspace rules covered by tests.
+- [x] Verify tool with named commands, timeout, output cap, and approval.
+- [x] Model-request trace with latency/usage and an overlay.
+- [x] README, ARCHITECTURE, and this roadmap updated for every slice.
+- [x] Full suite, fmt, clippy, MSRV 1.91, audit, and gate pass.
+- [ ] First slice released in the next `v0.2.x` tag.
+
+### Acceptance
+
+- [x] A request contains one leading system message; `AGENTS.md` wins over
+      `CLAUDE.md`; the 16 KiB cap and invalid UTF-8 are reported; disabling
+      `workspace_rules` removes the block.
+- [x] The system message survives history trimming.
+- [x] A configured verify command returns output/exit code; timeout kills it;
+      an unapproved call is denied by the approval flow and tool policy.
+- [x] `audit.jsonl` records model latency and usage; `ai_trace` lists them.
+
+### Risks
+
+- Workspace rules are project-controlled text; the approval boundary and tool
+  policy still apply, but rules can bias the model.
+- Verify commands are arbitrary user-configured processes; they run with the
+  workspace as cwd and the same environment allowlist as MCP, not in a sandbox.
+  Timeout and cancel kill the direct child, so grandchildren can survive.
+
+## Phase 11 — Harness completeness: complete (awaiting release)
+
+This phase closes the remaining harness items deferred during the Phase 10
+review: context compaction, workspace memory, the last Markdown gaps, and a
+platform sandbox for verification commands. It stays on `v0.2.x`.
+
+### Landed
+
+- **History compaction** (2026-11-27). `ai::trim_plan` exposes the turns a
+  request would drop; with `compact_history` the app runs one plain-text summary
+  request, replaces those turns with a leading system summary, and retries once.
+  Summary usage counts toward the session budget and appears in `ai_trace` with
+  stop `compact`. Covered by `trim_plan_reports_dropped_messages`,
+  `compaction_messages_flatten_tool_calls`, and
+  `overflowing_history_is_summarized_before_the_request`.
+- **Workspace memory** (2026-11-27). `MEMORY.md` is loaded like the rules file
+  and injected as `<workspace_memory>` under `workspace_memory` (default true,
+  16 KiB cap); `ai_rules` shows both sources. Covered by
+  `memory_is_loaded_independently` and the extended
+  `workspace_rules_are_injected_into_the_system_prompt_and_overlay`.
+- **Markdown footnotes and nested blockquotes** (2026-11-27). Blockquotes render
+  one `│` prefix per nesting level; `[^label]` references and `[^label]: text`
+  definitions render without leaking markup. Covered by
+  `renders_markdown_blocks_and_inline_styles`.
+- **Sandboxed verify commands** (2026-11-27). `[ai.verify.<name>] sandbox = true`
+  wraps the configured command with macOS `sandbox-exec` or Linux `bwrap`:
+  network denied, writes limited to the workspace and temp directories, missing
+  wrapper fails closed. MCP servers are explicitly out of scope for this
+  wrapper. Covered by `verify_commands_parse_and_are_bounded` and
+  `sandboxed_verify_denies_writes_outside_the_workspace`.
+
+### Delivery checklist
+
+- [x] Compaction, memory, Markdown, and sandbox covered by tests.
+- [x] README, ARCHITECTURE, and this roadmap updated.
+- [x] Full suite, fmt, clippy, MSRV 1.91, audit, and gate pass.
+- [ ] Released in the next `v0.2.x` tag.
+
+### Acceptance
+
+- [x] An overflowing conversation is summarized before the request; the summary
+      survives trimming and its usage is counted.
+- [x] `MEMORY.md` is injected, shown in `ai_rules`, and removed by
+      `workspace_memory = false`.
+- [x] Nested blockquotes and footnote references/definitions render.
+- [x] A sandboxed verify command can write inside the workspace but not to
+      `$HOME`; a missing wrapper fails the call instead of running unsandboxed.
+- [x] Gate reports no errors or warnings.
+
+### Risks
+
+- Compaction adds one provider request and keeps a plain-text summary; it is not
+  a structured task log.
+- Sandboxed verify depends on platform tooling (`sandbox-exec` or `bwrap`) and
+  only covers verification commands. MCP servers remain trusted code.
+- Timeout and cancellation kill the direct child; grandchildren can survive.
 
 ## Verification commands
 
@@ -993,4 +1197,4 @@ cargo clippy --all-targets --all-features
 cargo run -- --dump-keymap
 ```
 
-Last recorded run: `cargo test` → 458 passed (451 unit + 6 CLI process + 1 PTY smoke), `cargo clippy` → 0 warnings.
+Last recorded run: `cargo test` → 492 passed (485 unit + 6 CLI process + 1 PTY smoke), `cargo clippy` → 0 warnings.

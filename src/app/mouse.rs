@@ -44,10 +44,12 @@ enum DocumentTabHit {
 
 impl App {
     pub(crate) fn handle_mouse(&mut self, mouse: MouseEvent) {
-        if self.handle_prompt_mouse(mouse) {
-            return;
-        }
-        if self.drag.is_none() && self.forward_shell_mouse(mouse) {
+        // Read-only overlays are modal for the keyboard; they own the wheel and
+        // swallow clicks so the buffer underneath cannot be edited through them.
+        if self.handle_prompt_mouse(mouse)
+            || self.handle_overlay_mouse(mouse)
+            || (self.drag.is_none() && self.forward_shell_mouse(mouse))
+        {
             return;
         }
         match mouse.kind {
@@ -165,6 +167,59 @@ impl App {
                 self.selecting = Some(pane_id);
             }
         }
+    }
+
+    /// Read-only overlays own the wheel and swallow clicks. The draw order is
+    /// diff, popups, help, MCP, rules, trace, hunks, prompt, so the last open
+    /// overlay wins.
+    fn handle_overlay_mouse(&mut self, mouse: MouseEvent) -> bool {
+        let steps = match mouse.kind {
+            MouseEventKind::ScrollUp => -3,
+            MouseEventKind::ScrollDown => 3,
+            _ => 0,
+        };
+        if self.state.hunks.is_some() {
+            if steps != 0 {
+                self.scroll_hunks(steps);
+            }
+            return true;
+        }
+        self.scroll_panel_overlays(steps)
+    }
+
+    fn scroll_panel_overlays(&mut self, steps: isize) -> bool {
+        let mut open = false;
+        if let Some(view) = self.state.mcp_view.as_mut() {
+            open = true;
+            if steps != 0 {
+                super::help::scroll_view(view, steps);
+            }
+        }
+        if let Some(view) = self.state.rules_view.as_mut() {
+            open = true;
+            if steps != 0 {
+                super::help::scroll_view(view, steps);
+            }
+        }
+        if let Some(view) = self.state.trace_view.as_mut() {
+            open = true;
+            if steps != 0 {
+                super::help::scroll_view(view, steps);
+            }
+        }
+        if let Some(view) = self.state.help.as_mut() {
+            open = true;
+            if steps != 0 {
+                super::help::scroll_view(view, steps);
+            }
+        }
+        if let Some(view) = self.state.git_diff.as_mut() {
+            open = true;
+            if steps != 0 {
+                super::help::scroll_view(view, steps);
+            }
+        }
+        open
     }
 
     /// Prompt overlay owns input; only the wheel may scroll its list.

@@ -1,5 +1,6 @@
-//! Minimal LSP client: one stdio server per configured language, full document
-//! sync, diagnostics, completion, hover, and go-to-definition.
+//! Minimal LSP client: one stdio server per configured language, full or
+//! incremental document sync, diagnostics, completion, hover, and
+//! go-to-definition.
 //!
 //! There is no async runtime. A reader thread per server turns framed JSON-RPC
 //! messages into a channel; `LspManager::pump` drains that channel once per
@@ -87,6 +88,13 @@ fn timeout_for(kind: ReplyKind) -> Duration {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SyncKind {
+    None,
+    Full,
+    Incremental,
+}
+
 struct QueuedRequest {
     key: String,
     method: &'static str,
@@ -112,6 +120,7 @@ struct Server {
     child: Option<Child>,
     next_id: i64,
     initialized: bool,
+    sync: SyncKind,
     pending: HashMap<i64, PendingRequest>,
 }
 
@@ -163,6 +172,7 @@ impl Server {
             child,
             next_id: 1,
             initialized: false,
+            sync: SyncKind::Full,
             pending: HashMap::new(),
         }
     }
@@ -205,12 +215,29 @@ impl Server {
         );
     }
 
-    fn did_change(&mut self, path: &Path, version: i64, text: &str) {
+    fn did_change(&mut self, path: &Path, version: i64, old: &str, new: &str) {
+        if self.sync == SyncKind::None || old == new {
+            return;
+        }
+        let changes = match self.sync {
+            SyncKind::Incremental => {
+                let (start, end, text) = incremental_change(old, new);
+                json!([{
+                    "range": {
+                        "start": {"line": start.0, "character": start.1},
+                        "end": {"line": end.0, "character": end.1},
+                    },
+                    "text": text,
+                }])
+            }
+            SyncKind::Full => json!([{"text": new}]),
+            SyncKind::None => return,
+        };
         self.notify(
             "textDocument/didChange",
             json!({
                 "textDocument": {"uri": uri(path), "version": version},
-                "contentChanges": [{"text": text}],
+                "contentChanges": changes,
             }),
         );
     }
@@ -282,6 +309,9 @@ impl LspManager {
         let mut events = Vec::new();
         let mut desired: Vec<(PathBuf, String, String)> = Vec::new();
         for document in documents.values() {
+            if document.read_only {
+                continue;
+            }
             let Some(path) = &document.path else {
                 continue;
             };
@@ -312,8 +342,10 @@ impl LspManager {
                     );
                 }
                 Some(open) if open.key == *key && open.text != *text => {
-                    open.version += 1;
-                    server.did_change(path, open.version, text);
+                    if server.sync != SyncKind::None {
+                        open.version += 1;
+                        server.did_change(path, open.version, &open.text, text);
+                    }
                     open.text = text.clone();
                 }
                 Some(_) => {}
@@ -431,6 +463,7 @@ impl LspManager {
                     ReplyKind::Initialize => {
                         initialized = true;
                         server.initialized = true;
+                        server.sync = sync_kind_from(message.get("result"));
                         server.notify("initialized", json!({}));
                     }
                     ReplyKind::Completion => {
@@ -591,6 +624,77 @@ fn initialize_params(root: &Path) -> Value {
             }
         },
     })
+}
+
+/// Read the server's change kind from its `initialize` result. A missing
+/// capability keeps the previous full-document behaviour.
+fn sync_kind_from(result: Option<&Value>) -> SyncKind {
+    let Some(sync) = result
+        .and_then(|result| result.get("capabilities"))
+        .and_then(|capabilities| capabilities.get("textDocumentSync"))
+    else {
+        return SyncKind::Full;
+    };
+    let change = match sync {
+        Value::Number(number) => number.as_u64(),
+        Value::Object(object) => object.get("change").and_then(Value::as_u64),
+        _ => None,
+    };
+    match change {
+        Some(0) => SyncKind::None,
+        Some(2) => SyncKind::Incremental,
+        _ => SyncKind::Full,
+    }
+}
+
+/// One contiguous replacement that turns `old` into `new`, with positions in
+/// the old document. UTF-16 columns match the protocol's position units.
+fn incremental_change<'a>(old: &str, new: &'a str) -> ((usize, usize), (usize, usize), &'a str) {
+    let old_bytes = old.as_bytes();
+    let new_bytes = new.as_bytes();
+    let mut prefix = 0;
+    let limit = old_bytes.len().min(new_bytes.len());
+    while prefix < limit && old_bytes[prefix] == new_bytes[prefix] {
+        prefix += 1;
+    }
+    while prefix > 0 && !old.is_char_boundary(prefix) {
+        prefix -= 1;
+    }
+    let mut suffix = 0;
+    let limit = (old_bytes.len() - prefix).min(new_bytes.len() - prefix);
+    while suffix < limit
+        && old_bytes[old_bytes.len() - 1 - suffix] == new_bytes[new_bytes.len() - 1 - suffix]
+    {
+        suffix += 1;
+    }
+    while suffix > 0
+        && (!old.is_char_boundary(old_bytes.len() - suffix)
+            || !new.is_char_boundary(new_bytes.len() - suffix))
+    {
+        suffix -= 1;
+    }
+    let old_end = old_bytes.len() - suffix;
+    let new_end = new_bytes.len() - suffix;
+    (
+        position_at(old, prefix),
+        position_at(old, old_end),
+        &new[prefix..new_end],
+    )
+}
+
+/// Line and UTF-16 column at a byte offset.
+fn position_at(text: &str, byte: usize) -> (usize, usize) {
+    let mut line = 0;
+    let mut character = 0;
+    for ch in text[..byte].chars() {
+        if ch == '\n' {
+            line += 1;
+            character = 0;
+        } else {
+            character += ch.len_utf16();
+        }
+    }
+    (line, character)
 }
 
 fn position_params(document: &Document, path: &Path, cursor: usize) -> Value {
@@ -1055,6 +1159,90 @@ mod tests {
         assert_eq!(diagnostics[0].line, 0);
         assert_eq!(diagnostics[0].severity, Severity::Error);
         assert_eq!(diagnostics[0].message, "unknown name");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn incremental_diffs_are_contiguous_and_utf16() {
+        let old = "alpha\nbeta\ngamma\n";
+        let new = "alpha\nbeta!\ngamma\n";
+        let (start, end, text) = incremental_change(old, new);
+        assert_eq!((start, end, text), ((1, 4), (1, 4), "!"));
+
+        let (start, end, text) = incremental_change("é\n", "ê\n");
+        assert_eq!((start, end, text), ((0, 0), (0, 1), "ê"));
+    }
+
+    #[test]
+    fn sync_kind_follows_the_server_capability() {
+        assert_eq!(
+            sync_kind_from(Some(&json!({"capabilities": {"textDocumentSync": 0}}))),
+            SyncKind::None
+        );
+        assert_eq!(
+            sync_kind_from(Some(&json!({"capabilities": {"textDocumentSync": 2}}))),
+            SyncKind::Incremental
+        );
+        assert_eq!(
+            sync_kind_from(Some(
+                &json!({"capabilities": {"textDocumentSync": {"change": 1}}})
+            )),
+            SyncKind::Full
+        );
+        assert_eq!(
+            sync_kind_from(Some(&json!({"capabilities": {}}))),
+            SyncKind::Full
+        );
+    }
+
+    #[test]
+    fn incremental_sync_sends_only_the_edited_range() {
+        use std::sync::{Arc, Mutex};
+
+        let dir = std::env::temp_dir().join(format!("i3-lsp-incremental-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let (id, document) = document(&dir);
+        let mut manager = manager();
+        let (stream, peer) = UnixStream::pair().expect("pair");
+        manager.attach_for_test("fake", stream).expect("attach");
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let captured = Arc::clone(&seen);
+        fake_server(peer, move |message| {
+            if message.get("method").and_then(Value::as_str) == Some("textDocument/didChange") {
+                captured.lock().expect("lock").push(message.clone());
+            }
+            match message.get("method").and_then(Value::as_str) {
+                Some("initialize") => Some(json!({
+                    "jsonrpc": "2.0",
+                    "id": message["id"],
+                    "result": {"capabilities": {"textDocumentSync": {"change": 2}}}
+                })),
+                _ => None,
+            }
+        });
+        let mut documents = HashMap::new();
+        documents.insert(id, document);
+
+        let end = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < end && manager.opened.is_empty() {
+            manager.pump(&documents);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(!manager.opened.is_empty(), "document never opened");
+
+        documents.get_mut(&id).expect("document").rope = ropey::Rope::from_str("fn main() {!}\n");
+        let end = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < end && seen.lock().expect("lock").is_empty() {
+            manager.pump(&documents);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let seen = seen.lock().expect("lock");
+        let first = seen.first().expect("didChange");
+        let change = &first["params"]["contentChanges"][0];
+        assert_eq!(change["text"], "!");
+        assert_eq!(change["range"]["start"]["line"], 0);
+        assert_eq!(change["range"]["start"]["character"], 11);
+        assert_eq!(change["range"]["end"], change["range"]["start"]);
         std::fs::remove_dir_all(&dir).ok();
     }
 

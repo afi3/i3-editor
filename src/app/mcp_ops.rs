@@ -16,6 +16,8 @@ impl App {
         self.fill_mcp_servers(&mut prompt);
         self.state.mode = InputMode::Prompt(prompt);
         self.state.help = None;
+        self.state.rules_view = None;
+        self.state.trace_view = None;
         self.state.completions = None;
         self.state.hover = None;
         self.dirty = true;

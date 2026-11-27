@@ -18,6 +18,7 @@ use crate::config::AiConfig;
 
 mod stream;
 pub use stream::{StreamEvent, StreamTask, spawn_stream};
+pub mod rules;
 
 #[derive(Clone, Debug)]
 pub struct ToolCall {
@@ -122,11 +123,7 @@ fn keyring_lookup(service: &str, account: &str) -> Result<String, String> {
         command.args(["lookup", "service", service, "account", account]);
         keyring_command(command)
     }
-    #[cfg(windows)]
-    {
-        keyring_windows(service, account)
-    }
-    #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     {
         let _ = (service, account);
         Err("OS keyring lookup is unsupported on this platform".to_string())
@@ -149,68 +146,6 @@ fn keyring_command(mut command: Command) -> Result<String, String> {
         return Err("keyring returned an empty key".to_string());
     }
     Ok(key)
-}
-
-#[cfg(windows)]
-fn windows_keyring_target(service: &str, account: &str) -> String {
-    format!("{service}:{account}")
-}
-
-#[cfg(windows)]
-fn keyring_windows(service: &str, account: &str) -> Result<String, String> {
-    use std::ptr;
-    use std::slice;
-    use windows_sys::Win32::Foundation::{ERROR_NOT_FOUND, GetLastError};
-    use windows_sys::Win32::Security::Credentials::{
-        CRED_TYPE_GENERIC, CREDENTIALW, CredFree, CredReadW,
-    };
-
-    let target = windows_keyring_target(service, account);
-    let target: Vec<u16> = target.encode_utf16().chain(std::iter::once(0)).collect();
-    let mut credential: *mut CREDENTIALW = ptr::null_mut();
-    let ok = unsafe { CredReadW(target.as_ptr(), CRED_TYPE_GENERIC, 0, &mut credential) };
-    if ok == 0 {
-        let code = unsafe { GetLastError() };
-        return Err(if code == ERROR_NOT_FOUND {
-            format!("keyring credential not found: {service}:{account}")
-        } else {
-            format!("keyring lookup failed: Windows error {code}")
-        });
-    }
-    let credential_ptr = credential;
-    let credential = unsafe { &*credential_ptr };
-    let raw = if credential.CredentialBlobSize == 0 {
-        &[][..]
-    } else {
-        unsafe {
-            slice::from_raw_parts(
-                credential.CredentialBlob,
-                credential.CredentialBlobSize as usize,
-            )
-        }
-    };
-    let key = decode_windows_credential(raw);
-    unsafe { CredFree(credential_ptr as *const _) };
-    if key.is_empty() {
-        return Err("keyring returned an empty key".to_string());
-    }
-    Ok(key)
-}
-
-#[cfg(windows)]
-fn decode_windows_credential(raw: &[u8]) -> String {
-    if raw.len().is_multiple_of(2) {
-        let (pairs, _) = raw.as_chunks::<2>();
-        let units: Vec<u16> = pairs.iter().map(|pair| u16::from_le_bytes(*pair)).collect();
-        if let Ok(text) = String::from_utf16(&units) {
-            let text = text.trim_end_matches('\0').to_string();
-            if !text.is_empty() {
-                return text;
-            }
-        }
-    }
-    let text = String::from_utf8_lossy(raw);
-    text.trim_end_matches('\0').to_string()
 }
 
 pub(crate) fn prepare_request(
@@ -476,35 +411,74 @@ fn sleep_cancellable(ms: u64, cancel: &AtomicBool) -> bool {
     !cancel.load(Ordering::Relaxed)
 }
 
-fn trim_messages(messages: &[Value], tools: &[Value], config: &AiConfig) -> Vec<Value> {
+#[derive(Clone, Debug)]
+pub(crate) struct TrimPlan {
+    pub(crate) system: Vec<Value>,
+    pub(crate) kept: Vec<Value>,
+    pub(crate) dropped: Vec<Value>,
+    pub(crate) estimated_tokens: usize,
+}
+
+pub(crate) fn trim_plan(messages: &[Value], tools: &[Value], config: &AiConfig) -> TrimPlan {
+    let system_count = messages
+        .iter()
+        .take_while(|message| message.get("role").and_then(Value::as_str) == Some("system"))
+        .count();
+    let (system, rest) = messages.split_at(system_count);
+    let system_tokens = estimate_messages(system);
     let tool_tokens = tools.iter().map(estimate_tokens).sum::<usize>() + tools.len();
     let budget = config
         .max_context_tokens
         .saturating_sub(tool_tokens)
+        .saturating_sub(system_tokens)
         .saturating_sub(128)
         .max(1);
-    let mut groups = split_turns(messages);
+    let mut groups = split_turns(rest);
     let keep = config.max_history_turns.clamp(1, 500);
+    let mut dropped = Vec::new();
     if groups.len() > keep {
-        groups.drain(..groups.len() - keep);
+        dropped.extend(
+            groups
+                .drain(..groups.len() - keep)
+                .flatten()
+                .collect::<Vec<Value>>(),
+        );
     }
-    let mut selected = Vec::new();
+    let mut selected_start = groups.len();
     let mut used = 0;
-    for group in groups.into_iter().rev() {
-        let cost = estimate_messages(&group);
-        if selected.is_empty() || used + cost <= budget {
+    for index in (0..groups.len()).rev() {
+        let cost = estimate_messages(&groups[index]);
+        if index + 1 == groups.len() || used + cost <= budget {
             used += cost;
-            selected.push(group);
+            selected_start = index;
         } else {
             break;
         }
     }
-    selected.reverse();
-    let mut messages: Vec<Value> = selected.into_iter().flatten().collect();
-    if estimate_messages(&messages) > budget {
-        trim_large_contents(&mut messages, budget, config.max_tool_output_chars);
+    dropped.extend(
+        groups[..selected_start]
+            .iter()
+            .flatten()
+            .cloned()
+            .collect::<Vec<Value>>(),
+    );
+    let mut kept: Vec<Value> = groups[selected_start..].iter().flatten().cloned().collect();
+    if estimate_messages(&kept) > budget {
+        trim_large_contents(&mut kept, budget, config.max_tool_output_chars);
     }
-    messages
+    TrimPlan {
+        estimated_tokens: estimate_messages(system) + estimate_messages(&kept),
+        system: system.to_vec(),
+        kept,
+        dropped,
+    }
+}
+
+fn trim_messages(messages: &[Value], tools: &[Value], config: &AiConfig) -> Vec<Value> {
+    let plan = trim_plan(messages, tools, config);
+    let mut out = plan.system;
+    out.extend(plan.kept);
+    out
 }
 
 fn split_turns(messages: &[Value]) -> Vec<Vec<Value>> {
@@ -524,6 +498,73 @@ fn split_turns(messages: &[Value]) -> Vec<Vec<Value>> {
 
 pub(crate) fn context_tokens(messages: &[Value]) -> usize {
     estimate_messages(messages)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct TrimStats {
+    pub original: usize,
+    pub sent: usize,
+    pub estimated_tokens: usize,
+}
+
+/// Stats for one prepared request. Deterministic and side-effect free, so the
+/// caller can record context drops without changing the request path.
+pub(crate) fn trim_stats(messages: &[Value], tools: &[Value], config: &AiConfig) -> TrimStats {
+    let plan = trim_plan(messages, tools, config);
+    TrimStats {
+        original: messages.len(),
+        sent: plan.system.len() + plan.kept.len(),
+        estimated_tokens: plan.estimated_tokens,
+    }
+}
+
+/// Build the one-shot summarization request for turns that trimming would drop.
+/// Message content is flattened to text so tool-call ids cannot make the
+/// request invalid; the whole transcript is capped by `max_chars`.
+pub(crate) fn compaction_messages(dropped: &[Value], max_chars: usize) -> Vec<Value> {
+    let lines: Vec<String> = dropped
+        .iter()
+        .flat_map(|message| {
+            let role = message
+                .get("role")
+                .and_then(Value::as_str)
+                .unwrap_or("message");
+            let mut lines = vec![format!("[{role}]")];
+            if let Some(content) = message.get("content").and_then(Value::as_str) {
+                lines.push(content.to_string());
+            }
+            lines.extend(
+                message
+                    .get("tool_calls")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .map(|call| {
+                        let name = call
+                            .pointer("/function/name")
+                            .and_then(Value::as_str)
+                            .unwrap_or("tool");
+                        let arguments = call
+                            .pointer("/function/arguments")
+                            .and_then(Value::as_str)
+                            .unwrap_or("{}");
+                        format!("tool call {name}: {arguments}")
+                    }),
+            );
+            lines
+        })
+        .collect();
+    let transcript = truncate_text(&lines.join("\n"), max_chars);
+    vec![
+        json!({
+            "role": "system",
+            "content": "You summarize an earlier conversation for context. Preserve user goals, decisions, file paths, tool outcomes, and unresolved work. Do not add new plans or invent facts. Reply with plain text only."
+        }),
+        json!({
+            "role": "user",
+            "content": format!("Summarize this earlier conversation:\n{transcript}")
+        }),
+    ]
 }
 
 fn estimate_messages(messages: &[Value]) -> usize {
@@ -822,6 +863,81 @@ mod tests {
         assert_eq!(trimmed.len(), 2);
         assert_eq!(trimmed[0]["content"], "new");
         assert_eq!(trimmed[1]["content"], "new answer");
+    }
+
+    #[test]
+    fn keeps_the_system_prompt_while_trimming_history() {
+        let config = AiConfig {
+            max_history_turns: 1,
+            max_context_tokens: 16_000,
+            ..AiConfig::default()
+        };
+        let messages = vec![
+            json!({"role": "system", "content": "rules stay"}),
+            json!({"role": "user", "content": "old"}),
+            json!({"role": "assistant", "content": "old answer"}),
+            json!({"role": "user", "content": "new"}),
+        ];
+        let trimmed = trim_messages(&messages, &[], &config);
+        assert_eq!(trimmed.len(), 2);
+        assert_eq!(trimmed[0]["role"], "system");
+        assert_eq!(trimmed[0]["content"], "rules stay");
+        assert_eq!(trimmed[1]["content"], "new");
+    }
+
+    #[test]
+    fn trim_stats_report_context_drops() {
+        let config = AiConfig {
+            max_history_turns: 1,
+            ..AiConfig::default()
+        };
+        let messages = vec![
+            json!({"role": "system", "content": "rules"}),
+            json!({"role": "user", "content": "old"}),
+            json!({"role": "assistant", "content": "old answer"}),
+            json!({"role": "user", "content": "new"}),
+        ];
+        let stats = trim_stats(&messages, &[], &config);
+        assert_eq!(stats.original, 4);
+        assert_eq!(stats.sent, 2);
+        assert!(stats.estimated_tokens > 0);
+    }
+
+    #[test]
+    fn trim_plan_reports_dropped_messages() {
+        let config = AiConfig {
+            max_history_turns: 1,
+            ..AiConfig::default()
+        };
+        let messages = vec![
+            json!({"role": "system", "content": "rules"}),
+            json!({"role": "user", "content": "old"}),
+            json!({"role": "assistant", "content": "old answer"}),
+            json!({"role": "user", "content": "new"}),
+        ];
+        let plan = trim_plan(&messages, &[], &config);
+        assert_eq!(plan.system.len(), 1);
+        assert_eq!(plan.kept.len(), 1);
+        assert_eq!(plan.kept[0]["content"], "new");
+        assert_eq!(plan.dropped.len(), 2);
+        assert_eq!(plan.dropped[0]["content"], "old");
+        assert!(plan.estimated_tokens > 0);
+    }
+
+    #[test]
+    fn compaction_messages_flatten_tool_calls() {
+        let dropped = vec![
+            json!({"role": "user", "content": "fix it"}),
+            json!({"role": "assistant", "content": null, "tool_calls": [{"id": "1", "type": "function", "function": {"name": "read_file", "arguments": "{\"path\":\"a.rs\"}"}}]}),
+            json!({"role": "tool", "tool_call_id": "1", "content": "file body"}),
+        ];
+        let messages = compaction_messages(&dropped, 4_000);
+        assert_eq!(messages[0]["role"], "system");
+        let text = messages[1]["content"].as_str().expect("content");
+        assert!(text.contains("[user]"), "{text}");
+        assert!(text.contains("fix it"), "{text}");
+        assert!(text.contains("tool call read_file"), "{text}");
+        assert!(text.contains("file body"), "{text}");
     }
 
     #[test]

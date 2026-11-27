@@ -50,7 +50,7 @@ pub struct ShellPanel {
 }
 
 impl ShellPanel {
-    /// Spawn the configured shell (fallback `$SHELL` or `%COMSPEC%`) in `cwd`.
+    /// Spawn the configured shell (fallback `$SHELL`) in `cwd`.
     pub fn spawn(
         cwd: &Path,
         rows: u16,
@@ -580,20 +580,12 @@ fn function_key(number: u8) -> &'static [u8] {
     }
 }
 
-/// Configured shell wins; an empty value falls back to `$SHELL` on Unix or
-/// `%COMSPEC%` on Windows.
+/// Configured shell wins; an empty value falls back to `$SHELL`.
 fn resolve_shell(configured: Option<&str>) -> String {
     if let Some(shell) = configured.map(str::trim).filter(|shell| !shell.is_empty()) {
         return shell.to_string();
     }
-    #[cfg(windows)]
-    {
-        std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".to_string())
-    }
-    #[cfg(not(windows))]
-    {
-        std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string())
-    }
+    std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string())
 }
 
 #[cfg(test)]

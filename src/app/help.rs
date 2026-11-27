@@ -44,6 +44,8 @@ impl App {
             ));
         }
         self.state.help = Some(HelpView { lines, scroll: 0 });
+        self.state.rules_view = None;
+        self.state.trace_view = None;
         self.state.completions = None;
         self.state.hover = None;
     }
@@ -54,6 +56,26 @@ impl App {
         };
         if read_only_key(help, combo) {
             self.state.help = None;
+        }
+        true
+    }
+
+    pub(crate) fn handle_rules_key(&mut self, combo: KeyCombo) -> bool {
+        let Some(view) = self.state.rules_view.as_mut() else {
+            return false;
+        };
+        if read_only_key(view, combo) {
+            self.state.rules_view = None;
+        }
+        true
+    }
+
+    pub(crate) fn handle_trace_key(&mut self, combo: KeyCombo) -> bool {
+        let Some(view) = self.state.trace_view.as_mut() else {
+            return false;
+        };
+        if read_only_key(view, combo) {
+            self.state.trace_view = None;
         }
         true
     }
@@ -82,6 +104,17 @@ impl ScrollView for crate::state::DiffView {
     fn scroll_mut(&mut self) -> &mut usize {
         &mut self.scroll
     }
+}
+
+pub(crate) fn scroll_view<V: ScrollView>(view: &mut V, steps: isize) {
+    let last = view.line_count().saturating_sub(1);
+    let amount = steps.unsigned_abs();
+    let scroll = view.scroll_mut();
+    *scroll = if steps < 0 {
+        scroll.saturating_sub(amount)
+    } else {
+        (*scroll + amount).min(last)
+    };
 }
 
 pub(crate) fn read_only_key<V: ScrollView>(view: &mut V, combo: KeyCombo) -> bool {

@@ -46,9 +46,6 @@ mlua = { version = "0.12", features = ["lua54", "vendored"] }
 [target.'cfg(unix)'.dependencies]
 signal-hook = "0.3"
 
-[target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security_Credentials"] }
-
 [dev-dependencies]
 assert_cmd = "2"
 predicates = "3"

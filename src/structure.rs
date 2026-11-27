@@ -4,10 +4,12 @@
 //! both commands are rare compared with rendering, and the highlighter tree is
 //! owned by the render cache.
 
+use std::collections::{HashMap, HashSet};
 use std::ops::Range;
+use std::sync::LazyLock;
 
 use ropey::Rope;
-use tree_sitter::{Node, Parser, Tree};
+use tree_sitter::{Node, Parser, Query, QueryCursor, StreamingIterator, Tree};
 
 use crate::syntax::Language;
 use crate::syntax::tree::ts_language;
@@ -21,6 +23,53 @@ pub struct Symbol {
     pub kind: &'static str,
 }
 
+/// Definition queries exported by the grammars. Grammars without one keep the
+/// node-kind walk below as their only symbol source.
+static TAGS: LazyLock<HashMap<Language, Query>> = LazyLock::new(|| {
+    let mut map = HashMap::new();
+    let mut add = |language: Language, grammar: tree_sitter::Language, source: &str| {
+        if let Ok(query) = Query::new(&grammar, source) {
+            map.insert(language, query);
+        }
+    };
+    add(
+        Language::Rust,
+        tree_sitter_rust::LANGUAGE.into(),
+        tree_sitter_rust::TAGS_QUERY,
+    );
+    add(
+        Language::Python,
+        tree_sitter_python::LANGUAGE.into(),
+        tree_sitter_python::TAGS_QUERY,
+    );
+    add(
+        Language::JavaScript,
+        tree_sitter_javascript::LANGUAGE.into(),
+        tree_sitter_javascript::TAGS_QUERY,
+    );
+    add(
+        Language::TypeScript,
+        tree_sitter_typescript::LANGUAGE_TSX.into(),
+        tree_sitter_typescript::TAGS_QUERY,
+    );
+    add(
+        Language::Go,
+        tree_sitter_go::LANGUAGE.into(),
+        tree_sitter_go::TAGS_QUERY,
+    );
+    add(
+        Language::C,
+        tree_sitter_c::LANGUAGE.into(),
+        tree_sitter_c::TAGS_QUERY,
+    );
+    add(
+        Language::Lua,
+        tree_sitter_lua::LANGUAGE.into(),
+        tree_sitter_lua::TAGS_QUERY,
+    );
+    map
+});
+
 /// Definitions in source order. Nested definitions are kept, so an `impl`
 /// block lists both itself and its methods.
 pub fn symbols(rope: &Rope, language: Language) -> Vec<Symbol> {
@@ -30,8 +79,10 @@ pub fn symbols(rope: &Rope, language: Language) -> Vec<Symbol> {
     let text = rope.to_string();
     let mut out = Vec::new();
     walk_symbols(tree.root_node(), text.as_bytes(), language, &mut out);
-    let mut seen = std::collections::HashSet::new();
+    query_symbols(&tree, text.as_bytes(), language, &mut out);
+    let mut seen = HashSet::new();
     out.retain(|symbol| seen.insert((symbol.line, symbol.column, symbol.name.clone())));
+    out.sort_by_key(|symbol| (symbol.line, symbol.column));
     out
 }
 
@@ -69,6 +120,44 @@ fn walk_symbols(node: Node<'_>, text: &[u8], language: Language, out: &mut Vec<S
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         walk_symbols(child, text, language, out);
+    }
+}
+
+fn query_symbols(tree: &Tree, text: &[u8], language: Language, out: &mut Vec<Symbol>) {
+    let Some(query) = TAGS.get(&language) else {
+        return;
+    };
+    let names = query.capture_names();
+    let mut cursor = QueryCursor::new();
+    let mut matches = cursor.matches(query, tree.root_node(), text);
+    while let Some(found) = matches.next() {
+        let captures = found.captures();
+        let definition = captures.iter().find_map(|capture| {
+            let name = names.get(capture.index as usize)?;
+            let kind = name.strip_prefix("definition.")?;
+            Some((kind, capture.node))
+        });
+        let name = captures.iter().find_map(|capture| {
+            (names.get(capture.index as usize) == Some(&"name")).then_some(capture.node)
+        });
+        let (Some((kind, definition)), Some(name)) = (definition, name) else {
+            continue;
+        };
+        let Some(bytes) = text.get(name.byte_range()) else {
+            continue;
+        };
+        let label = String::from_utf8_lossy(bytes);
+        let label = label.trim();
+        if label.is_empty() {
+            continue;
+        }
+        let start = definition.start_position();
+        out.push(Symbol {
+            line: start.row,
+            column: start.column,
+            name: label.chars().take(80).collect(),
+            kind,
+        });
     }
 }
 
@@ -279,6 +368,26 @@ mod tests {
         assert_eq!(symbols[0].line, 0);
         assert_eq!(symbols[1].name, "Part");
         assert_eq!(symbols[1].line, 4);
+    }
+
+    #[test]
+    fn tags_queries_add_definitions_the_kind_table_misses() {
+        let symbols = symbols(
+            &rope("MAX = 3\n\ndef alpha():\n    pass\n"),
+            Language::Python,
+        );
+        let labels: Vec<(&str, &str)> = symbols
+            .iter()
+            .map(|symbol| (symbol.name.as_str(), symbol.kind))
+            .collect();
+        assert!(labels.contains(&("MAX", "constant")), "{labels:?}");
+        assert_eq!(
+            symbols
+                .iter()
+                .filter(|symbol| symbol.name == "alpha")
+                .count(),
+            1
+        );
     }
 
     #[test]

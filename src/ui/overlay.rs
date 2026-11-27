@@ -470,6 +470,14 @@ pub fn render_mcp(frame: &mut Frame, state: &AppState) {
     render_read_only(frame, state, state.mcp_view.as_ref(), " MCP ");
 }
 
+pub fn render_rules(frame: &mut Frame, state: &AppState) {
+    render_read_only(frame, state, state.rules_view.as_ref(), " Workspace rules ");
+}
+
+pub fn render_trace(frame: &mut Frame, state: &AppState) {
+    render_read_only(frame, state, state.trace_view.as_ref(), " AI trace ");
+}
+
 fn render_read_only(
     frame: &mut Frame,
     state: &AppState,
@@ -515,7 +523,7 @@ pub fn render_hunks(frame: &mut Frame, state: &AppState) {
     let rect = Rect::new(area.x + 2, area.y + 2, width, height);
     frame.render_widget(Clear, rect);
     let title = format!(
-        "{} [{}/{}]  Up/Down hunk, PgUp/PgDn scroll, Enter applies, Esc closes ",
+        "{} [{}/{}]  Up/Down hunk, wheel/PgUp/PgDn scroll, Enter applies, Esc closes ",
         picker.title,
         picker.selected + 1,
         picker.hunks.len()

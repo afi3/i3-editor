@@ -287,6 +287,8 @@ pub fn render(frame: &mut Frame, state: &AppState) {
     overlay::render_popups(frame, state);
     overlay::render_help(frame, state);
     overlay::render_mcp(frame, state);
+    overlay::render_rules(frame, state);
+    overlay::render_trace(frame, state);
     overlay::render_hunks(frame, state);
     if let InputMode::Prompt(prompt) = &state.mode {
         overlay::render_prompt(frame, state, prompt);
@@ -350,11 +352,16 @@ fn render_status(frame: &mut Frame, state: &AppState) {
     let pane = state.focused_pane();
 
     let name = match document {
-        Some(document) => format!(
-            "{}{}",
-            document.display_name(),
-            if document.dirty { " [+]" } else { "" }
-        ),
+        Some(document) => {
+            let flag = if document.dirty {
+                " [+]"
+            } else if document.read_only {
+                " [RO]"
+            } else {
+                ""
+            };
+            format!("{}{flag}", document.display_name())
+        }
         None => "-".to_string(),
     };
 
@@ -484,6 +491,8 @@ mod tests {
             git_diff: None,
             help: None,
             mcp_view: None,
+            rules_view: None,
+            trace_view: None,
             ai: crate::state::AiPanel::default(),
             hunks: None,
             plugin_status: Vec::new(),
@@ -638,6 +647,10 @@ mod tests {
             "- [x] done task".to_string(),
             "  - nested item".to_string(),
             "~~struck~~".to_string(),
+            "> outer quote".to_string(),
+            "> > inner quote".to_string(),
+            "A note[^1] here".to_string(),
+            "[^1]: footnote body".to_string(),
         ];
         let screen = draw(&mut state, 100, 24);
         assert!(screen.contains("Heading"), "{screen}");
@@ -650,6 +663,10 @@ mod tests {
         assert!(screen.contains("done task"), "{screen}");
         assert!(screen.contains("nested item"), "{screen}");
         assert!(screen.contains("struck"), "{screen}");
+        assert!(screen.contains("outer quote"), "{screen}");
+        assert!(screen.contains("inner quote"), "{screen}");
+        assert!(screen.contains("footnote body"), "{screen}");
+        assert!(screen.contains("[1]"), "{screen}");
         std::fs::remove_dir_all(&dir).ok();
     }
 

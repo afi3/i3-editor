@@ -25,11 +25,11 @@ impl App {
         }
         let active = self.state.workspaces.active().id;
         let mut paths = Vec::new();
-        let mut active_events = false;
+        let mut active_paths = Vec::new();
         for (id, watcher) in &self.watchers {
             let events = drain_watcher(watcher);
-            if !events.is_empty() && *id == active {
-                active_events = true;
+            if *id == active {
+                active_paths.extend(events.iter().cloned());
             }
             paths.extend(events);
         }
@@ -40,6 +40,7 @@ impl App {
             return;
         }
         self.dirty = true;
+        self.update_quick_open(&active_paths);
         let config_path = self.state.config_path.clone();
         let config_dir = config_path
             .as_ref()
@@ -69,8 +70,8 @@ impl App {
 
         // A `cargo build` churns `target/` constantly; only a visible path can
         // change explorer rows, and only the active workspace owns the tree.
-        if active_events
-            && paths
+        if !active_paths.is_empty()
+            && active_paths
                 .iter()
                 .any(|path| self.state.explorer.is_visible(path))
         {
@@ -79,6 +80,52 @@ impl App {
         for path in paths {
             self.handle_external_change(&path);
         }
+    }
+
+    /// Apply create, remove, and rename events to the cached quick-open list.
+    /// A directory that moved in without child events forces a rescan.
+    pub(crate) fn update_quick_open(&mut self, paths: &[PathBuf]) {
+        if paths.is_empty() {
+            return;
+        }
+        let Some(mut index) = self.quick_open_files.take() else {
+            return;
+        };
+        let root = self.state.explorer.root.clone();
+        let mut invalidate = false;
+        for path in paths {
+            let Ok(relative) = path.strip_prefix(&root) else {
+                continue;
+            };
+            let relative = relative.to_string_lossy().into_owned();
+            if relative.is_empty() {
+                // The workspace root itself; reconcile its direct children.
+                refresh_quick_open_dir(&self.state.explorer, &root, path, &mut index);
+                continue;
+            }
+            if relative == ".gitignore" || relative == ".ignore" || relative == ".git/info/exclude"
+            {
+                invalidate = true;
+                break;
+            }
+            let visible = self.state.explorer.is_visible(path);
+            if visible && path.is_file() {
+                if !index.truncated {
+                    match index.files.binary_search(&relative) {
+                        Ok(_) => {}
+                        Err(at) => index.files.insert(at, relative),
+                    }
+                }
+            } else if visible && path.is_dir() {
+                refresh_quick_open_dir(&self.state.explorer, &root, path, &mut index);
+            } else {
+                let prefix = format!("{relative}/");
+                index
+                    .files
+                    .retain(|file| file != &relative && !file.starts_with(&prefix));
+            }
+        }
+        self.quick_open_files = if invalidate { None } else { Some(index) };
     }
 
     fn watcher_signature(&self) -> u64 {
@@ -127,8 +174,10 @@ impl App {
         dirs
     }
 
-    /// Reconfigure non-recursive workspace watchers when the explorer expands,
-    /// the active workspace changes, or an open document path changes.
+    /// Reconfigure workspace watchers when the explorer expands, the active
+    /// workspace changes, or an open document path changes. Recursive watchers
+    /// already cover their tree; only the non-recursive fallback registers
+    /// directories here.
     fn sync_workspace_watchers(&mut self) {
         let signature = self.watcher_signature();
         if self.watch_signature == Some(signature) {
@@ -250,6 +299,13 @@ impl App {
             return;
         };
         let document = &self.state.documents[&id];
+        if document.read_only {
+            self.notify(format!(
+                "{} changed on disk; reopen it to refresh the read-only view",
+                document.display_name()
+            ));
+            return;
+        }
         if !document.disk_changed() {
             return;
         }
@@ -270,6 +326,54 @@ impl App {
             Err(error) => self.notify(error.to_string()),
         }
     }
+}
+
+/// Some notification backends report only the changed directory. Reconcile
+/// that directory's direct file children instead of rescanning the workspace.
+fn refresh_quick_open_dir(
+    explorer: &crate::explorer::ExplorerState,
+    root: &Path,
+    dir: &Path,
+    index: &mut crate::app::QuickOpenIndex,
+) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let dir_key = dir
+        .strip_prefix(root)
+        .map(|relative| relative.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let mut present = HashSet::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_file() || !explorer.is_visible(&path) {
+            continue;
+        }
+        if let Ok(relative) = path.strip_prefix(root) {
+            present.insert(relative.to_string_lossy().into_owned());
+        }
+    }
+    index
+        .files
+        .retain(|file| !direct_child(file, &dir_key) || present.contains(file));
+    if index.truncated {
+        return;
+    }
+    for file in present {
+        if let Err(at) = index.files.binary_search(&file) {
+            index.files.insert(at, file);
+        }
+    }
+}
+
+fn direct_child(file: &str, dir: &str) -> bool {
+    let rest = if dir.is_empty() {
+        Some(file)
+    } else {
+        file.strip_prefix(dir)
+            .and_then(|rest| rest.strip_prefix('/'))
+    };
+    rest.is_some_and(|rest| !rest.is_empty() && !rest.contains('/'))
 }
 
 fn drain_watcher(watcher: &crate::watch::Watcher) -> Vec<PathBuf> {

@@ -460,11 +460,15 @@ fn push_markdown_line(
         );
         return;
     }
-    if let Some(text) = text.strip_prefix("> ") {
-        let mut spans = vec![Span::styled("│ ", code_style(state))];
+    let (depth, quoted) = quote_prefix(&text);
+    if depth > 0 {
+        let mut spans = Vec::new();
+        for _ in 0..depth {
+            spans.push(Span::styled("│ ", code_style(state)));
+        }
         spans.extend(inline_spans(
             state,
-            text,
+            quoted,
             base.fg(state.theme.border_active),
         ));
         push_styled(rows, spans, width);
@@ -472,6 +476,15 @@ fn push_markdown_line(
     }
     let leading = text.len() - text.trim_start_matches(' ').len();
     let trimmed = &text[leading..];
+    if let Some((label, note)) = footnote_definition(trimmed) {
+        let mut spans = vec![Span::styled(
+            format!("{}[{}] ", " ".repeat(leading), label),
+            base.fg(state.theme.gutter),
+        )];
+        spans.extend(inline_spans(state, note, base));
+        push_styled(rows, spans, width);
+        return;
+    }
     if let Some(text) = trimmed.strip_prefix("- [ ] ") {
         let mut spans = vec![Span::styled(
             format!("{}☐ ", " ".repeat(leading)),
@@ -530,6 +543,22 @@ fn code_style(state: &AppState) -> Style {
     Style::default().fg(state.theme.gutter)
 }
 
+fn quote_prefix(text: &str) -> (usize, &str) {
+    let mut rest = text.trim_start_matches(' ');
+    let mut depth = 0;
+    while let Some(after) = rest.strip_prefix('>') {
+        depth += 1;
+        rest = after.strip_prefix(' ').unwrap_or(after);
+    }
+    (depth, rest)
+}
+
+fn footnote_definition(text: &str) -> Option<(&str, &str)> {
+    let rest = text.strip_prefix("[^")?;
+    let end = rest.find("]: ")?;
+    Some((&rest[..end], &rest[end + 3..]))
+}
+
 fn inline_spans(state: &AppState, text: &str, base: Style) -> Vec<Span<'static>> {
     let chars: Vec<char> = text.chars().collect();
     let mut spans = Vec::new();
@@ -583,6 +612,19 @@ fn inline_spans(state: &AppState, text: &str, base: Style) -> Vec<Span<'static>>
             let value: String = chars[index + 1..index + 1 + end].iter().collect();
             spans.push(Span::styled(value, base.add_modifier(Modifier::ITALIC)));
             index += end + 2;
+            continue;
+        }
+        if chars[index] == '['
+            && chars.get(index + 1) == Some(&'^')
+            && let Some(end) = find_char(&chars, index + 2, ']')
+        {
+            push_text(&mut spans, &mut buffer, base);
+            let label: String = chars[index + 2..index + 2 + end].iter().collect();
+            spans.push(Span::styled(
+                format!("[{label}]"),
+                base.fg(state.theme.gutter),
+            ));
+            index += end + 3;
             continue;
         }
         if chars[index] == '['

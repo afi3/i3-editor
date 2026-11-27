@@ -11,6 +11,9 @@ impl App {
     /// Route a command to its category. Each category takes ownership and hands
     /// the command back when it does not recognize it, so payloads never clone.
     pub fn dispatch(&mut self, command: Command) -> Result<()> {
+        if command.edits_document() && self.refuse_read_only() {
+            return Ok(());
+        }
         let Some(command) = self.dispatch_document(command)? else {
             return Ok(());
         };
@@ -81,7 +84,9 @@ impl App {
             | Command::AiQueueObjectives
             | Command::AiObjectiveLink
             | Command::AiIndexProject
-            | Command::AiContextFiles => {
+            | Command::AiContextFiles
+            | Command::AiRules
+            | Command::AiTrace => {
                 self.dispatch_ai(command);
                 return Ok(None);
             }
@@ -125,6 +130,8 @@ impl App {
             Command::AiObjectiveLink => self.open_ai_objective_link(),
             Command::AiIndexProject => self.index_ai_context(),
             Command::AiContextFiles => self.open_ai_context_files(),
+            Command::AiRules => self.open_ai_rules(),
+            Command::AiTrace => self.open_ai_trace(),
             _ => {}
         }
     }
@@ -181,7 +188,12 @@ impl App {
             Command::LineEndingsCrlf => {
                 self.convert_line_endings(crate::editor::document::Eol::Crlf)?
             }
-            Command::GoToSymbol => self.open_prompt(PromptKind::Symbols),
+            Command::GoToSymbol => {
+                if self.refuse_read_only() {
+                    return Ok(None);
+                }
+                self.open_prompt(PromptKind::Symbols)
+            }
             Command::LspCompletion => self.lsp_completion()?,
             Command::LspHover => self.lsp_hover()?,
             Command::LspDefinition => self.lsp_definition()?,
@@ -263,7 +275,10 @@ impl App {
             Command::ExplorerRename => self.open_prompt(PromptKind::Rename),
             Command::ExplorerDelete => self.open_prompt(PromptKind::Delete),
             Command::ExplorerRefresh => self.state.explorer.refresh(),
-            Command::ExplorerToggleHidden => self.state.explorer.toggle_hidden(),
+            Command::ExplorerToggleHidden => {
+                self.state.explorer.toggle_hidden();
+                self.quick_open_files = None;
+            }
             other => return Ok(Some(other)),
         }
         Ok(None)

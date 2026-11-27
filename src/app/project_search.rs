@@ -206,6 +206,10 @@ impl App {
                 .documents
                 .get_mut(&id)
                 .expect("document looked up above");
+            if document.read_only {
+                self.notify(format!("{} is read-only", group.relative));
+                return Ok(());
+            }
             if document.dirty {
                 self.notify(format!(
                     "{} has unsaved changes; save it first",

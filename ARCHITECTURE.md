@@ -263,10 +263,27 @@ atomically (`write_atomic`, with an in-place fallback when rename is refused).
 and `structure::folds` build a fresh tree with the language's tree-sitter grammar
 when the user asks for a symbol list or a fold; rendering keeps its separate
 incremental tree in `Highlighter`. Symbol rows carry tree-sitter byte columns,
-converted to char offsets at the jump. Folds are inclusive line ranges stored on
-the `Document`; any edit clears them because their line numbers would drift.
-`ui::pane` renders only non-hidden lines and maps display rows back through the
-same filter for the cursor, bracket highlights, and mouse hit-testing.
+converted to char offsets at the jump. The curated node-kind table is merged
+with `definition.*` captures from the grammar's tags query where the crate
+exports one (Rust, Python, JavaScript, TypeScript, Go, C, Lua); Shell, Markdown,
+and TOML use the table alone. Rows are deduplicated by position and name, then
+sorted by source position. Folds are inclusive line ranges stored on the
+`Document`. Ordinary edits re-anchor them: an edit above shifts the range, a
+header edit keeps it with a shifted body, and an edit that touches hidden lines
+opens only that fold. Undo, redo, and full reloads clear folds; `session.toml`
+stores them per file and `Document::restore_folds` clamps them to the current
+line count. `ui::pane` renders only non-hidden lines and maps display rows back
+through the same filter for the cursor, bracket highlights, and mouse
+hit-testing.
+
+**Large files have a read-only mode.** `Document::open_read_only` streams the
+file with `Rope::from_reader` and enforces `MAX_READ_ONLY_BYTES` (256 MiB), so no
+second string copy exists. `read_only` short-circuits every document mutator,
+syntax spans, and fold toggles; saving and reloading return `Error::ReadOnly`.
+`Command::edits_document` refuses editing commands at dispatch and names the
+16 MiB limit in the status bar. `open_document` routes files above 16 MiB
+through the `LargeFile` prompt; session restore reopens them silently. The LSP
+pump skips read-only documents, and the status bar appends `[RO]`.
 
 **One pane can hold several cursors.** `Pane.cursor/anchor` is the primary
 selection; `Pane.extra` holds secondary carets and selections. `edit_ranges`
@@ -334,9 +351,13 @@ that channel in `App::pump_lsp` once per frame. Requests carry an id whose
 `ReplyKind` lives in the server's pending map, so completion, hover, and
 definition replies need no global dispatcher. `initialize` runs first; requests
 sent before the response are queued per server and flushed once it arrives.
-Documents use full sync: every frame compares the rope text with the last sent
-text and emits `didOpen`/`didChange`/`didClose`; positions convert between char
-offsets and UTF-16 columns at the boundary. Diagnostics are stored per document
+Documents compare the rope text with the last sent text and emit
+`didOpen`/`didChange`/`didClose`; `didChange` follows the server's
+`textDocumentSync` capability. Incremental servers receive one contiguous
+replacement range computed by common prefix/suffix in the old text, with
+UTF-16 columns; full-sync servers receive the whole document, and `None`
+suppresses changes. Positions convert between char offsets and UTF-16 columns at
+the boundary. Diagnostics are stored per document
 id and rendered by the gutter and status bar. A server that fails to spawn is
 marked failed and reported once, so edits never wait on a language server.
 Pending requests carry a send timestamp: an unanswered `initialize` fails the
@@ -390,16 +411,27 @@ the worker by killing its `curl` child or interrupting the backoff. Cancelling a
 call removes that MCP server process, because MCP has no mandatory cancellation
 acknowledgement; the next question reloads its tools. The panel holds a question
 until every trusted server reports a loaded tool list or is marked failed, so
-the first request sees the tools it will offer. `ai::trim_messages` enforces a
-conservative prompt-token estimate, drops older turns, and trims oversized
-non-user content; one MCP result is capped before it enters the conversation.
+the first request sees the tools it will offer. `ai::trim_plan` returns the
+leading system messages, kept turns, and dropped turns; `ai::trim_messages` sends
+system+kept and trims oversized non-user content. With `compact_history`
+(default), a request that would drop turns first runs one summary request over
+exactly those turns, replaces them with a leading system summary, and retries
+once; the summary usage counts toward the session budget. Each request starts
+with one system message: a fixed harness prompt plus the first existing
+`AGENTS.md`/`CLAUDE.md` (16 KiB cap, opt-out `[ai] workspace_rules`) and
+`MEMORY.md` (opt-out `[ai] workspace_memory`). Both files are re-read per
+request, so an edited file applies to the next turn.
 Tool definitions are filtered by the `[ai]` allow/deny policy, and tool
 annotations drive the read-only/write/destructive label in the confirmation.
 Each decision and result is appended to `<config>/i3-editor/audit.jsonl` with
-redacted arguments. The panel width comes from `[ai] panel_width`; palette
-commands copy/clear it, and the title reports estimated context plus actual
-provider prompt/completion usage. Optional per-million input/output prices add
-a session cost estimate. `max_session_tokens` and `max_session_cost_usd` stop
+redacted arguments. Every model request also appends one `model_request` record
+(round, model, sent/original message counts, estimated tokens, latency, stop
+reason, actual usage, tool-call count) without message content; `ai_trace` reads
+the audit tail and formats the latest records. The panel width comes from
+`[ai] panel_width`; palette commands copy/clear it, and the title reports
+estimated context plus actual provider prompt/completion usage. Optional
+per-million input/output prices add a session cost estimate.
+`max_session_tokens` and `max_session_cost_usd` stop
 the next model request when actual usage reaches the configured cap. MCP
 trust is still checked before a server starts. Built-in `native/read_file` and
 `native/edit_file` tools add a workspace-root boundary, a file snapshot,
@@ -411,7 +443,18 @@ compact diff before confirmation, and successful operations push an undo record;
 still matches.
 Rust edits in a Cargo workspace start a background `cargo check
 --message-format=short` (20-second timeout); its output is appended to the edit
-result before the next model turn. Non-Rust edits to an open document with a
+result before the next model turn. Configured `[ai.verify.<name>]` entries add
+one `native__verify` tool whose schema embeds the configured names; the model
+selects a name, never a command line. `native::VerifyTask` runs the executable
+directly without a shell, with the workspace as cwd and the MCP environment
+allowlist, kills it on timeout or cancellation, and caps the combined
+stdout/stderr before the result enters the conversation. `sandbox = true` wraps
+the command with macOS `sandbox-exec` or Linux `bwrap`, denying network and
+limiting writes to the workspace and temp directories; a missing wrapper fails
+the call instead of running unsandboxed. MCP servers are not covered by this
+wrapper.
+
+Non-Rust edits to an open document with a
 configured LSP server wait up to five seconds for fresh diagnostics and attach
 them to the tool result.
 The AI request uses SSE by default: `ai::stream` reads delta events from curl
@@ -457,14 +500,25 @@ the terminal directory still pointed at the old root.
 **Each workspace owns a root and a watcher set.** `Workspace.root` is persisted
 in `session.toml`. `AppState` keeps one explorer for the active workspace;
 switching rebuilds it from the target root and clears the quick-open cache.
-`App.watchers` holds one non-recursive watcher per workspace id, reconfigured
-from the root, expanded explorer directories, and open-document parents; the loop
-drains all of them, coalesces paths, and only rebuilds the explorer when the
-event came from the active workspace. Open buffers react to their own paths
-regardless of workspace. A second non-recursive watcher covers the parent
-directories of open documents outside every workspace root;
-`sync_external_watcher` adds and removes those directories as documents open and
-close, and drops the watcher when none remain.
+`App.watchers` holds one recursive watcher per workspace id, so a change in any
+subdirectory reaches the loop without per-directory registration. Ignored and
+hidden paths are filtered before an explorer rebuild but still reach open
+buffers. When the OS refuses a recursive watch, the watcher falls back to the
+root plus expanded explorer directories and reports one warning. The loop drains
+all watchers, coalesces paths, and only rebuilds the explorer when the event came
+from the active workspace. Open buffers react to their own paths regardless of
+workspace. A second non-recursive watcher covers the parent directories of open
+documents outside every workspace root; `sync_external_watcher` adds and removes
+those directories as documents open and close, and drops the watcher when none
+remain.
+
+**Quick open is a cached index, not a walk per invocation.** The first request
+scans the workspace with the same `ignore` rules as the explorer, caps the list
+at 50,000 paths, and stores whether it truncated. Active-workspace watcher events
+insert, remove, or prefix-remove paths without another scan; a directory that
+moved in without child events and a `.gitignore`/`.ignore` change drop the cache
+so the next request rescans. Switching workspace or toggling hidden files drops
+the cache as well.
 
 **Crash recovery is a swap directory, not a journal.** `recovery::write_to`
 writes each dirty document to `<config>/i3-editor/swap/` through `tempfile` +
@@ -481,6 +535,13 @@ traffic, search batches, and due Git refreshes; it draws only when that flag is
 set, then clears it. The idle poll is one second when no shell, search, or LSP
 needs a faster cadence.
 
+**Read-only overlays own the mouse as well as the keyboard.** Help, diff, log,
+MCP, and the hunk picker consume wheel and click events before shell forwarding
+and pane hit-testing. The wheel scrolls the overlay's own offset; a click is
+swallowed. Without that gate, interacting with a modal overlay would move the
+cursor in the buffer underneath. Completion and hover popups are not modal and
+keep their existing routing.
+
 **Terminal cleanup does not depend on a clean exit.** Ratatui installs a panic
 hook; `terminal.rs` chains its own hook to leave bracketed paste, mouse capture,
 and keyboard-enhancement flags. `signal-hook` restores the terminal on SIGINT,
@@ -493,6 +554,12 @@ a discard prompt. Closing a pane keeps its dirty documents registered (orphaned)
 until the user saves or discards them, and closing a workspace with unsaved
 changes is refused with a message. Quit always opens a confirmation prompt:
 clean sessions offer Quit/Cancel, dirty sessions add Save all/Discard all.
+
+**Supported run targets are macOS and Linux.** Windows is not built or released:
+the repository carries no Windows CI job, release asset, keyring backend,
+`APPDATA` config path, or `%COMSPEC%` shell fallback. `windows-sys` remains in
+`Cargo.lock` only through transitive platform crates (`notify`, `portable-pty`,
+`tempfile`).
 
 ## Data flow
 

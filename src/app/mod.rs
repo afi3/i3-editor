@@ -53,6 +53,10 @@ impl App {
             external_watcher: None,
             external_watch_dirs: std::collections::HashSet::new(),
             quick_open_files: None,
+            pending_large_open: None,
+            ai_request_trace: None,
+            ai_compact_dropped: None,
+            ai_compacted: false,
             project_task: None,
             selecting: None,
             enhanced: false,
@@ -72,6 +76,7 @@ impl App {
             sampling_task: None,
             native_check: None,
             native_check_output: None,
+            native_verify: None,
             native_diagnostics: None,
             native_undo: Vec::new(),
             mcp_trusted: std::collections::HashSet::new(),
@@ -127,6 +132,24 @@ pub(crate) struct DiagnosticWait {
     pub started: Instant,
 }
 
+/// Cached quick-open paths, maintained from watcher events.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct QuickOpenIndex {
+    pub(crate) files: Vec<String>,
+    /// The initial scan hit the path cap; new paths are not added.
+    pub(crate) truncated: bool,
+}
+
+/// In-flight model request metadata for the audit trace.
+pub(crate) struct AiRequestTrace {
+    pub(crate) round: usize,
+    pub(crate) model: String,
+    pub(crate) started: Instant,
+    pub(crate) original_messages: usize,
+    pub(crate) sent_messages: usize,
+    pub(crate) estimated_tokens: usize,
+}
+
 pub struct App {
     pub state: AppState,
     pub terminal: Terminal<CrosstermBackend<Stdout>>,
@@ -143,8 +166,16 @@ pub struct App {
     /// root. One non-recursive watcher covers all of them.
     pub(crate) external_watcher: Option<crate::watch::Watcher>,
     pub(crate) external_watch_dirs: std::collections::HashSet<PathBuf>,
-    /// Quick-open paths with the explorer revision they were scanned at.
-    pub(crate) quick_open_files: Option<(u64, Vec<String>)>,
+    /// Quick-open paths maintained from watcher events.
+    pub(crate) quick_open_files: Option<QuickOpenIndex>,
+    /// Path waiting for the read-only large-file confirmation.
+    pub(crate) pending_large_open: Option<PathBuf>,
+    /// Metadata for the model request currently in flight.
+    pub(crate) ai_request_trace: Option<AiRequestTrace>,
+    /// Number of non-system messages being summarized right now.
+    pub(crate) ai_compact_dropped: Option<usize>,
+    /// One compaction attempt per request chain, so a summary cannot loop.
+    pub(crate) ai_compacted: bool,
     /// Running Find in Files scan, if any.
     pub(crate) project_task: Option<crate::project_search::Task>,
     /// Pane whose text is being selected by a mouse drag.
@@ -173,6 +204,7 @@ pub struct App {
     pub(crate) sampling_task: Option<crate::ai::Task>,
     pub(crate) native_check: Option<crate::native::CheckTask>,
     pub(crate) native_check_output: Option<String>,
+    pub(crate) native_verify: Option<crate::native::VerifyTask>,
     pub(crate) native_diagnostics: Option<DiagnosticWait>,
     pub(crate) native_undo: Vec<crate::native::UndoState>,
     /// Trusted MCP server config hashes for this session.
@@ -267,6 +299,8 @@ impl App {
             git_diff: None,
             help: None,
             mcp_view: None,
+            rules_view: None,
+            trace_view: None,
             ai: crate::state::AiPanel::default(),
             hunks: None,
             plugin_status: Vec::new(),
@@ -300,6 +334,10 @@ impl App {
             external_watcher: None,
             external_watch_dirs: std::collections::HashSet::new(),
             quick_open_files: None,
+            pending_large_open: None,
+            ai_request_trace: None,
+            ai_compact_dropped: None,
+            ai_compacted: false,
             project_task: None,
             selecting: None,
             enhanced,
@@ -319,6 +357,7 @@ impl App {
             sampling_task: None,
             native_check: None,
             native_check_output: None,
+            native_verify: None,
             native_diagnostics: None,
             native_undo: Vec::new(),
             mcp_trusted,
@@ -414,7 +453,12 @@ impl App {
         for (index, (id, root)) in roots.into_iter().enumerate() {
             let watched_config = if index == 0 { config } else { None };
             match crate::watch::Watcher::new(&root, watched_config) {
-                Ok(watcher) => self.watchers.push((id, watcher)),
+                Ok(mut watcher) => {
+                    if let Some(warning) = watcher.take_warning() {
+                        self.state.warnings.push(warning);
+                    }
+                    self.watchers.push((id, watcher));
+                }
                 Err(error) => self.state.warnings.push(format!(
                     "file watching disabled for {}: {error}",
                     root.display()
@@ -426,7 +470,12 @@ impl App {
     pub(crate) fn replace_watcher(&mut self, id: crate::state::WorkspaceId, root: &Path) {
         self.watchers.retain(|(watched, _)| *watched != id);
         match crate::watch::Watcher::new(root, None) {
-            Ok(watcher) => self.watchers.push((id, watcher)),
+            Ok(mut watcher) => {
+                if let Some(warning) = watcher.take_warning() {
+                    self.state.warnings.push(warning);
+                }
+                self.watchers.push((id, watcher));
+            }
             Err(error) => self.state.warnings.push(format!(
                 "file watching disabled for {}: {error}",
                 root.display()
@@ -443,6 +492,7 @@ impl App {
             self.pump_mcp();
             self.pump_ai();
             self.pump_native_check();
+            self.pump_native_verify();
             self.pump_sampling();
             self.pump_lsp_install();
             self.refresh_git_if_due();
@@ -531,6 +581,7 @@ impl App {
             || self.ai_task.is_some()
             || self.ai_stream.is_some()
             || self.sampling_task.is_some()
+            || self.native_verify.is_some()
         {
             return Duration::from_millis(100);
         }
@@ -626,6 +677,8 @@ impl App {
         self.handle_mcp_key(combo)
             || self.handle_ai_key(combo)
             || self.handle_help_key(combo)
+            || self.handle_rules_key(combo)
+            || self.handle_trace_key(combo)
             || self.handle_hunk_key(combo)
             || self.handle_diff_key(combo)
     }
@@ -723,13 +776,53 @@ impl App {
             self.activate_document(existing)?;
             return Ok(());
         }
+        let size = std::fs::metadata(&path)
+            .map_err(|error| Error::io("read", &path, error))?
+            .len();
+        if size > crate::editor::document::MAX_FILE_BYTES {
+            if size > crate::editor::document::MAX_READ_ONLY_BYTES {
+                return Err(Error::FileTooLarge {
+                    path,
+                    size,
+                    limit: crate::editor::document::MAX_READ_ONLY_BYTES,
+                });
+            }
+            let mut prompt = crate::input::PromptState::new(crate::input::PromptKind::LargeFile);
+            prompt.set_candidates(vec![
+                format!(
+                    "Open read-only ({:.1} MiB)",
+                    size as f64 / (1024.0 * 1024.0)
+                ),
+                "Cancel".to_string(),
+            ]);
+            self.pending_large_open = Some(path);
+            self.state.mode = InputMode::Prompt(prompt);
+            self.notify("large file: Enter opens read-only, Esc cancels");
+            return Ok(());
+        }
+        self.open_document_from_disk(path, false)
+    }
+
+    fn open_document_from_disk(&mut self, path: PathBuf, read_only: bool) -> Result<()> {
         let id = self.state.ids.document();
         let indent = self.document_indent(Some(&path));
-        let mut document = Document::open(id, path.clone())?;
+        let mut document = if read_only {
+            Document::open_read_only(id, path.clone())?
+        } else {
+            Document::open(id, path.clone())?
+        };
         document.indent = indent;
         self.state.documents.insert(id, document);
         self.activate_document(id)?;
-        self.notify(format!("opened {}", path.display()));
+        if read_only {
+            self.notify(format!(
+                "{} is read-only (larger than {} MiB)",
+                path.display(),
+                crate::editor::document::MAX_FILE_BYTES >> 20
+            ));
+        } else {
+            self.notify(format!("opened {}", path.display()));
+        }
         self.refresh_git_marks();
         self.plugin_event("open");
         Ok(())

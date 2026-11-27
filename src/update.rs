@@ -319,7 +319,7 @@ mod tests {
             asset_target("linux", "aarch64"),
             Some("aarch64-unknown-linux-gnu")
         );
-        assert_eq!(asset_target("windows", "x86_64"), None);
+        assert_eq!(asset_target("freebsd", "x86_64"), None);
         assert_eq!(asset_target("linux", "riscv64"), None);
     }
 

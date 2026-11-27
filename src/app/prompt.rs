@@ -9,7 +9,10 @@ use crate::error::{Error, Result};
 use crate::input::{KeyCombo, PromptGroup, PromptKind, PromptState};
 use crate::state::InputMode;
 
-use super::App;
+use super::{App, QuickOpenIndex};
+
+/// Paths kept in the quick-open list; the status bar reports truncation.
+const QUICK_OPEN_LIMIT: usize = 50_000;
 
 impl App {
     pub(crate) fn handle_prompt_key(&mut self, combo: KeyCombo) {
@@ -199,6 +202,7 @@ impl App {
 
     /// Close the prompt without submitting. A running project scan is stopped.
     pub(crate) fn cancel_prompt(&mut self) {
+        self.pending_large_open = None;
         if matches!(
             &self.state.mode,
             InputMode::Prompt(prompt) if prompt.kind == PromptKind::McpSampling
@@ -240,6 +244,9 @@ impl App {
         else {
             return Ok(());
         };
+        if prompt.kind == PromptKind::LargeFile {
+            return self.submit_large_file_prompt(prompt);
+        }
         match prompt.kind.group() {
             PromptGroup::Query => self.submit_query_prompt(prompt),
             PromptGroup::File => self.submit_file_prompt(prompt),
@@ -562,6 +569,17 @@ impl App {
         }
     }
 
+    fn submit_large_file_prompt(&mut self, prompt: PromptState) -> Result<()> {
+        let open = prompt
+            .selected_candidate()
+            .is_some_and(|candidate| candidate.starts_with("Open read-only"));
+        let path = self.pending_large_open.take();
+        if open && let Some(path) = path {
+            self.open_document_from_disk(path, true)?;
+        }
+        Ok(())
+    }
+
     pub(crate) fn open_prompt(&mut self, kind: PromptKind) {
         let mut prompt = PromptState::new(kind);
         let filled = match kind.group() {
@@ -813,22 +831,36 @@ impl App {
     }
 
     pub(crate) fn quick_open_candidates(&mut self) -> Vec<String> {
-        // Without a watcher the list cannot be invalidated, so keep rescanning.
+        // Without a watcher the list cannot be updated, so keep rescanning.
         if self.watchers.is_empty() {
-            return self.scan_quick_open();
+            let (files, truncated) = self.scan_quick_open();
+            self.report_quick_open_truncation(truncated);
+            return files;
         }
-        let revision = self.state.explorer.revision;
-        if let Some((cached, files)) = &self.quick_open_files
-            && *cached == revision
-        {
-            return files.clone();
+        if self.quick_open_files.is_none() {
+            let (files, truncated) = self.scan_quick_open();
+            self.report_quick_open_truncation(truncated);
+            self.quick_open_files = Some(QuickOpenIndex { files, truncated });
         }
-        let files = self.scan_quick_open();
-        self.quick_open_files = Some((revision, files.clone()));
-        files
+        self.quick_open_files
+            .as_ref()
+            .map(|index| index.files.clone())
+            .unwrap_or_default()
     }
 
-    fn scan_quick_open(&self) -> Vec<String> {
+    fn report_quick_open_truncation(&mut self, truncated: bool) {
+        if truncated {
+            self.notify(format!(
+                "quick open stops at {QUICK_OPEN_LIMIT} files; narrow the workspace"
+            ));
+        }
+    }
+
+    fn scan_quick_open(&self) -> (Vec<String>, bool) {
+        self.scan_quick_open_limit(QUICK_OPEN_LIMIT)
+    }
+
+    pub(crate) fn scan_quick_open_limit(&self, limit: usize) -> (Vec<String>, bool) {
         let root = self.state.explorer.root.clone();
         let mut out = Vec::new();
         let show_all = self.state.explorer.show_hidden;
@@ -839,6 +871,7 @@ impl App {
             .git_exclude(!show_all)
             .ignore(!show_all)
             .build();
+        let mut truncated = false;
         for entry in walker.flatten() {
             let path = entry.path();
             if !path.is_file() {
@@ -847,12 +880,13 @@ impl App {
             if let Ok(relative) = path.strip_prefix(&root) {
                 out.push(relative.to_string_lossy().into_owned());
             }
-            if out.len() >= 5000 {
+            if out.len() >= limit {
+                truncated = true;
                 break;
             }
         }
         out.sort();
-        out
+        (out, truncated)
     }
 }
 

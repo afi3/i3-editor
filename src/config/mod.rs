@@ -109,6 +109,35 @@ pub struct McpConfig {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(default)]
+pub struct VerifyConfig {
+    /// Executable to run; never passed through a shell.
+    pub command: String,
+    #[serde(default)]
+    pub args: Vec<String>,
+    #[serde(default = "default_verify_timeout")]
+    pub timeout_secs: u64,
+    /// Run under the platform sandbox: no network, writes only in workspace/tmp.
+    #[serde(default)]
+    pub sandbox: bool,
+}
+
+fn default_verify_timeout() -> u64 {
+    120
+}
+
+impl Default for VerifyConfig {
+    fn default() -> Self {
+        Self {
+            command: String::new(),
+            args: Vec::new(),
+            timeout_secs: default_verify_timeout(),
+            sandbox: false,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(default)]
 pub struct AiConfig {
     /// OpenAI-compatible API root, without `/chat/completions`.
     pub base_url: String,
@@ -130,6 +159,14 @@ pub struct AiConfig {
     pub auto_context_files: usize,
     /// Maximum characters attached by auto context across all files.
     pub auto_context_chars: usize,
+    /// Inject the workspace's AGENTS.md or CLAUDE.md into the system prompt.
+    pub workspace_rules: bool,
+    /// Summarize dropped turns before a request when history overflows.
+    pub compact_history: bool,
+    /// Inject the workspace's MEMORY.md into the system prompt.
+    pub workspace_memory: bool,
+    /// Named verification commands the model may run by name.
+    pub verify: BTreeMap<String, VerifyConfig>,
     /// Stop the harness after this many actual session tokens; 0 is unlimited.
     pub max_session_tokens: usize,
     /// Stop the harness after this estimated session cost; 0 is unlimited.
@@ -180,6 +217,10 @@ impl Default for AiConfig {
             auto_context: false,
             auto_context_files: 4,
             auto_context_chars: 12_000,
+            workspace_rules: true,
+            compact_history: true,
+            workspace_memory: true,
+            verify: BTreeMap::new(),
             max_session_tokens: 0,
             max_session_cost_usd: 0.0,
             allowed_tools: Vec::new(),
@@ -363,12 +404,6 @@ pub fn config_dir() -> Option<PathBuf> {
         && !xdg.is_empty()
     {
         return Some(PathBuf::from(xdg).join("i3-editor"));
-    }
-    #[cfg(windows)]
-    if let Some(appdata) = std::env::var_os("APPDATA")
-        && !appdata.is_empty()
-    {
-        return Some(PathBuf::from(appdata).join("i3-editor"));
     }
     std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config").join("i3-editor"))
 }
@@ -761,6 +796,14 @@ pub fn load_from(path: &Path) -> (AppConfig, Vec<String>) {
     config.ai.max_history_turns = config.ai.max_history_turns.clamp(1, 500);
     config.ai.auto_context_files = config.ai.auto_context_files.clamp(1, 20);
     config.ai.auto_context_chars = config.ai.auto_context_chars.clamp(500, 200_000);
+    config
+        .ai
+        .verify
+        .retain(|name, verify| !name.trim().is_empty() && !verify.command.trim().is_empty());
+    for verify in config.ai.verify.values_mut() {
+        verify.args.truncate(64);
+        verify.timeout_secs = verify.timeout_secs.clamp(1, 600);
+    }
     config.ai.max_session_tokens = config.ai.max_session_tokens.min(1_000_000_000);
     config.ai.max_session_cost_usd = config.ai.max_session_cost_usd.max(0.0);
     config.ai.input_cost_per_million = config.ai.input_cost_per_million.max(0.0);
@@ -800,6 +843,10 @@ const AI_KEYS: &[&str] = &[
     "auto_context",
     "auto_context_files",
     "auto_context_chars",
+    "workspace_rules",
+    "compact_history",
+    "workspace_memory",
+    "verify",
     "max_session_tokens",
     "max_session_cost_usd",
     "allowed_tools",
@@ -908,6 +955,27 @@ mod tests {
         let (config, warnings) = load_from(&path);
         assert_eq!(warnings.len(), 1, "{warnings:?}");
         assert_eq!(config.editor.tab_size, 4);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn verify_commands_parse_and_are_bounded() {
+        let dir = std::env::temp_dir().join(format!("i3-config-verify-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let path = dir.join("config.toml");
+        std::fs::write(
+            &path,
+            "[ai.verify.test]\ncommand = \"cargo\"\nargs = [\"test\", \"--locked\"]\ntimeout_secs = 0\nsandbox = true\n\n[ai.verify.empty]\ncommand = \"\"\n",
+        )
+        .expect("write");
+        let (config, warnings) = load_from(&path);
+        assert!(warnings.is_empty(), "{warnings:?}");
+        let verify = config.ai.verify.get("test").expect("test");
+        assert_eq!(verify.command, "cargo");
+        assert_eq!(verify.args, ["test", "--locked"]);
+        assert_eq!(verify.timeout_secs, 1);
+        assert!(verify.sandbox);
+        assert!(!config.ai.verify.contains_key("empty"));
         std::fs::remove_dir_all(&dir).ok();
     }
 

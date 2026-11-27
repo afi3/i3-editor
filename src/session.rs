@@ -29,6 +29,8 @@ struct Session {
     active: usize,
     show_hidden: bool,
     documents: Vec<PathBuf>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    folds: Vec<Vec<(usize, usize)>>,
     workspaces: Vec<WorkspaceSession>,
 }
 
@@ -159,6 +161,7 @@ pub fn save_to(path: &Path, state: &AppState) -> std::io::Result<()> {
 
 fn snapshot(state: &AppState) -> Option<Session> {
     let mut documents: Vec<PathBuf> = Vec::new();
+    let mut folds: Vec<Vec<(usize, usize)>> = Vec::new();
     let mut positions: HashMap<PathBuf, usize> = HashMap::new();
     let mut workspaces = Vec::new();
     let mut active = 0;
@@ -184,6 +187,13 @@ fn snapshot(state: &AppState) -> Option<Session> {
                     None => {
                         let position = documents.len();
                         documents.push(path.clone());
+                        folds.push(
+                            document
+                                .folded
+                                .iter()
+                                .map(|range| (range.start, range.end))
+                                .collect(),
+                        );
                         positions.insert(path.clone(), position);
                         position
                     }
@@ -233,6 +243,7 @@ fn snapshot(state: &AppState) -> Option<Session> {
         active: active.min(workspaces.len() - 1),
         show_hidden: state.explorer.show_hidden,
         documents,
+        folds,
         workspaces,
     })
 }
@@ -305,10 +316,26 @@ fn restore_documents(
 ) -> (Vec<String>, Vec<Option<DocumentId>>) {
     let mut warnings = Vec::new();
     let mut documents: Vec<Option<DocumentId>> = Vec::with_capacity(session.documents.len());
+    let mut fold_sets = session.folds.iter();
     for path in &session.documents {
+        let folds = fold_sets.next();
         let id: DocumentId = state.ids.document();
-        match Document::open(id, path.clone()) {
-            Ok(document) => {
+        let opened = Document::open(id, path.clone()).or_else(|error| {
+            if matches!(
+                error,
+                crate::error::Error::FileTooLarge { size, .. }
+                    if size <= crate::editor::document::MAX_READ_ONLY_BYTES
+            ) {
+                Document::open_read_only(id, path.clone())
+            } else {
+                Err(error)
+            }
+        });
+        match opened {
+            Ok(mut document) => {
+                if let Some(ranges) = folds {
+                    document.restore_folds(ranges.iter().map(|(start, end)| *start..*end));
+                }
                 state.documents.insert(id, document);
                 documents.push(Some(id));
             }
@@ -554,6 +581,8 @@ mod tests {
             git_diff: None,
             help: None,
             mcp_view: None,
+            rules_view: None,
+            trace_view: None,
             ai: crate::state::AiPanel::default(),
             hunks: None,
             plugin_status: Vec::new(),
@@ -581,13 +610,18 @@ mod tests {
         let dir = temp_dir("round");
         let a = dir.join("a.rs");
         let b = dir.join("b.rs");
-        std::fs::write(&a, "fn a() {}\n").expect("a");
+        std::fs::write(&a, "fn a() {\n    one();\n}\n").expect("a");
         std::fs::write(&b, "fn b() {}\n\n").expect("b");
 
         let mut state = state_with(&dir);
         let first = first_pane_id(&state);
         let a_id = add_document(&mut state, &a);
         let b_id = add_document(&mut state, &b);
+        state
+            .documents
+            .get_mut(&a_id)
+            .expect("a")
+            .restore_folds(std::iter::once(0..2));
         state.panes.get_mut(&first).expect("pane").tabs.push(a_id);
         state.panes.get_mut(&first).expect("pane").active = Some(a_id);
         state.panes.get_mut(&first).expect("pane").cursor = 3;
@@ -627,6 +661,12 @@ mod tests {
             restored.documents[&active].path.as_deref(),
             Some(a.as_path())
         );
+        let restored_a = restored
+            .documents
+            .values()
+            .find(|document| document.path.as_deref() == Some(a.as_path()))
+            .expect("restored a");
+        assert_eq!(restored_a.folded, vec![0..2]);
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -678,6 +718,7 @@ mod tests {
             active: 0,
             show_hidden: false,
             documents: Vec::new(),
+            folds: Vec::new(),
             workspaces: Vec::new(),
         };
         std::fs::write(&session_path, toml::to_string(&foreign).expect("toml")).expect("write");

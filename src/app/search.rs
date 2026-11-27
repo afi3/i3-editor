@@ -213,7 +213,7 @@ impl App {
     }
 
     pub(crate) fn replace_all(&mut self, needle: &str, replacement: &str) -> Result<()> {
-        if needle.is_empty() {
+        if needle.is_empty() || self.refuse_read_only() {
             return Ok(());
         }
         let options = self.state.search_options;

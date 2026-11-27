@@ -99,6 +99,8 @@ pub enum Command {
     AiObjectiveLink,
     AiIndexProject,
     AiContextFiles,
+    AiRules,
+    AiTrace,
     GitStatus,
     GitDiff,
     GitLog,
@@ -165,6 +167,35 @@ pub enum Command {
 }
 
 impl Command {
+    /// Commands that would mutate the active buffer. Read-only documents
+    /// refuse these before dispatch.
+    pub fn edits_document(&self) -> bool {
+        matches!(
+            self,
+            Command::Undo
+                | Command::Redo
+                | Command::Cut
+                | Command::Paste
+                | Command::DuplicateLine
+                | Command::MoveLinesUp
+                | Command::MoveLinesDown
+                | Command::DeleteLine
+                | Command::ToggleComment
+                | Command::ResolveConflictOurs
+                | Command::ResolveConflictTheirs
+                | Command::ResolveConflictBoth
+                | Command::ToggleFold
+                | Command::LineEndingsLf
+                | Command::LineEndingsCrlf
+                | Command::InsertText(_)
+                | Command::InsertTab
+                | Command::InsertNewline
+                | Command::Backspace
+                | Command::DeleteForward
+                | Command::AiUndoEdit
+        )
+    }
+
     pub fn name(&self) -> &'static str {
         self.spec().0
     }
@@ -290,6 +321,8 @@ impl Command {
             Command::AiContextFiles => {
                 ("ai_context_files", "Choose an indexed file for AI context")
             }
+            Command::AiRules => ("ai_rules", "Show the workspace AI rules file"),
+            Command::AiTrace => ("ai_trace", "Show recent model request traces"),
             _ => return None,
         })
     }
@@ -330,7 +363,9 @@ impl Command {
             | Command::AiQueueObjectives
             | Command::AiObjectiveLink
             | Command::AiIndexProject
-            | Command::AiContextFiles => return self.ai_spec(),
+            | Command::AiContextFiles
+            | Command::AiRules
+            | Command::AiTrace => return self.ai_spec(),
             Command::LspUninstall => (
                 "lsp_uninstall",
                 "Remove the installed language server for the active file",
@@ -578,6 +613,8 @@ impl Command {
             Command::AiObjectiveLink,
             Command::AiIndexProject,
             Command::AiContextFiles,
+            Command::AiRules,
+            Command::AiTrace,
             Command::GitStatus,
             Command::GitDiff,
             Command::GitLog,
@@ -735,6 +772,8 @@ mod tests {
             Command::AiObjectiveLink,
             Command::AiIndexProject,
             Command::AiContextFiles,
+            Command::AiRules,
+            Command::AiTrace,
             Command::GitStatus,
             Command::GitDiff,
             Command::GitLog,

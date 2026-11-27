@@ -191,8 +191,9 @@ Mouse: click a pane to focus it, drag a pane border to resize the split.
 
 `help` from the palette opens a read-only list built from the active keymap:
 global, editing, explorer, and palette-only commands with their descriptions.
-`Up`/`Down`, `PageUp`/`PageDown`, and `Home`/`End` scroll; `Esc` or `q` closes.
-The list reflects `config.toml` overrides and the safe preset.
+`Up`/`Down`, `PageUp`/`PageDown`, `Home`/`End`, and the mouse wheel scroll;
+`Esc` or `q` closes. The list reflects `config.toml` overrides and the safe
+preset.
 
 ### Quick open and command palette
 
@@ -200,8 +201,9 @@ The list reflects `config.toml` overrides and the safe preset.
 path. The two lists match fuzzy, scored by [Nucleo](https://github.com/helix-editor/nucleo): the query is a
 subsequence of the candidate, with bonuses at path separators, underscores, and
 word boundaries, and smart case (an uppercase letter in the query makes matching
-case-sensitive). The file list is scanned once and kept current by the
-filesystem watcher; quick open no longer walks the project on every invocation.
+case-sensitive). The file list is scanned once per workspace and then kept current by watcher
+events, so quick open does not walk the project on every invocation. It stops at
+50,000 paths and reports truncation in the status bar.
 
 | Query | Result |
 |---|---|
@@ -291,8 +293,10 @@ terminals disagree about `Ctrl+Shift` combinations.
   fenced code, and TOML tables. The header line stays visible and the rest of the
   range disappears from the viewport; fold headers keep their original line
   numbers.
-- A second `fold` on the header opens it. Any edit unfolds the document,
-  because tree-sitter line ranges move under edits.
+- A second `fold` on the header opens it. Editing above a fold shifts it;
+  editing its header keeps it closed; editing hidden lines opens only that fold.
+  Undo, redo, and a reload from disk clear folds. Closed folds are saved per
+  file in `session.toml` and restored when the file reopens.
 
 ### File operations
 
@@ -311,10 +315,19 @@ When the explorer has focus its selected row is the target. Otherwise the active
 document is, falling back to the explorer selection. Directories can be copied or
 revealed; only regular files can be duplicated.
 
+### Large files
+
+Opening a file above 16 MiB asks for confirmation and then loads it read-only.
+The status bar shows `[RO]`; typing, paste, undo, comment and line edits,
+replaces, and saves are refused with the size limit. Syntax highlighting, LSP,
+folds, and go-to-symbol are skipped. Above 256 MiB the file is refused outright.
+Scroll, find, selection, and copy still work. A read-only document restored from
+`session.toml` reopens the same way without asking again.
+
 ### Workspace roots
 
-Each workspace watches its root, the expanded explorer directories, and the
-parent directories of its open documents without recursion:
+Each workspace recursively watches its root with the explorer's ignore rules;
+open documents outside every root get a non-recursive parent watcher.
 
 - `workspace_root` from the palette prompts for a directory and rebuilds the
   explorer, quick-open list, and watcher for the active workspace. A new
@@ -322,9 +335,13 @@ parent directories of its open documents without recursion:
 - Switching workspaces (`Ctrl+1`..`Ctrl+9`, `F7`/`F8`, or the palette) swaps the
   explorer to that workspace's root and clears the quick-open cache; the tree is
   rebuilt for the new root.
-- Workspace watchers are non-recursive. File events from an inactive workspace
-  still reload open buffers but do not rebuild the active explorer tree.
-  Unexpanded directories are watched after the explorer opens them.
+- Workspace watchers are recursive: a change in an unexpanded directory updates
+  the explorer and quick-open list. Hidden and ignored paths (for example
+  `target/`) do not rebuild the tree. File events from an inactive workspace
+  still reload open buffers.
+- If the OS refuses a recursive watch (for example an exhausted inotify limit),
+  the workspace falls back to its root plus expanded directories and reports one
+  status-bar warning.
 - Open documents outside every workspace root get a non-recursive watcher on
   their parent directory, so external saves still reload clean buffers and warn
   on dirty ones.
@@ -349,9 +366,10 @@ parent directories of its open documents without recursion:
 
 ### Language servers (LSP)
 
-The editor speaks a minimal subset of LSP over stdio: full document sync,
-diagnostics, completion, hover, and go-to-definition. Servers start lazily when a
-matching document opens; a missing or crashing server never blocks editing.
+The editor speaks a minimal subset of LSP over stdio: full or incremental
+document sync, diagnostics, completion, hover, and go-to-definition. Servers
+start lazily when a matching document opens; a missing or crashing server never
+blocks editing.
 
 - **Install from the palette:** open a file, press `F1`, and choose
   `lsp_install`. The active file selects the provider, so `.rs` installs Rust,
@@ -400,7 +418,10 @@ filenames = ["Dockerfile", "Containerfile", "Dockerfile.*", "*.Dockerfile"]
   key closes it.
 - `lsp_definition` (palette-only) opens the target file, unfolds the line, and
   puts the cursor on the definition. Bind a key if your terminal can emit it.
-- Sync is full-text on every change; positions convert between char offsets and
+- Change sync follows the server's `textDocumentSync` capability. An incremental
+  server receives one ranged `contentChanges` entry computed from the previous
+  text; a server that advertises full sync receives the whole document, and
+  `None` suppresses `didChange`. Positions convert between char offsets and
   LSP's UTF-16 columns. Server failures and protocol errors surface through the
   status bar once per server.
 - Changing the workspace root or any `[lsp.*]` table restarts every configured
@@ -458,6 +479,8 @@ X-Project = "demo"             # extra headers for HTTP MCP
   `logs` row for the server's stderr ring.
 - `mcp_resources` lists resources from a trusted server; selecting one opens its
   text in a read-only overlay. `mcp_resource_templates` lists URI templates.
+  The overlay scrolls with the arrow keys, `PageUp`/`PageDown`, `Home`/`End`,
+  and the mouse wheel; `Esc`/`q` closes.
   `mcp_prompts` lists prompts and opens the returned messages in the same
   overlay. Resource and prompt lists follow `nextCursor` pages. Prompts with
   declared arguments open a field form before the request is sent.
@@ -514,6 +537,9 @@ max_history_turns = 24
 auto_context = false             # attach matching indexed files on submit
 auto_context_files = 4
 auto_context_chars = 12000
+workspace_rules = true           # inject AGENTS.md/CLAUDE.md into the system prompt
+compact_history = true           # summarize dropped turns before a request
+workspace_memory = true          # inject MEMORY.md into the system prompt
 max_session_tokens = 0           # 0 = unlimited; stop before the next request
 max_session_cost_usd = 0.0       # 0 = unlimited; needs input/output pricing
 allowed_tools = []               # empty = every trusted tool; supports server/*
@@ -523,6 +549,24 @@ retry_base_ms = 500              # exponential backoff base
 retry_max_ms = 8000
 panel_width = 20                 # percent of terminal width
 ```
+
+Verification commands the model may request by name live in their own tables:
+
+```toml
+[ai.verify.test]
+command = "cargo"
+args = ["test", "--locked"]
+timeout_secs = 120
+sandbox = false
+```
+
+The model sends only the `name`; it never supplies a command line. The command
+runs with the workspace as cwd and the MCP environment allowlist
+(`PATH`, `HOME`, `TMPDIR`, `LANG`, `LC_ALL`), is killed at the timeout, and its
+output is capped by `max_tool_output_chars`. With `sandbox = true` it runs under
+macOS `sandbox-exec` or Linux `bwrap`: network is denied and writes are limited
+to the workspace and temp directories. The sandbox fails closed when the wrapper
+is unavailable; MCP servers are not sandboxed by this option.
 
 - `F1` → `ai_chat` opens and focuses the right-side `AI` panel; `ai_panel`
   toggles it. `ai_wider`/`ai_narrower` resize it, `ai_clear` clears a finished
@@ -537,6 +581,20 @@ panel_width = 20                 # percent of terminal width
   up to `auto_context_files` and `auto_context_chars`; explicit attachments
   suppress automatic ones for that turn. Files are read through the workspace
   boundary and invalid or oversized files are skipped.
+- Every request starts with a fixed system prompt. With `workspace_rules = true`
+  (the default), the first existing `AGENTS.md` or `CLAUDE.md` in the workspace
+  root is appended as a `<workspace_rules>` block, capped at 16 KiB; the file is
+  re-read for each request, so edits apply to the next turn. `workspace_memory`
+  (default true) injects `MEMORY.md` the same way as `<workspace_memory>`, for
+  notes that should survive across sessions; agents can update it with the
+  normal confirmed write tools. `ai_rules` opens a read-only overlay with both
+  sources, sizes, truncation state, and text. Rules and memory are project text,
+  not instructions that can override tool approval.
+- With `compact_history = true` (the default), a request that would drop old
+  turns first asks the model for a plain-text summary of exactly those turns,
+  replaces them with one leading system summary, and retries the request once.
+  The summary call counts toward session tokens/cost and appears in `ai_trace`
+  with stop `compact`; `false` drops old turns directly.
 - Type a message and press `Enter` to send. Use `Shift+Enter`, `Alt+Enter`, or
   `Ctrl+J` for a newline; the input grows up to six wrapped rows. If trusted MCP
   servers are still reading their tool lists, the question waits and is sent
@@ -553,7 +611,8 @@ panel_width = 20                 # percent of terminal width
   granted in the `mcp` menu; the harness cannot bypass the trust gate.
 - Tool results are appended to the transcript as untrusted text and returned to
   the model. A turn stops after 8 model round trips, on cancellation, or on an
-  API/MCP error. There is no automatic edit, patch apply, or background agent.
+  API/MCP error. Native edits and background agents are opt-in features; every
+  write still needs confirmation or an explicit allowlist.
 - Before each request the conversation is capped by `max_context_tokens` and
   `max_history_turns`; old turns are dropped and oversized tool text is
   truncated. One MCP result is capped by `max_tool_output_chars` before it
@@ -570,13 +629,19 @@ panel_width = 20                 # percent of terminal width
 - Every tool decision and result is appended to
   `<config>/i3-editor/audit.jsonl`. Arguments are truncated and keys containing
   token, secret, password, authorization, or api_key are redacted.
+- Each model request appends a `model_request` record with the round, model,
+  sent/original message counts, estimated tokens, latency, stop reason (`reply`,
+  `budget`, `error`, `cancelled`), actual prompt/completion usage, and tool-call
+  count. Message content is never logged. `ai_trace` opens a read-only overlay
+  with the latest 20 records from the audit tail.
 - The panel title starts with the configured model name, followed by estimated
   conversation tokens against the configured budget plus actual provider
   prompt/completion usage; if input/output pricing
   is configured, it also shows an estimated session cost. Heading levels, lists,
-  blockquotes, aligned tables with inline cell formatting, task lists, nested
-  and ordered lists, strikethrough, escaped punctuation, fenced/inline code,
-  bold/italic text, links, and user turns get Markdown styling;
+  nested blockquotes, footnotes, aligned tables with inline cell formatting,
+  task lists, nested and ordered lists, strikethrough, escaped punctuation,
+  fenced/inline code, bold/italic text, links, and user turns get Markdown
+  styling;
   long transcript lines wrap inside the panel, and `Ctrl+Left`/`Ctrl+Right`
   scrolls horizontally when needed.
 - The default provider is OpenRouter (`https://openrouter.ai/api/v1`,
@@ -610,6 +675,10 @@ The harness also exposes two built-in tools, independent of MCP:
   successful edit.
 - The tools use the same `allowed_tools`/`denied_tools` policy, confirmation,
   capability labels (`read-only`/`destructive`), and audit log as MCP tools.
+- `native/verify` appears only when `[ai.verify.<name>]` tables exist. It runs
+  one configured command by name, shows the resolved command before approval,
+  returns stdout/stderr and the exit status, and is marked `destructive`; a
+  background agent needs `background_auto_tools` to run it without asking.
 - After a Rust edit, a bounded background `cargo check` result is attached to
   the tool response; it does not block the UI.
 - `ai_undo_edit` restores the last native edit when the file still matches the
@@ -628,8 +697,7 @@ unavailable server or timeout does not block the turn.
   OpenAI-compatible server without authentication.
 - Requests use SSE streaming by default, so assistant text appears as deltas
   arrive; set `stream = false` to use the non-streaming path. The active file is
-  not attached unless you paste it into the prompt. Context indexing and
-  automatic edits are not part of this slice.
+  not attached unless you paste it into the prompt or enable `auto_context`.
 - `ai_background` starts a background agent after `background_agents = true`.
   Read-only native/MCP tools run automatically; a write or destructive tool
   pauses the agent for explicit `y`/`n` approval unless it matches
@@ -648,10 +716,8 @@ unavailable server or timeout does not block the turn.
   lets you explicitly choose an indexed file and attach its contents to the
   next prompt; the index itself never stores file contents.
 - `keyring_service`/`keyring_account` read the API key from the OS keyring
-  (`security` on macOS, `secret-tool` on Linux, Credential Manager on Windows).
-  Windows stores the credential under `service:account`; create it with
-  `cmdkey /generic:"service:account" /user:"account" /pass:"..."`. If configured
-  but unavailable, the request fails instead of silently using another key.
+  (`security` on macOS, `secret-tool` on Linux). If configured but unavailable,
+  the request fails instead of silently using another key.
 - With `persist_history = true`, the transcript and conversation are saved to
   `<config>/i3-editor/ai_history.json` and restored at the next start.
   `ai_clear` removes both the visible history and that file. Tool output and
@@ -669,17 +735,18 @@ no library dependency. The active workspace root must be inside a work tree.
   normally; `Enter` opens a read-only diff for that file.
 - `git_diff` shows the active file's unstaged diff (falling back to the staged
   diff when the worktree is clean). The overlay scrolls with `Up`/`Down`,
-  `PageUp`/`PageDown`, `Home`/`End`; `Esc` or `q` closes it. It never writes.
+  `PageUp`/`PageDown`, `Home`/`End`, and the mouse wheel; `Esc` or `q` closes
+  it. It never writes.
 - `git_log` opens the same read-only overlay with the current branch, local
   branches, and the latest 50 commits (`hash  date  author  subject`). It works
   even before the first commit, reporting `unborn` and `(no commits yet)`.
 - `git_stage` and `git_unstage` act on the active file. `git_commit` prompts for
   a message and commits the staged index.
 - `git_stage_hunk` and `git_unstage_hunk` open a hunk picker for the active file:
-  `Up`/`Down` selects a hunk, `PageUp`/`PageDown` scrolls its body, `Enter`
-  applies the selected hunk to the index (or removes it with `--reverse`), and
-  `Esc`/`q` closes. An untracked file has no applicable hunk context, so staging
-  a hunk stages the whole file.
+  `Up`/`Down` selects a hunk, `PageUp`/`PageDown` and the mouse wheel scroll its
+  body, `Enter` applies the selected hunk to the index (or removes it with
+  `--reverse`), and `Esc`/`q` closes. An untracked file has no applicable hunk
+  context, so staging a hunk stages the whole file.
 - `git_pull` fast-forwards the current branch from its upstream. It refuses a
   dirty index/worktree or any unsaved editor buffer before running, and uses
   `--ff-only` so it never creates a merge or conflict state.
@@ -1118,9 +1185,8 @@ git tag -a v0.2.2 -m "v0.2.2"
 git push origin main
 git push origin v0.2.2
 
-# 3. the release workflow builds five targets and publishes assets:
-#    i3-editor-<target>.tar.gz + .sha256 on Unix
-#    i3-editor-<target>.zip + .sha256 on Windows
+# 3. the release workflow builds four targets and publishes assets:
+#    i3-editor-<target>.tar.gz + .sha256
 gh release view v0.2.2
 
 # 4. verify the updater against the published release
@@ -1135,15 +1201,23 @@ every check.
 
 - Syntax highlighting is structural for every supported language. An unknown
   fence language stays plain text.
-- Files above 16 MiB are refused rather than loaded; there is no read-only
-  large-file mode.
-- Workspace watchers are non-recursive: root, expanded explorer directories, and
-  parent directories of open documents. Changes inside unexpanded directories are
-  not observed until the directory is opened or the explorer is refreshed. Quick
-  open still caps its cached list at 5000 files.
-- Folds are per-session and close on the next edit; the editor does not persist
-  them. `go_to_symbol` uses a per-language node-kind table rather than each
-  grammar's locals query, so unusual definitions can be missing.
+- Files above 256 MiB are refused. Files above 16 MiB open read-only with no
+  syntax highlighting, LSP, folds, or symbol list.
+- Quick open stops at 50,000 files and reports truncation in the status bar. A
+  workspace whose recursive watch is refused falls back to its root and
+  expanded directories, and a directory moved in with existing contents can
+  need one refresh before its files appear.
+- Folds persist per file, but undo/redo and external reloads clear them, and
+  untitled buffers have no fold persistence. `go_to_symbol` merges the
+  per-language node-kind table with tree-sitter tags queries where the grammar
+  exports one; Shell, Markdown, and TOML use the table alone, so unusual
+  definitions can be missing.
+- Compaction adds one provider request when history overflows; the result is a
+  plain-text summary, not a structured task log. `MEMORY.md` is injected
+  verbatim (16 KiB cap) with no retrieval or automatic write.
+- Sandboxed `native/verify` requires macOS `sandbox-exec` or Linux `bwrap` and
+  fails closed when unavailable. MCP servers remain trusted code and are not
+  sandboxed.
 - Lua plugins are synchronous on the UI thread and have no async or network
   API; file/process access is off unless the matching capability is enabled.
   The API is v1 only and config changes do not reload existing plugin code until
@@ -1153,8 +1227,9 @@ every check.
 - Git pull is fast-forward-only; the editor resolves conflict markers but does
   not create merges. Untracked files are marked as all-added; binary files have
   no line markers, and markers can lag by up to one second.
-- The LSP client uses full-text sync instead of incremental ranges; timed-out
-  interactive requests are dropped rather than retried.
+- Incremental LSP changes are sent as one contiguous range per pump, not one
+  entry per keystroke; timed-out interactive requests are dropped rather than
+  retried.
 - `--update` uses the unauthenticated GitHub API (60 requests per hour per IP)
   and trusts the checksum published in the same release; there is no signature.
 - Saving replaces the file by rename, so an extra hard link keeps pointing at the

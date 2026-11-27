@@ -389,6 +389,10 @@ pub struct AppState {
     pub help: Option<HelpView>,
     /// Read-only MCP status overlay.
     pub mcp_view: Option<HelpView>,
+    /// Read-only workspace-rules overlay for the AI prompt.
+    pub rules_view: Option<HelpView>,
+    /// Read-only model-request trace overlay.
+    pub trace_view: Option<HelpView>,
     /// AI assistant panel.
     pub ai: AiPanel,
     /// Partial-staging overlay.

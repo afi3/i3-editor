@@ -11,6 +11,31 @@ use crate::state::{AppState, DocumentId, Focus};
 use super::App;
 
 impl App {
+    /// True when the focused document is the read-only large-file view.
+    pub(crate) fn active_read_only(&self) -> bool {
+        matches!(self.state.focus, Focus::Pane(_))
+            && self
+                .state
+                .active_document()
+                .is_some_and(Document::is_read_only)
+    }
+
+    /// Report why an edit was refused. Returns true when it was refused.
+    pub(crate) fn refuse_read_only(&mut self) -> bool {
+        if !self.active_read_only() {
+            return false;
+        }
+        let limit = crate::editor::document::MAX_FILE_BYTES >> 20;
+        let name = self
+            .state
+            .active_document()
+            .and_then(|document| document.path.as_deref())
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| "document".to_string());
+        self.notify(format!("{name} is read-only (larger than {limit} MiB)"));
+        true
+    }
+
     /// Quit through a confirmation while any document is modified.
     pub(crate) fn request_quit(&mut self) -> Result<()> {
         let dirty: Vec<DocumentId> = self
@@ -494,6 +519,9 @@ impl App {
         &mut self,
         target: crate::editor::document::Eol,
     ) -> Result<()> {
+        if self.refuse_read_only() {
+            return Ok(());
+        }
         let message = {
             let Some((pane, document)) = self.state.pane_and_document() else {
                 return Ok(());
@@ -516,7 +544,7 @@ impl App {
     }
 
     pub(crate) fn insert_text(&mut self, text: &str) -> Result<()> {
-        if text.is_empty() {
+        if text.is_empty() || self.refuse_read_only() {
             return Ok(());
         }
         {
@@ -615,6 +643,9 @@ impl App {
     }
 
     fn delete_with(&mut self, backward: bool) {
+        if self.refuse_read_only() {
+            return;
+        }
         {
             let AppState {
                 documents,

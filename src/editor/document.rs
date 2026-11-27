@@ -21,6 +21,9 @@ use super::history::{Edit, History};
 /// in-memory representations.
 pub const MAX_FILE_BYTES: u64 = 16 << 20;
 
+/// Hard ceiling for the read-only large-file mode.
+pub const MAX_READ_ONLY_BYTES: u64 = 256 << 20;
+
 fn read_text(path: &Path) -> Result<String> {
     let metadata = std::fs::metadata(path).map_err(|error| Error::io("read", path, error))?;
     if metadata.len() > MAX_FILE_BYTES {
@@ -34,6 +37,17 @@ fn read_text(path: &Path) -> Result<String> {
     String::from_utf8(bytes).map_err(|_| Error::InvalidUtf8 {
         path: path.to_path_buf(),
     })
+}
+
+/// Detect CRLF without materialising the whole document as a string.
+fn detect_rope_eol(rope: &Rope) -> Eol {
+    let mut chars = rope.chars();
+    while let Some(ch) = chars.next() {
+        if ch == '\r' && matches!(chars.next(), Some('\n')) {
+            return Eol::Crlf;
+        }
+    }
+    Eol::Lf
 }
 
 /// Derived highlighting state: the lexer state at the start of each line whose
@@ -85,11 +99,14 @@ pub struct Document {
     pub path: Option<PathBuf>,
     pub rope: Rope,
     pub dirty: bool,
+    /// Large-file mode: the buffer is viewable but never mutated or saved.
+    pub read_only: bool,
     pub eol: Eol,
     /// Per-document indentation from `.editorconfig` and language defaults.
     pub indent: crate::editorconfig::IndentSettings,
     pub history: History,
-    /// Closed folds as inclusive document line ranges. Cleared by any edit.
+    /// Closed folds as inclusive document line ranges. Ordinary edits
+    /// re-anchor them; undo/redo and full reloads clear them.
     pub folded: Vec<Range<usize>>,
     /// Highlighting memo; derived from `rope`, never part of the file identity.
     pub(crate) syntax: RefCell<SyntaxCache>,
@@ -106,6 +123,7 @@ impl Document {
             path,
             rope: Rope::new(),
             dirty: false,
+            read_only: false,
             eol: Eol::Lf,
             indent: crate::editorconfig::IndentSettings::default(),
             history: History::default(),
@@ -124,6 +142,7 @@ impl Document {
             path: Some(path),
             rope: Rope::from_str(&text),
             dirty: false,
+            read_only: false,
             eol,
             indent: crate::editorconfig::IndentSettings::default(),
             history: History::default(),
@@ -134,6 +153,49 @@ impl Document {
         };
         document.record_disk_state();
         Ok(document)
+    }
+
+    /// Open a file above the normal limit as a viewable, never-editable buffer.
+    /// The rope is built by streaming the file, so there is no second copy.
+    pub fn open_read_only(id: DocumentId, path: PathBuf) -> Result<Self> {
+        let metadata = std::fs::metadata(&path).map_err(|error| Error::io("read", &path, error))?;
+        if metadata.len() > MAX_READ_ONLY_BYTES {
+            return Err(Error::FileTooLarge {
+                path,
+                size: metadata.len(),
+                limit: MAX_READ_ONLY_BYTES,
+            });
+        }
+        let file = std::fs::File::open(&path).map_err(|error| Error::io("read", &path, error))?;
+        let rope = Rope::from_reader(file).map_err(|error| {
+            if error.kind() == std::io::ErrorKind::InvalidData {
+                Error::InvalidUtf8 { path: path.clone() }
+            } else {
+                Error::io("read", &path, error)
+            }
+        })?;
+        let eol = detect_rope_eol(&rope);
+        let mut document = Self {
+            id,
+            path: Some(path),
+            rope,
+            dirty: false,
+            read_only: true,
+            eol,
+            indent: crate::editorconfig::IndentSettings::default(),
+            history: History::default(),
+            folded: Vec::new(),
+            syntax: RefCell::new(SyntaxCache::default()),
+            disk_modified: None,
+            disk_len: 0,
+        };
+        document.record_disk_state();
+        Ok(document)
+    }
+
+    /// True for files opened through [`open_read_only`](Self::open_read_only).
+    pub fn is_read_only(&self) -> bool {
+        self.read_only
     }
 
     pub fn display_name(&self) -> String {
@@ -190,10 +252,85 @@ impl Document {
         self.folded.len() != before
     }
 
+    /// Re-anchor closed folds across `start..end` replaced by `inserted`.
+    ///
+    /// An edit entirely above a fold shifts it, an edit in a fold header keeps
+    /// it closed with a shifted body, and an edit that touches the hidden body
+    /// opens only that fold. Line numbers below the edit move by the difference
+    /// between inserted and removed line breaks.
+    fn reanchor_folds(&mut self, start: usize, end: usize, inserted: &str) {
+        if self.folded.is_empty() {
+            return;
+        }
+        let start = start.min(self.len_chars());
+        let end = end.min(self.len_chars()).max(start);
+        let start_line = self.line_of_char(start);
+        let end_line = self.line_of_char(end);
+        let added = inserted.bytes().filter(|byte| *byte == b'\n').count() as isize;
+        let removed = end_line.saturating_sub(start_line) as isize;
+        let delta = added - removed;
+        let chars = self.len_chars();
+        let folds = std::mem::take(&mut self.folded);
+        let line_start = |line: usize| {
+            if line >= self.line_count() {
+                chars
+            } else {
+                self.char_of_line(line)
+            }
+        };
+        let mut kept = Vec::with_capacity(folds.len());
+        for range in folds {
+            let header = line_start(range.start);
+            let body = line_start(range.start + 1);
+            let after = line_start(range.end + 1);
+            if end <= header {
+                // Above the header: the whole fold moves.
+                let moved = range
+                    .start
+                    .checked_add_signed(delta)
+                    .zip(range.end.checked_add_signed(delta));
+                if let Some((start, end)) = moved {
+                    kept.push(start..end);
+                }
+            } else if start >= after {
+                // Below the fold: nothing moves.
+                kept.push(range);
+            } else if end <= body {
+                // Header-only edit: the body shifts with the line count.
+                if let Some(end) = range.end.checked_add_signed(delta)
+                    && end >= range.start
+                {
+                    kept.push(range.start..end);
+                }
+            }
+            // Otherwise the edit touches hidden lines; the fold opens.
+        }
+        self.folded = kept;
+    }
+
+    /// Replace the fold set from a session, clamped to the current line count.
+    pub fn restore_folds(&mut self, ranges: impl IntoIterator<Item = Range<usize>>) {
+        let last = self.line_count().saturating_sub(1);
+        let mut folds: Vec<Range<usize>> = ranges
+            .into_iter()
+            .filter_map(|range| {
+                let start = range.start.min(last);
+                let end = range.end.min(last);
+                (start < end).then_some(start..end)
+            })
+            .collect();
+        folds.sort_by_key(|range| (range.start, range.end));
+        folds.dedup();
+        self.folded = folds;
+    }
+
     /// Toggle the innermost fold at `line`. Returns the number of hidden lines
     /// when it folds, `Some(0)` when it unfolds, and `None` when nothing is
     /// foldable there.
     pub fn toggle_fold(&mut self, line: usize) -> Option<usize> {
+        if self.read_only {
+            return None;
+        }
         if self
             .folded
             .iter()
@@ -216,6 +353,9 @@ impl Document {
     /// above it. Filling the cache is derived work: rendering can call this
     /// through `&self` without changing the document.
     pub fn syntax_spans(&self, line: usize, text: &str) -> Vec<Span> {
+        if self.read_only {
+            return Vec::new();
+        }
         let language = Language::from_path(self.path.as_deref());
         let mut cache = self.syntax.borrow_mut();
         if cache.language != language {
@@ -249,6 +389,9 @@ impl Document {
     /// Spans for a contiguous run of lines. Uses tree-sitter when the language
     /// has a grammar and falls back to the lexer otherwise.
     pub fn syntax_spans_range(&self, first: usize, count: usize) -> Vec<Vec<Span>> {
+        if self.read_only {
+            return vec![Vec::new(); count];
+        }
         let line_count = self.line_count();
         if count == 0 {
             return Vec::new();
@@ -325,10 +468,13 @@ impl Document {
         cursor_before: usize,
         scroll_before: (usize, u16),
     ) {
+        if self.read_only {
+            return;
+        }
         let char_idx = char_idx.min(self.len_chars());
         let line = self.line_of_char(char_idx);
         let edit = self.input_edit(char_idx, char_idx, text);
-        self.folded.clear();
+        self.reanchor_folds(char_idx, char_idx, text);
         self.rope.insert(char_idx, text);
         self.history
             .record_insert(char_idx, text, cursor_before, scroll_before);
@@ -343,6 +489,9 @@ impl Document {
         cursor_before: usize,
         scroll_before: (usize, u16),
     ) -> String {
+        if self.read_only {
+            return String::new();
+        }
         let start = range.start.min(self.len_chars());
         let end = range.end.min(self.len_chars());
         if start >= end {
@@ -351,7 +500,7 @@ impl Document {
         let line = self.line_of_char(start);
         let text: String = self.rope.slice(start..end).to_string();
         let edit = self.input_edit(start, end, "");
-        self.folded.clear();
+        self.reanchor_folds(start, end, "");
         self.rope.remove(start..end);
         self.history
             .record_remove(start, &text, cursor_before, scroll_before);
@@ -371,6 +520,9 @@ impl Document {
         cursor_after: usize,
         scroll_before: (usize, u16),
     ) {
+        if self.read_only {
+            return;
+        }
         let start = range.start.min(self.len_chars());
         let end = range.end.min(self.len_chars());
         if start >= end {
@@ -380,7 +532,7 @@ impl Document {
         let line = self.line_of_char(start);
         let removed: String = self.rope.slice(start..end).to_string();
         let edit = self.input_edit(start, end, text);
-        self.folded.clear();
+        self.reanchor_folds(start, end, text);
         self.rope.remove(start..end);
         self.rope.insert(start, text);
         self.history.record_replace(
@@ -398,6 +550,9 @@ impl Document {
 
     /// Returns `(cursor, scroll)` to restore on the pane that issued the edit.
     pub fn undo(&mut self) -> Option<(usize, (usize, u16))> {
+        if self.read_only {
+            return None;
+        }
         let restore = self.history.undo(&mut self.rope)?;
         self.dirty = self.history.is_modified();
         self.folded.clear();
@@ -406,6 +561,9 @@ impl Document {
     }
 
     pub fn redo(&mut self) -> Option<(usize, (usize, u16))> {
+        if self.read_only {
+            return None;
+        }
         let restore = self.history.redo(&mut self.rope)?;
         self.dirty = self.history.is_modified();
         self.folded.clear();
@@ -423,6 +581,13 @@ impl Document {
     }
 
     fn write_to(&mut self, path: PathBuf) -> Result<()> {
+        if self.read_only {
+            return Err(Error::ReadOnly(format!(
+                "{} is read-only (larger than {} MiB)",
+                path.display(),
+                MAX_FILE_BYTES >> 20
+            )));
+        }
         let text = self.rope.to_string();
         write_atomic(&path, text.as_bytes()).map_err(|error| Error::io("write", &path, error))?;
         self.path = Some(path);
@@ -434,6 +599,9 @@ impl Document {
 
     /// Replace the buffer with recovered text, dropping undo history.
     pub fn restore(&mut self, text: &str) {
+        if self.read_only {
+            return;
+        }
         self.rope = Rope::from_str(text);
         self.history = History::default();
         self.dirty = true;
@@ -452,6 +620,9 @@ impl Document {
         cursor_after: usize,
         scroll_before: (usize, u16),
     ) -> bool {
+        if self.read_only {
+            return false;
+        }
         if let [range] = ranges {
             if range.is_empty() {
                 if text.is_empty() {
@@ -480,6 +651,7 @@ impl Document {
             let end = range.end.min(self.len_chars());
             if start < end {
                 let removed: String = self.rope.slice(start..end).to_string();
+                self.reanchor_folds(start, end, "");
                 self.rope.remove(start..end);
                 edits.push(Edit::Remove {
                     char_idx: start,
@@ -487,6 +659,7 @@ impl Document {
                 });
             }
             if inserted > 0 && start <= self.len_chars() {
+                self.reanchor_folds(start, start, text);
                 self.rope.insert(start, text);
                 edits.push(Edit::Insert {
                     char_idx: start,
@@ -500,7 +673,6 @@ impl Document {
         self.history
             .record_edits(edits, cursor_before, cursor_after, scroll_before);
         self.dirty = self.history.is_modified();
-        self.folded.clear();
         self.reset_syntax();
         true
     }
@@ -508,6 +680,9 @@ impl Document {
     /// Convert every line ending to `target` as one undo step. Returns whether
     /// the buffer changed. New lines use the new ending afterwards.
     pub fn convert_eol(&mut self, target: Eol) -> bool {
+        if self.read_only {
+            return false;
+        }
         let text = self.rope.to_string();
         let lf = text.replace("\r\n", "\n").replace('\r', "\n");
         let converted = match target {
@@ -540,6 +715,16 @@ impl Document {
 
     /// Replace the buffer with the file on disk, dropping undo history.
     pub fn reload(&mut self) -> Result<()> {
+        if self.read_only {
+            return Err(Error::ReadOnly(format!(
+                "{} is read-only (larger than {} MiB)",
+                self.path
+                    .as_deref()
+                    .unwrap_or(Path::new("document"))
+                    .display(),
+                MAX_FILE_BYTES >> 20
+            )));
+        }
         let path = self.path.clone().ok_or(Error::NoPath)?;
         let text = read_text(&path)?;
         self.eol = Eol::detect(&text);
@@ -1102,6 +1287,60 @@ mod tests {
         );
         assert_eq!(std::fs::read_to_string(&target).expect("read"), "new\n");
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn folds_shift_with_edits_above_them() {
+        let mut document = doc("a\nfn alpha() {\n    one();\n}\n");
+        document.restore_folds(std::iter::once(1..3));
+        document.insert(0, "// hi\n", 0, (0, 0));
+        assert_eq!(document.folded, vec![2..4]);
+        assert!(document.is_hidden(3));
+    }
+
+    #[test]
+    fn editing_a_fold_header_keeps_it_closed() {
+        let mut document = doc("fn alpha() {\n    one();\n    two();\n}\n");
+        document.restore_folds(std::iter::once(0..3));
+        document.insert(3, "x", 3, (0, 0));
+        assert_eq!(document.folded, vec![0..3]);
+        assert!(document.is_hidden(1));
+    }
+
+    #[test]
+    fn editing_a_fold_body_opens_only_that_fold() {
+        let mut document = doc("fn a() {\n    one();\n}\n\nfn b() {\n    two();\n}\n");
+        document.folded = vec![0..2, 4..6];
+        let index = document.char_of_line(1) + 4;
+        document.insert(index, "x", index, (0, 0));
+        assert_eq!(document.folded, vec![4..6]);
+        assert!(document.is_hidden(5));
+    }
+
+    #[test]
+    fn read_only_documents_refuse_mutation_and_saving() {
+        let dir = std::env::temp_dir().join(format!("i3-readonly-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let path = dir.join("large.txt");
+        std::fs::write(&path, "a\r\nb\r\n").expect("seed");
+
+        let mut document = Document::open_read_only(DocumentId(1), path.clone()).expect("open");
+        assert!(document.is_read_only());
+        assert_eq!(document.eol, Eol::Crlf);
+        document.insert(0, "x", 0, (0, 0));
+        document.remove(0..1, 0, (0, 0));
+        assert_eq!(document.rope.to_string(), "a\r\nb\r\n");
+        assert!(document.save().is_err());
+        assert!(document.syntax_spans(0, "a").is_empty());
+        assert!(document.syntax_spans_range(0, 2).iter().all(Vec::is_empty));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn restored_folds_are_clamped_to_the_file() {
+        let mut document = doc("one\ntwo");
+        document.restore_folds(vec![0..9, 1..1]);
+        assert_eq!(document.folded, vec![0..1]);
     }
 
     #[test]

@@ -6,11 +6,39 @@ use serde_json::{Value, json};
 use crate::command::Command;
 use crate::input::{KeyCombo, PromptKind, PromptState};
 use crate::mcp::ToolContent;
-use crate::state::{AiToolCall, AiWaiting, InputMode};
+use crate::state::{AiToolCall, AiWaiting, HelpView, InputMode};
 
 use super::App;
 
 const MAX_ROUNDS: usize = 8;
+
+/// Fixed harness instructions; workspace rules are appended when enabled.
+const BASE_SYSTEM_PROMPT: &str = "\
+You are a coding assistant inside i3-editor, a terminal editor.
+Use the provided tools to inspect the workspace; read before writing and keep
+edits scoped to the user's request. Tool calls can be denied: never claim a
+tool ran unless its result is present. Writes and destructive tools require
+explicit user approval. Stay inside the workspace root.";
+
+fn append_instruction_block(
+    prompt: &mut String,
+    tag: &str,
+    rules: &crate::ai::rules::WorkspaceRules,
+) {
+    let text = rules.text.trim();
+    if text.is_empty() {
+        return;
+    }
+    let source = rules
+        .source
+        .as_ref()
+        .and_then(|path| path.file_name())
+        .map(|name| name.to_string_lossy().replace('"', ""))
+        .unwrap_or_else(|| "workspace".to_string());
+    prompt.push_str(&format!(
+        "\n\n<{tag} source=\"{source}\">\n{text}\n</{tag}>"
+    ));
+}
 
 impl App {
     pub(crate) fn open_ai(&mut self) {
@@ -57,6 +85,8 @@ impl App {
         self.state.ai.scroll = 0;
         self.state.ai.scroll_x = 0;
         self.state.ai.rounds = 0;
+        self.ai_compacted = false;
+        self.ai_compact_dropped = None;
         self.state.ai.tool_map.clear();
         self.state.ai.attachments.clear();
         self.remove_ai_history();
@@ -234,6 +264,10 @@ impl App {
     }
 
     fn cancel_ai_turn(&mut self) {
+        self.record_ai_trace("cancelled", None, None, 0);
+        self.ai_compact_dropped = None;
+        self.ai_compacted = false;
+        self.remove_compacting_entry();
         if let Some(task) = self.ai_task.take() {
             task.cancel();
         }
@@ -242,6 +276,9 @@ impl App {
         }
         self.ai_streamed = false;
         if let Some(task) = self.native_check.take() {
+            task.cancel();
+        }
+        if let Some(task) = self.native_verify.take() {
             task.cancel();
         }
         self.native_check_output = None;
@@ -346,6 +383,115 @@ impl App {
         let mut prompt = PromptState::new(PromptKind::AiContextFiles);
         prompt.set_candidates(index.files.iter().map(|entry| entry.path.clone()).collect());
         self.state.mode = InputMode::Prompt(prompt);
+        self.dirty = true;
+    }
+
+    pub(crate) fn ai_request_messages(&self) -> Vec<Value> {
+        let mut messages = Vec::with_capacity(self.state.ai.conversation.len() + 1);
+        messages.push(json!({"role": "system", "content": self.ai_system_prompt()}));
+        messages.extend(self.state.ai.conversation.iter().cloned());
+        messages
+    }
+
+    pub(crate) fn ai_system_prompt(&self) -> String {
+        let mut prompt = BASE_SYSTEM_PROMPT.to_string();
+        if self.state.config.ai.workspace_rules {
+            let rules = crate::ai::rules::load(&self.state.explorer.root);
+            append_instruction_block(&mut prompt, "workspace_rules", &rules);
+        }
+        if self.state.config.ai.workspace_memory {
+            let memory = crate::ai::rules::load_memory(&self.state.explorer.root);
+            append_instruction_block(&mut prompt, "workspace_memory", &memory);
+        }
+        prompt
+    }
+
+    pub(crate) fn open_ai_rules(&mut self) {
+        let rules = crate::ai::rules::load(&self.state.explorer.root);
+        let memory = crate::ai::rules::load_memory(&self.state.explorer.root);
+        let mut lines = Vec::new();
+        match &rules.source {
+            Some(path) => {
+                lines.push(format!("rules: {}", path.display()));
+                lines.push(format!(
+                    "rules size: {} bytes{}",
+                    rules.text.len(),
+                    if rules.truncated {
+                        " (truncated at 16 KiB)"
+                    } else {
+                        ""
+                    }
+                ));
+            }
+            None => lines.push("no AGENTS.md or CLAUDE.md in the workspace root".to_string()),
+        }
+        if let Some(warning) = &rules.warning {
+            lines.push(format!("rules warning: {warning}"));
+        }
+        lines.push(format!(
+            "rules prompt: {}",
+            if self.state.config.ai.workspace_rules {
+                "enabled"
+            } else {
+                "disabled (workspace_rules = false)"
+            }
+        ));
+        if !rules.text.is_empty() {
+            lines.push(String::new());
+            lines.extend(rules.text.lines().map(str::to_string));
+        }
+
+        lines.push(String::new());
+        match &memory.source {
+            Some(path) => {
+                lines.push(format!("memory: {}", path.display()));
+                lines.push(format!(
+                    "memory size: {} bytes{}",
+                    memory.text.len(),
+                    if memory.truncated {
+                        " (truncated at 16 KiB)"
+                    } else {
+                        ""
+                    }
+                ));
+            }
+            None => lines.push("no MEMORY.md in the workspace root".to_string()),
+        }
+        if let Some(warning) = &memory.warning {
+            lines.push(format!("memory warning: {warning}"));
+        }
+        lines.push(format!(
+            "memory prompt: {}",
+            if self.state.config.ai.workspace_memory {
+                "enabled"
+            } else {
+                "disabled (workspace_memory = false)"
+            }
+        ));
+        if !memory.text.is_empty() {
+            lines.push(String::new());
+            lines.extend(memory.text.lines().map(str::to_string));
+        }
+        self.state.help = None;
+        self.state.trace_view = None;
+        self.state.completions = None;
+        self.state.hover = None;
+        self.state.rules_view = Some(HelpView { lines, scroll: 0 });
+        self.dirty = true;
+    }
+
+    pub(crate) fn open_ai_trace(&mut self) {
+        let lines = super::audit::recent_model_traces(&self.state, 20);
+        let lines = if lines.is_empty() {
+            vec!["no model requests recorded".to_string()]
+        } else {
+            lines
+        };
+        self.state.help = None;
+        self.state.rules_view = None;
+        self.state.completions = None;
+        self.state.hover = None;
+        self.state.trace_view = Some(HelpView { lines, scroll: 0 });
         self.dirty = true;
     }
 
@@ -814,6 +960,8 @@ impl App {
 
     fn start_ai_question(&mut self, question: String) {
         self.state.ai.rounds = 0;
+        self.ai_compacted = false;
+        self.ai_compact_dropped = None;
         self.state
             .ai
             .conversation
@@ -871,6 +1019,9 @@ impl App {
     }
 
     pub(crate) fn start_ai_request(&mut self) {
+        if self.ai_compact_dropped.is_some() {
+            return;
+        }
         if let Some(reason) = self.ai_budget_reason() {
             self.stop_for_budget(&reason);
             return;
@@ -883,24 +1034,54 @@ impl App {
             self.state.ai.busy = false;
             return;
         }
-        self.state.ai.rounds += 1;
+        let config = self.state.config.ai.clone();
         let tools = self.ai_tool_definitions();
-        let messages = self.state.ai.conversation.clone();
+        let messages = self.ai_request_messages();
+        let plan = crate::ai::trim_plan(&messages, &tools, &config);
+        if config.compact_history && !self.ai_compacted && !plan.dropped.is_empty() {
+            self.ai_compacted = true;
+            self.ai_compact_dropped = Some(plan.dropped.len());
+            let summary = crate::ai::compaction_messages(
+                &plan.dropped,
+                config.max_tool_output_chars.max(2_000),
+            );
+            let stats = crate::ai::trim_stats(&summary, &[], &config);
+            self.ai_request_trace = Some(super::AiRequestTrace {
+                round: self.state.ai.rounds,
+                model: config.model.clone(),
+                started: std::time::Instant::now(),
+                original_messages: stats.original,
+                sent_messages: stats.sent,
+                estimated_tokens: stats.estimated_tokens,
+            });
+            self.ai_task = Some(crate::ai::spawn_chat(config, summary, Vec::new()));
+            self.ai_stream = None;
+            self.state.ai.busy = true;
+            self.state
+                .ai
+                .entries
+                .push("[assistant] compacting...".to_string());
+            self.dirty = true;
+            return;
+        }
+        self.ai_compacted = false;
+        self.state.ai.rounds += 1;
+        let stats = crate::ai::trim_stats(&messages, &tools, &config);
+        self.ai_request_trace = Some(super::AiRequestTrace {
+            round: self.state.ai.rounds,
+            model: config.model.clone(),
+            started: std::time::Instant::now(),
+            original_messages: stats.original,
+            sent_messages: stats.sent,
+            estimated_tokens: stats.estimated_tokens,
+        });
         self.ai_task = None;
         self.ai_stream = None;
         self.ai_streamed = false;
-        if self.state.config.ai.stream {
-            self.ai_stream = Some(crate::ai::spawn_stream(
-                self.state.config.ai.clone(),
-                messages,
-                tools,
-            ));
+        if config.stream {
+            self.ai_stream = Some(crate::ai::spawn_stream(config, messages, tools));
         } else {
-            self.ai_task = Some(crate::ai::spawn_chat(
-                self.state.config.ai.clone(),
-                messages,
-                tools,
-            ));
+            self.ai_task = Some(crate::ai::spawn_chat(config, messages, tools));
         }
         self.state.ai.busy = true;
         self.state
@@ -955,7 +1136,7 @@ impl App {
             .unwrap_or_else(|| "unknown".to_string())
     }
 
-    fn ai_tool_definitions(&mut self) -> Vec<Value> {
+    pub(crate) fn ai_tool_definitions(&mut self) -> Vec<Value> {
         let mut tools = Vec::new();
         let mut map = std::collections::BTreeMap::new();
         if let Some(mcp) = self.mcp.as_ref() {
@@ -989,6 +1170,24 @@ impl App {
                 }
             }));
         }
+        let verify_names: Vec<String> = self.state.config.ai.verify.keys().cloned().collect();
+        if !verify_names.is_empty()
+            && tool_allowed(&self.state.config.ai, crate::native::SERVER, "verify")
+        {
+            let api = format!("{}__verify", crate::native::SERVER);
+            map.insert(
+                api.clone(),
+                (crate::native::SERVER.to_string(), "verify".to_string()),
+            );
+            tools.push(json!({
+                "type": "function",
+                "function": {
+                    "name": api,
+                    "description": crate::native::description("verify"),
+                    "parameters": crate::native::verify_schema(&verify_names)
+                }
+            }));
+        }
         self.state.ai.tool_map = map;
         tools
     }
@@ -1005,11 +1204,17 @@ impl App {
             return;
         };
         self.ai_task = None;
+        if self.ai_compact_dropped.is_some() {
+            self.finish_ai_compaction(result);
+            self.dirty = true;
+            return;
+        }
         self.state.ai.busy = false;
         self.remove_thinking_entry();
         match result {
             Ok(reply) => self.finish_ai_reply(reply, false),
             Err(error) => {
+                self.record_ai_trace("error", None, None, 0);
                 if self.background_agent {
                     self.objective_queue = false;
                     self.finish_objective("blocked");
@@ -1047,6 +1252,7 @@ impl App {
                 crate::ai::StreamEvent::Error(error) => {
                     self.ai_stream = None;
                     self.ai_streamed = false;
+                    self.record_ai_trace("error", None, None, 0);
                     if self.background_agent {
                         self.objective_queue = false;
                         self.finish_objective("blocked");
@@ -1090,6 +1296,128 @@ impl App {
         }
     }
 
+    fn record_ai_trace(
+        &mut self,
+        stop: &str,
+        prompt_tokens: Option<u64>,
+        completion_tokens: Option<u64>,
+        tool_calls: usize,
+    ) {
+        let Some(trace) = self.ai_request_trace.take() else {
+            return;
+        };
+        let call = super::audit::ModelRequest {
+            round: trace.round,
+            model: &trace.model,
+            original_messages: trace.original_messages,
+            sent_messages: trace.sent_messages,
+            estimated_tokens: trace.estimated_tokens,
+            latency: trace.started.elapsed(),
+            stop,
+            prompt_tokens,
+            completion_tokens,
+            tool_calls,
+        };
+        super::audit::model_request(&self.state, &call);
+    }
+
+    fn record_reply_trace(&mut self, reply: &crate::ai::Reply) {
+        let stop = if self.ai_budget_reason().is_some() {
+            "budget"
+        } else {
+            "reply"
+        };
+        self.record_ai_trace(
+            stop,
+            reply.prompt_tokens,
+            reply.completion_tokens,
+            reply.tool_calls.len(),
+        );
+    }
+
+    fn remove_compacting_entry(&mut self) {
+        if self
+            .state
+            .ai
+            .entries
+            .last()
+            .is_some_and(|line| line == "[assistant] compacting...")
+        {
+            self.state.ai.entries.pop();
+        }
+    }
+
+    fn finish_ai_compaction(&mut self, result: Result<crate::ai::Reply, String>) {
+        self.remove_compacting_entry();
+        let dropped = self.ai_compact_dropped.take().unwrap_or(0);
+        match result {
+            Ok(reply) => {
+                self.state.ai.prompt_tokens = self
+                    .state
+                    .ai
+                    .prompt_tokens
+                    .saturating_add(reply.prompt_tokens.unwrap_or(0));
+                self.state.ai.completion_tokens = self
+                    .state
+                    .ai
+                    .completion_tokens
+                    .saturating_add(reply.completion_tokens.unwrap_or(0));
+                self.record_ai_trace("compact", reply.prompt_tokens, reply.completion_tokens, 0);
+                self.replace_compacted(dropped, reply.content.unwrap_or_default().trim());
+                if let Some(reason) = self.ai_budget_reason() {
+                    self.stop_for_budget(&reason);
+                    self.dirty = true;
+                    return;
+                }
+            }
+            Err(error) => {
+                self.record_ai_trace("error", None, None, 0);
+                self.state
+                    .ai
+                    .entries
+                    .push(format!("[compact] {error}; continuing without summary"));
+            }
+        }
+        self.state.ai.busy = false;
+        self.start_ai_request();
+        self.dirty = true;
+    }
+
+    fn replace_compacted(&mut self, dropped: usize, summary: &str) {
+        let mut removed = 0;
+        let mut index = 0;
+        while removed < dropped && index < self.state.ai.conversation.len() {
+            if self.state.ai.conversation[index]
+                .get("role")
+                .and_then(Value::as_str)
+                == Some("system")
+            {
+                index += 1;
+                continue;
+            }
+            self.state.ai.conversation.remove(index);
+            removed += 1;
+        }
+        if summary.is_empty() {
+            return;
+        }
+        let summary = crate::ai::truncate_text(summary, 4_000);
+        let position = self
+            .state
+            .ai
+            .conversation
+            .iter()
+            .take_while(|message| message.get("role").and_then(Value::as_str) == Some("system"))
+            .count();
+        self.state.ai.conversation.insert(
+            position,
+            json!({
+                "role": "system",
+                "content": format!("Summary of earlier conversation:\n{summary}")
+            }),
+        );
+    }
+
     fn finish_ai_reply(&mut self, reply: crate::ai::Reply, streamed: bool) {
         self.state.ai.prompt_tokens = self
             .state
@@ -1101,6 +1429,7 @@ impl App {
             .ai
             .completion_tokens
             .saturating_add(reply.completion_tokens.unwrap_or(0));
+        self.record_reply_trace(&reply);
         self.state.ai.conversation.push(reply.message);
         if !streamed && let Some(content) = reply.content.filter(|text| !text.is_empty()) {
             self.state
@@ -1167,6 +1496,21 @@ impl App {
                             .extend(diff.lines().map(str::to_string));
                     }
                     Err(error) => self.state.ai.entries.push(format!("[diff] {error}")),
+                }
+            }
+            if server == crate::native::SERVER && tool == "verify" {
+                let name = call.arguments.get("name").and_then(Value::as_str);
+                match name.and_then(|name| self.state.config.ai.verify.get(name)) {
+                    Some(spec) => self.state.ai.entries.push(format!(
+                        "[verify] {} {}",
+                        spec.command,
+                        spec.args.join(" ")
+                    )),
+                    None => self
+                        .state
+                        .ai
+                        .entries
+                        .push("[verify] unknown command name".to_string()),
                 }
             }
             self.state.ai.pending.push_back(AiToolCall {
@@ -1277,6 +1621,48 @@ impl App {
     fn allow_native_tool(&mut self, call: AiToolCall) {
         super::audit::decision(&self.state, &call, "allowed");
         let root = self.state.explorer.root.clone();
+        if call.tool == "verify" {
+            self.state.ai.waiting = Some(AiWaiting {
+                id: call.id.clone(),
+                server: call.server.clone(),
+                tool: call.tool.clone(),
+                capability: call.capability.clone(),
+            });
+            let name = call
+                .arguments
+                .get("name")
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            let spec = name
+                .as_ref()
+                .and_then(|name| self.state.config.ai.verify.get(name))
+                .cloned();
+            match (name, spec) {
+                (Some(name), Some(spec)) => {
+                    let max_chars = self.state.config.ai.max_tool_output_chars;
+                    self.native_verify = Some(crate::native::VerifyTask::spawn(
+                        root, name, spec, max_chars,
+                    ));
+                    self.state.ai.busy = true;
+                    self.state
+                        .ai
+                        .entries
+                        .push("[verify] running configured command...".to_string());
+                }
+                _ => {
+                    self.finish_ai_tool(
+                        crate::native::SERVER,
+                        "verify",
+                        &[ToolContent::Text(
+                            "unknown verification command name".to_string(),
+                        )],
+                        true,
+                    );
+                }
+            }
+            self.dirty = true;
+            return;
+        }
         let result = self.run_native_tool(&root, &call);
         let waiting = AiWaiting {
             id: call.id.clone(),
@@ -1395,6 +1781,23 @@ impl App {
                 wait.prefix
             ))],
             false,
+        );
+        self.dirty = true;
+    }
+
+    pub(crate) fn pump_native_verify(&mut self) {
+        let Some(task) = self.native_verify.as_ref() else {
+            return;
+        };
+        let Some(result) = task.try_recv() else {
+            return;
+        };
+        self.native_verify = None;
+        self.finish_ai_tool(
+            crate::native::SERVER,
+            "verify",
+            &[ToolContent::Text(result.output)],
+            !result.success,
         );
         self.dirty = true;
     }

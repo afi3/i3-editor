@@ -282,6 +282,23 @@ impl App {
         true
     }
 
+    /// Wheel scrolling for the hunk picker: scroll the selected hunk body.
+    pub(crate) fn scroll_hunks(&mut self, steps: isize) {
+        let Some(picker) = self.state.hunks.as_mut() else {
+            return;
+        };
+        let body = picker
+            .hunks
+            .get(picker.selected)
+            .map_or(0, |hunk| hunk.lines.len().saturating_sub(1));
+        let amount = steps.unsigned_abs();
+        picker.scroll = if steps < 0 {
+            picker.scroll.saturating_sub(amount)
+        } else {
+            (picker.scroll + amount).min(body)
+        };
+    }
+
     pub(crate) fn git_unstage(&mut self) -> Result<()> {
         let (repo, relative) = self.active_git_file()?;
         let binary = self.state.config.git.binary.clone();
@@ -334,7 +351,7 @@ impl App {
         self.state.completions = None;
         self.state.hover = None;
         self.state.git_diff = Some(DiffView {
-            title: format!(" {title} (Up/Down scroll, Esc closes) "),
+            title: format!(" {title} (scroll, Esc closes) "),
             lines: text.lines().map(str::to_string).collect(),
             scroll: 0,
         });
