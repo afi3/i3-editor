@@ -1182,12 +1182,7 @@ mod tests {
 pub fn persist_theme_at(path: &Path, name: &str) -> std::io::Result<()> {
     let existing = std::fs::read_to_string(path).unwrap_or_default();
     let updated = set_theme_value(&existing, name);
-    if let Some(parent) = path.parent()
-        && !parent.as_os_str().is_empty()
-    {
-        std::fs::create_dir_all(parent)?;
-    }
-    crate::editor::document::write_atomic(path, updated.as_bytes())
+    write_private(path, &updated)
 }
 
 /// Record the selected AI provider in the `[ai]` table, leaving the rest of the
@@ -1580,6 +1575,35 @@ mod strict_tests {
             "{warnings:?}"
         );
         assert_eq!(config.ai.model, "legacy");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn editor_writes_to_the_config_file_are_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = config_dir("config-mode");
+        let path = dir.join("config.toml");
+        std::fs::write(&path, "[ai]\nmodel = \"m\"\n").expect("write");
+
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).expect("chmod");
+        persist_active_provider_at(&path, "p").expect("provider");
+        let mode = std::fs::metadata(&path)
+            .expect("metadata")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o600, "provider write must be owner-only");
+
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).expect("chmod");
+        persist_theme_at(&path, "monokai").expect("theme");
+        let mode = std::fs::metadata(&path)
+            .expect("metadata")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o600, "theme write must be owner-only");
         std::fs::remove_dir_all(&dir).ok();
     }
 
