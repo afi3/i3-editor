@@ -44,9 +44,14 @@ impl App {
             paths.extend(drained.paths);
         }
         if let Some(error) = error {
+            crate::logging::event(
+                "watcher_error",
+                serde_json::json!({"error": error.as_str()}),
+            );
             self.notify(format!("file watcher: {error}"));
         }
         if rescan {
+            crate::logging::event("watcher_rescan", serde_json::json!({}));
             // The queue overflowed, so the dropped events are unknown: rebuild
             // every cache and recheck open buffers against the disk.
             self.state.explorer.refresh();

@@ -63,6 +63,15 @@ pub(crate) fn blocked(
             "detail": reason,
         }),
     );
+    crate::logging::event(
+        "tool_blocked",
+        json!({
+            "tool_call_id": id,
+            "server": server,
+            "tool": tool,
+            "reason": reason,
+        }),
+    );
 }
 
 pub(crate) struct ModelRequest<'a> {
@@ -96,6 +105,17 @@ pub(crate) fn model_request(state: &AppState, call: &ModelRequest<'_>) {
             "prompt_tokens": call.prompt_tokens,
             "completion_tokens": call.completion_tokens,
             "tool_calls": call.tool_calls,
+        }),
+    );
+    crate::logging::event(
+        "model_request",
+        json!({
+            "round": call.round,
+            "model": call.model,
+            "estimated_tokens": call.estimated_tokens,
+            "latency_ms": u64::try_from(call.latency.as_millis()).unwrap_or(u64::MAX),
+            "prompt_tokens": call.prompt_tokens,
+            "completion_tokens": call.completion_tokens,
         }),
     );
 }
