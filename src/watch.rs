@@ -16,6 +16,9 @@ use notify::{Event, RecommendedWatcher, RecursiveMode};
 pub struct Watcher {
     _watcher: RecommendedWatcher,
     events: Receiver<notify::Result<Event>>,
+    /// Kept only so tests can feed synthetic events.
+    #[cfg(test)]
+    sender: mpsc::Sender<notify::Result<Event>>,
     watched: HashSet<PathBuf>,
     recursive: bool,
     warning: Option<String>,
@@ -25,12 +28,16 @@ impl Watcher {
     /// Create a watcher with no paths; callers add paths with `watch`.
     pub fn empty() -> notify::Result<Self> {
         let (sender, events) = mpsc::channel();
+        #[cfg(test)]
+        let test_sender = sender.clone();
         let watcher = notify::recommended_watcher(move |event| {
             let _ = sender.send(event);
         })?;
         Ok(Self {
             _watcher: watcher,
             events,
+            #[cfg(test)]
+            sender: test_sender,
             watched: HashSet::new(),
             recursive: false,
             warning: None,
@@ -135,6 +142,12 @@ impl Watcher {
     #[cfg(test)]
     pub fn watched_dirs(&self) -> &HashSet<PathBuf> {
         &self.watched
+    }
+
+    /// Feed one synthetic event; tests only.
+    #[cfg(test)]
+    pub fn inject_for_test(&self, event: notify::Result<Event>) {
+        let _ = self.sender.send(event);
     }
 
     /// Coalesce up to `budget` queued events. Overflow and backend errors are

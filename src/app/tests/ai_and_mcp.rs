@@ -355,6 +355,35 @@ fn blocked_calls_and_model_requests_reach_the_log_file() {
 }
 
 #[test]
+fn watcher_faults_are_logged() {
+    let (mut app, dir) = fixture("x\n");
+    let log = dir.join("log.jsonl");
+    crate::logging::use_path_for_test(Some(log.clone()));
+
+    let workspace = app.state.workspaces.active().id;
+    let watcher = crate::watch::Watcher::empty().expect("watcher");
+    watcher.inject_for_test(Ok(
+        notify::Event::new(notify::EventKind::Other).set_flag(notify::event::Flag::Rescan)
+    ));
+    watcher.inject_for_test(Err(notify::Error::generic("boom")));
+    app.watchers.push((workspace, watcher));
+
+    app.pump_watcher();
+    crate::logging::use_path_for_test(None);
+
+    let text = std::fs::read_to_string(&log).expect("log file");
+    assert!(text.contains("\"event\":\"watcher_rescan\""), "{text}");
+    assert!(text.contains("\"event\":\"watcher_error\""), "{text}");
+    assert!(text.contains("boom"), "{text}");
+    assert!(
+        app.state.ui.message.contains("overflow"),
+        "{}",
+        app.state.ui.message
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn releasing_mcp_subscriptions_clears_their_bookkeeping() {
     let (mut app, dir) = fixture("x\n");
     app.mcp_subscriptions
