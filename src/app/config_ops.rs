@@ -21,6 +21,30 @@ impl App {
         }
     }
 
+    /// Palette command: release every MCP resource subscription this session
+    /// holds, so servers stop pushing updates for resources nobody views.
+    pub(crate) fn unsubscribe_all_mcp_resources(&mut self) {
+        if self.mcp_subscriptions.is_empty() {
+            self.notify("no MCP resources are subscribed");
+            return;
+        }
+        let subscriptions: Vec<(String, String)> = self.mcp_subscriptions.iter().cloned().collect();
+        let mut released = 0usize;
+        for (server, uri) in &subscriptions {
+            if let Some(mcp) = self.mcp.as_mut()
+                && mcp.unsubscribe_resource(server, uri).is_ok()
+            {
+                released += 1;
+            }
+            self.mcp_subscriptions
+                .remove(&(server.clone(), uri.clone()));
+        }
+        self.notify(format!(
+            "released {released} of {} MCP resource subscription(s)",
+            subscriptions.len()
+        ));
+    }
+
     /// Candidates for the provider picker; the list is the registry order.
     pub(crate) fn fill_provider_candidates(&mut self, prompt: &mut crate::input::PromptState) {
         let names: Vec<String> = self.state.config.ai.providers.keys().cloned().collect();

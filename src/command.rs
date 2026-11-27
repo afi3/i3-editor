@@ -151,6 +151,7 @@ pub enum Command {
     TerminalRename,
     SelectTheme,
     SelectAiProvider,
+    McpUnsubscribe,
     NewWorkspace,
     SetWorkspaceRoot,
     SetWorkspaceTerminalDir,
@@ -500,6 +501,9 @@ impl Command {
             Command::TerminalRename => ("rename_terminal", "Rename the active terminal tab"),
             Command::SelectTheme => ("select_theme", "Pick a theme from the themes directory"),
             Command::SelectAiProvider => ("select_ai_provider", "Pick an AI provider"),
+            Command::McpUnsubscribe => {
+                ("mcp_unsubscribe", "Release every MCP resource subscription")
+            }
             _ => return None,
         })
     }
@@ -643,6 +647,7 @@ impl Command {
             Command::TerminalRename,
             Command::SelectTheme,
             Command::SelectAiProvider,
+            Command::McpUnsubscribe,
             Command::SelectWorkspace,
             Command::MovePane(Direction::Left),
             Command::MovePane(Direction::Right),
@@ -830,6 +835,7 @@ mod tests {
             Command::TerminalRename,
             Command::SelectTheme,
             Command::SelectAiProvider,
+            Command::McpUnsubscribe,
             Command::NewWorkspace,
             Command::SetWorkspaceRoot,
             Command::SetWorkspaceTerminalDir,

@@ -468,9 +468,8 @@ impl McpManager {
         )
     }
 
-    /// Counterpart to `subscribe_resource`. The UI has no unsubscribe command
-    /// yet, so only the tests exercise it.
-    #[allow(dead_code)]
+    /// Counterpart to `subscribe_resource`, used by the palette command and by
+    /// the resource overlay when it closes.
     pub fn unsubscribe_resource(&mut self, server: &str, uri: &str) -> Result<(), String> {
         self.request(
             server,

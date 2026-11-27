@@ -298,6 +298,33 @@ fn ai_commands_open_and_toggle_the_panel() {
 }
 
 #[test]
+fn releasing_mcp_subscriptions_clears_their_bookkeeping() {
+    let (mut app, dir) = fixture("x\n");
+    app.mcp_subscriptions
+        .insert(("mock".to_string(), "mock://readme".to_string()));
+
+    app.dispatch(Command::McpUnsubscribe).expect("release");
+    assert!(app.mcp_subscriptions.is_empty());
+    assert!(
+        app.state.ui.message.contains("released 0 of 1"),
+        "{}",
+        app.state.ui.message
+    );
+
+    app.dispatch(Command::McpUnsubscribe)
+        .expect("release again");
+    assert!(
+        app.state
+            .ui
+            .message
+            .contains("no MCP resources are subscribed"),
+        "{}",
+        app.state.ui.message
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn a_failed_verify_after_an_edit_reaches_the_next_request() {
     use std::io::{Read, Write};
     use std::net::TcpListener;

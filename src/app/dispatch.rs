@@ -311,6 +311,7 @@ impl App {
             Command::TerminalRename => self.rename_terminal_prompt(),
             Command::SelectTheme => self.open_prompt(PromptKind::Theme),
             Command::SelectAiProvider => self.open_prompt(PromptKind::AiProvider),
+            Command::McpUnsubscribe => self.unsubscribe_all_mcp_resources(),
             Command::SelectWorkspace => self.open_prompt(PromptKind::SelectWorkspace),
             other => return Ok(Some(other)),
         }
