@@ -10,6 +10,11 @@ use serde::{Deserialize, Serialize};
 /// On-disk shape version; a different number means "rebuild the index".
 pub const VERSION: u32 = 1;
 
+/// `<config>/i3-editor/semantic_index.json`.
+pub fn default_path() -> Option<PathBuf> {
+    crate::config::config_dir().map(|dir| dir.join("semantic_index.json"))
+}
+
 /// One line-aligned slice of a file, `start_line` 0-based and inclusive.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Chunk {

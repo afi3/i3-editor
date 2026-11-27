@@ -421,6 +421,48 @@ fn watcher_faults_are_logged() {
 }
 
 #[test]
+fn semantic_index_and_status_report_the_built_index() {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
+    let address = listener.local_addr().expect("address");
+    std::thread::spawn(move || {
+        let Ok((mut stream, _)) = listener.accept() else {
+            return;
+        };
+        let mut request = [0u8; 16384];
+        let _ = stream.read(&mut request);
+        let body = r#"{"data":[{"index":0,"embedding":[1,0]}]}"#;
+        let response = format!(
+            "HTTP/1.1 200 OK
+Content-Type: application/json
+Content-Length: {}
+Connection: close
+
+{body}",
+            body.len()
+        );
+        let _ = stream.write_all(response.as_bytes());
+    });
+
+    let (mut app, dir) = fixture("x\n");
+    app.state.config.ai = crate::ai::test_config(format!("http://{address}/v1"));
+    app.state.config.ai.api_key = "test-key".to_string();
+    app.state.config.ai.embedding_model = "mock-embed".to_string();
+    crate::logging::use_path_for_test(Some(dir.join("log.jsonl")));
+    app.dispatch(Command::AiSemanticIndex).expect("index");
+    app.dispatch(Command::AiSemanticStatus).expect("status");
+    assert!(
+        app.state.ui.message.contains("semantic index: 1 chunks"),
+        "{}",
+        app.state.ui.message
+    );
+    crate::logging::use_path_for_test(None);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn the_subscription_picker_releases_one_entry() {
     let (mut app, dir) = fixture("x\n");
     app.mcp_subscriptions

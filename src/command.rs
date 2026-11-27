@@ -152,6 +152,8 @@ pub enum Command {
     SelectTheme,
     SelectAiProvider,
     McpUnsubscribe,
+    AiSemanticIndex,
+    AiSemanticStatus,
     NewWorkspace,
     SetWorkspaceRoot,
     SetWorkspaceTerminalDir,
@@ -504,6 +506,13 @@ impl Command {
             Command::McpUnsubscribe => {
                 ("mcp_unsubscribe", "Release every MCP resource subscription")
             }
+            Command::AiSemanticIndex => (
+                "ai_semantic_index",
+                "Rebuild the semantic memory index from open files",
+            ),
+            Command::AiSemanticStatus => {
+                ("ai_semantic_status", "Show the semantic memory index state")
+            }
             _ => return None,
         })
     }
@@ -648,6 +657,8 @@ impl Command {
             Command::SelectTheme,
             Command::SelectAiProvider,
             Command::McpUnsubscribe,
+            Command::AiSemanticIndex,
+            Command::AiSemanticStatus,
             Command::SelectWorkspace,
             Command::MovePane(Direction::Left),
             Command::MovePane(Direction::Right),
@@ -836,6 +847,8 @@ mod tests {
             Command::SelectTheme,
             Command::SelectAiProvider,
             Command::McpUnsubscribe,
+            Command::AiSemanticIndex,
+            Command::AiSemanticStatus,
             Command::NewWorkspace,
             Command::SetWorkspaceRoot,
             Command::SetWorkspaceTerminalDir,

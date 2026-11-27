@@ -898,6 +898,9 @@ impl App {
                 text,
             });
         }
+        if self.state.config.ai.semantic_memory {
+            attached.extend(self.semantic_ai_context(query, &mut used));
+        }
         attached
     }
 

@@ -27,7 +27,6 @@ mod project_search;
 mod recovery;
 mod search_history;
 mod search_options;
-#[cfg(test)]
 mod semantic;
 mod session;
 mod shell;

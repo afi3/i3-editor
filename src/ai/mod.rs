@@ -199,7 +199,6 @@ pub(crate) fn prepare_request(
 }
 
 /// `{base_url}/embeddings`, keeping the configured API root intact.
-#[cfg(test)]
 fn embeddings_url(base_url: &str) -> String {
     format!("{}/embeddings", base_url.trim_end_matches('/'))
 }
@@ -209,7 +208,6 @@ fn embeddings_url(base_url: &str) -> String {
 ///
 /// Test-gated until the semantic pipeline is wired to the app; the transport
 /// itself is the same curl-config pattern as `prepare_request`.
-#[cfg(test)]
 pub fn embed(config: &AiConfig, model: &str, inputs: &[String]) -> Result<Vec<Vec<f32>>, String> {
     if config.base_url.trim().is_empty() || model.trim().is_empty() {
         return Err("AI base_url and embedding model must be configured".to_string());

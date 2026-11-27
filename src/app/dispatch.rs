@@ -312,6 +312,8 @@ impl App {
             Command::SelectTheme => self.open_prompt(PromptKind::Theme),
             Command::SelectAiProvider => self.open_prompt(PromptKind::AiProvider),
             Command::McpUnsubscribe => self.open_prompt(PromptKind::McpSubscriptions),
+            Command::AiSemanticIndex => self.ai_semantic_index()?,
+            Command::AiSemanticStatus => self.ai_semantic_status(),
             Command::SelectWorkspace => self.open_prompt(PromptKind::SelectWorkspace),
             other => return Ok(Some(other)),
         }

@@ -22,6 +22,7 @@ pub mod project_search;
 pub mod prompt;
 pub mod recovery_ops;
 pub mod search;
+pub mod semantic_ops;
 pub mod shell_ops;
 pub mod watch_ops;
 pub mod workspace_ops;

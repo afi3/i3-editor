@@ -171,6 +171,14 @@ pub struct AiConfig {
     pub verify_after_edit: bool,
     /// Name in `verify` to run; empty disables the automatic pass.
     pub verify_after_edit_command: String,
+    /// Feed the semantic index into prompts when you ask a question.
+    pub semantic_memory: bool,
+    /// Chunks retrieved per prompt.
+    pub semantic_top_k: usize,
+    /// Characters of semantic context allowed per prompt.
+    pub semantic_max_chars: usize,
+    /// Embedding model; empty disables indexing.
+    pub embedding_model: String,
     /// Stop the harness after this many actual session tokens; 0 is unlimited.
     pub max_session_tokens: usize,
     /// Stop the harness after this estimated session cost; 0 is unlimited.
@@ -244,6 +252,10 @@ impl Default for AiConfig {
             verify: BTreeMap::new(),
             verify_after_edit: false,
             verify_after_edit_command: String::new(),
+            semantic_memory: false,
+            semantic_top_k: 6,
+            semantic_max_chars: 8_000,
+            embedding_model: String::new(),
             max_session_tokens: 0,
             max_session_cost_usd: 0.0,
             allowed_tools: Vec::new(),
@@ -866,6 +878,8 @@ pub fn load_from(path: &Path) -> (AppConfig, Vec<String>) {
     config.ai.retry_base_ms = config.ai.retry_base_ms.clamp(50, 60_000);
     config.ai.retry_max_ms = config.ai.retry_max_ms.clamp(100, 120_000);
     config.ai.panel_width = config.ai.panel_width.clamp(15, 40);
+    config.ai.semantic_top_k = config.ai.semantic_top_k.clamp(1, 50);
+    config.ai.semantic_max_chars = config.ai.semantic_max_chars.clamp(500, 100_000);
     let active = config.ai.active_provider.trim().to_string();
     if !active.is_empty() && !config.ai.activate(&active) {
         warnings.push(format!(
@@ -918,6 +932,10 @@ const AI_KEYS: &[&str] = &[
     "active_provider",
     "verify_after_edit",
     "verify_after_edit_command",
+    "semantic_memory",
+    "semantic_top_k",
+    "semantic_max_chars",
+    "embedding_model",
     "base_url",
     "model",
     "api_key_env",
