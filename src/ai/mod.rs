@@ -198,6 +198,100 @@ pub(crate) fn prepare_request(
     })
 }
 
+/// `{base_url}/embeddings`, keeping the configured API root intact.
+#[cfg(test)]
+fn embeddings_url(base_url: &str) -> String {
+    format!("{}/embeddings", base_url.trim_end_matches('/'))
+}
+
+/// Embed every input with `model` in one request. Vectors come back in input
+/// order even when the provider reorders `data`.
+///
+/// Test-gated until the semantic pipeline is wired to the app; the transport
+/// itself is the same curl-config pattern as `prepare_request`.
+#[cfg(test)]
+pub fn embed(config: &AiConfig, model: &str, inputs: &[String]) -> Result<Vec<Vec<f32>>, String> {
+    if config.base_url.trim().is_empty() || model.trim().is_empty() {
+        return Err("AI base_url and embedding model must be configured".to_string());
+    }
+    if inputs.is_empty() {
+        return Ok(Vec::new());
+    }
+    let body_text = serde_json::to_vec(&json!({"model": model, "input": inputs}))
+        .map_err(|error| error.to_string())?;
+    let mut body_file = tempfile::NamedTempFile::new().map_err(|error| error.to_string())?;
+    body_file
+        .write_all(&body_text)
+        .map_err(|error| error.to_string())?;
+    let key = resolve_api_key(config)?;
+    let mut curl_config = String::new();
+    curl_config.push_str(&format!(
+        "url = {}\n",
+        quote(&embeddings_url(&config.base_url))
+    ));
+    curl_config.push_str("request = \"POST\"\n");
+    curl_config.push_str("header = \"Content-Type: application/json\"\n");
+    if !key.is_empty() {
+        curl_config.push_str(&format!(
+            "header = {}\n",
+            quote(&format!("Authorization: Bearer {key}"))
+        ));
+    }
+    curl_config.push_str(&format!(
+        "data-binary = {}\n",
+        quote(&format!("@{}", body_file.path().to_string_lossy()))
+    ));
+    curl_config.push_str(&format!("max-time = {}\n", config.timeout_secs.max(1)));
+
+    let mut child = Command::new("curl")
+        .args(["--silent", "--show-error", "--config", "-"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| format!("curl: {error}"))?;
+    if let Some(stdin) = child.stdin.as_mut() {
+        stdin
+            .write_all(curl_config.as_bytes())
+            .map_err(|error| format!("curl stdin: {error}"))?;
+    }
+    let output = child
+        .wait_with_output()
+        .map_err(|error| format!("curl: {error}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("embeddings failed: {}", stderr.trim()));
+    }
+    let reply: Value = serde_json::from_slice(&output.stdout)
+        .map_err(|error| format!("embeddings reply: {error}"))?;
+    let data = reply
+        .get("data")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "embeddings reply has no data".to_string())?;
+    let mut vectors: Vec<Option<Vec<f32>>> = vec![None; inputs.len()];
+    for (position, item) in data.iter().enumerate() {
+        let index = item
+            .get("index")
+            .and_then(Value::as_u64)
+            .map_or(position, |index| index as usize);
+        let Some(values) = item.get("embedding").and_then(Value::as_array) else {
+            continue;
+        };
+        let vector: Vec<f32> = values
+            .iter()
+            .filter_map(Value::as_f64)
+            .map(|value| value as f32)
+            .collect();
+        if index < vectors.len() && !vector.is_empty() {
+            vectors[index] = Some(vector);
+        }
+    }
+    vectors
+        .into_iter()
+        .map(|vector| vector.ok_or_else(|| "embeddings reply is missing an input".to_string()))
+        .collect()
+}
+
 fn chat_with_cancel(
     config: &AiConfig,
     messages: &[Value],

@@ -298,6 +298,43 @@ fn ai_commands_open_and_toggle_the_panel() {
 }
 
 #[test]
+fn embeddings_come_back_in_input_order() {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    if std::process::Command::new("curl")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        eprintln!("skipping embeddings: curl unavailable");
+        return;
+    }
+    let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
+    let address = listener.local_addr().expect("address");
+    std::thread::spawn(move || {
+        let Ok((mut stream, _)) = listener.accept() else {
+            return;
+        };
+        let mut request = [0u8; 8192];
+        let _ = stream.read(&mut request);
+        // Deliberately reversed: the transport must sort by `index`.
+        let body = r#"{"data":[{"index":1,"embedding":[0,1]},{"index":0,"embedding":[1,0]}]}"#;
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        let _ = stream.write_all(response.as_bytes());
+    });
+
+    let mut config = crate::ai::test_config(format!("http://{address}/v1"));
+    config.api_key = "test-key".to_string();
+    let vectors =
+        crate::ai::embed(&config, "mock-embed", &["a".into(), "b".into()]).expect("embeddings");
+    assert_eq!(vectors, vec![vec![1.0, 0.0], vec![0.0, 1.0]]);
+}
+
+#[test]
 fn blocked_calls_and_model_requests_reach_the_log_file() {
     let (app, dir) = fixture("x\n");
     let log = dir.join("log.jsonl");
