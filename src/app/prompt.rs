@@ -318,6 +318,12 @@ impl App {
             PromptKind::SelectWorkspace => {
                 self.submit_workspace_choice(prompt.selected_candidate())
             }
+            PromptKind::AiProvider => {
+                if let Some(name) = prompt.selected_candidate() {
+                    self.select_ai_provider(name);
+                }
+                Ok(())
+            }
             PromptKind::Messages => Ok(()),
             PromptKind::Find => self.commit_search(prompt.fields[0].clone()),
             PromptKind::FindInFiles => {
@@ -660,6 +666,7 @@ impl App {
                 prompt.set_candidates(self.palette_candidates());
             }
             PromptKind::SelectWorkspace => self.fill_workspace_candidates(prompt),
+            PromptKind::AiProvider => self.fill_provider_candidates(prompt),
             PromptKind::Messages => {
                 if self.state.warnings.is_empty() {
                     self.notify("no messages");

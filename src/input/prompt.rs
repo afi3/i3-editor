@@ -40,6 +40,7 @@ pub enum PromptKind {
     CommitMessage,
     Theme,
     SelectWorkspace,
+    AiProvider,
     Mcp,
     McpTrust,
     McpTools,
@@ -119,6 +120,7 @@ impl PromptKind {
                 | PromptKind::Conflicts
                 | PromptKind::CommitMessage
                 | PromptKind::SelectWorkspace
+                | PromptKind::AiProvider
                 | PromptKind::AiBackground
                 | PromptKind::AiObjectiveAdd
                 | PromptKind::AiObjectives
@@ -179,7 +181,11 @@ impl PromptKind {
     }
 
     fn workspace_query_title(self) -> Option<&'static str> {
-        (self == PromptKind::SelectWorkspace).then_some("Workspace")
+        match self {
+            PromptKind::SelectWorkspace => Some("Workspace"),
+            PromptKind::AiProvider => Some("AI provider"),
+            _ => None,
+        }
     }
 
     fn mcp_resource_query_title(self) -> Option<&'static str> {
@@ -290,6 +296,7 @@ impl PromptKind {
                 | PromptKind::ExternalChange
                 | PromptKind::LargeFile
                 | PromptKind::SelectWorkspace
+                | PromptKind::AiProvider
                 | PromptKind::McpTrust
                 | PromptKind::McpTools
                 | PromptKind::McpConfirm

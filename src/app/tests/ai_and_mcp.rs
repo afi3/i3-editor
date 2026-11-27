@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-fn next_ai_provider_cycles_the_configured_registry() {
+fn the_provider_picker_selects_and_persists_a_provider() {
     let (mut app, dir) = fixture("x\n");
     {
         let ai = &mut app.state.config.ai;
@@ -26,8 +26,18 @@ fn next_ai_provider_cycles_the_configured_registry() {
     assert_eq!(app.state.config.ai.model, "alpha-model");
     app.state.config_path = Some(dir.join("config.toml"));
 
-    app.dispatch(Command::NextAiProvider)
-        .expect("next provider");
+    app.dispatch(Command::SelectAiProvider)
+        .expect("open picker");
+    let InputMode::Prompt(prompt) = &mut app.state.mode else {
+        panic!("provider prompt missing")
+    };
+    assert_eq!(
+        prompt.candidates,
+        vec!["alpha".to_string(), "beta".to_string()],
+        "the picker lists the registry"
+    );
+    prompt.selected = 1;
+    app.submit_prompt().expect("select provider");
     assert_eq!(app.state.config.ai.active_provider, "beta");
     assert_eq!(app.state.config.ai.base_url, "https://beta.test/v1");
     assert_eq!(app.state.config.ai.model, "beta-model");
@@ -41,16 +51,14 @@ fn next_ai_provider_cycles_the_configured_registry() {
         saved.contains("active_provider = \"beta\""),
         "switch must be persisted: {saved}"
     );
-
-    app.dispatch(Command::NextAiProvider).expect("wrap around");
-    assert_eq!(app.state.config.ai.active_provider, "alpha");
     std::fs::remove_dir_all(&dir).ok();
 }
 
 #[test]
-fn next_ai_provider_without_a_registry_reports_it() {
+fn the_provider_picker_without_a_registry_reports_it() {
     let (mut app, dir) = fixture("x\n");
-    app.dispatch(Command::NextAiProvider).expect("no registry");
+    app.dispatch(Command::SelectAiProvider)
+        .expect("no registry");
     assert!(
         app.state.ui.message.contains("ai.providers"),
         "{}",

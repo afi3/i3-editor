@@ -1687,6 +1687,27 @@ impl App {
                     return;
                 }
                 if (call.tool == "edit_file" || call.tool == "write_file")
+                    && self.state.config.ai.verify_after_edit
+                    && self.native_verify.is_none()
+                {
+                    let name = self.state.config.ai.verify_after_edit_command.clone();
+                    if let Some(spec) = self.state.config.ai.verify.get(&name).cloned() {
+                        let max_chars = self.state.config.ai.max_tool_output_chars;
+                        self.native_verify = Some(crate::native::VerifyTask::spawn(
+                            root.clone(),
+                            name.clone(),
+                            spec,
+                            max_chars,
+                        ));
+                        self.state.ai.busy = true;
+                        self.state
+                            .ai
+                            .entries
+                            .push(format!("[verify] {name} after edit"));
+                        return;
+                    }
+                }
+                if (call.tool == "edit_file" || call.tool == "write_file")
                     && let Some(raw) = call.arguments.get("path").and_then(Value::as_str)
                     && let Ok(path) = crate::native::resolve_path(&root, raw)
                     && self.state.documents.values().any(|document| {

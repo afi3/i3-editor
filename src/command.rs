@@ -150,7 +150,7 @@ pub enum Command {
     PrevTerminal,
     TerminalRename,
     SelectTheme,
-    NextAiProvider,
+    SelectAiProvider,
     NewWorkspace,
     SetWorkspaceRoot,
     SetWorkspaceTerminalDir,
@@ -499,10 +499,7 @@ impl Command {
             Command::PrevTerminal => ("prev_terminal", "Previous terminal tab"),
             Command::TerminalRename => ("rename_terminal", "Rename the active terminal tab"),
             Command::SelectTheme => ("select_theme", "Pick a theme from the themes directory"),
-            Command::NextAiProvider => (
-                "next_ai_provider",
-                "Switch to the next configured AI provider",
-            ),
+            Command::SelectAiProvider => ("select_ai_provider", "Pick an AI provider"),
             _ => return None,
         })
     }
@@ -645,7 +642,7 @@ impl Command {
             Command::PrevTerminal,
             Command::TerminalRename,
             Command::SelectTheme,
-            Command::NextAiProvider,
+            Command::SelectAiProvider,
             Command::SelectWorkspace,
             Command::MovePane(Direction::Left),
             Command::MovePane(Direction::Right),
@@ -832,7 +829,7 @@ mod tests {
             Command::PrevTerminal,
             Command::TerminalRename,
             Command::SelectTheme,
-            Command::NextAiProvider,
+            Command::SelectAiProvider,
             Command::NewWorkspace,
             Command::SetWorkspaceRoot,
             Command::SetWorkspaceTerminalDir,

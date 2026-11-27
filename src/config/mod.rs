@@ -167,6 +167,10 @@ pub struct AiConfig {
     pub workspace_memory: bool,
     /// Named verification commands the model may run by name.
     pub verify: BTreeMap<String, VerifyConfig>,
+    /// Run a configured verification command after a successful native edit.
+    pub verify_after_edit: bool,
+    /// Name in `verify` to run; empty disables the automatic pass.
+    pub verify_after_edit_command: String,
     /// Stop the harness after this many actual session tokens; 0 is unlimited.
     pub max_session_tokens: usize,
     /// Stop the harness after this estimated session cost; 0 is unlimited.
@@ -238,6 +242,8 @@ impl Default for AiConfig {
             compact_history: true,
             workspace_memory: true,
             verify: BTreeMap::new(),
+            verify_after_edit: false,
+            verify_after_edit_command: String::new(),
             max_session_tokens: 0,
             max_session_cost_usd: 0.0,
             allowed_tools: Vec::new(),
@@ -910,6 +916,8 @@ const GIT_KEYS: &[&str] = &["binary"];
 const AI_KEYS: &[&str] = &[
     "providers",
     "active_provider",
+    "verify_after_edit",
+    "verify_after_edit_command",
     "base_url",
     "model",
     "api_key_env",
