@@ -2031,6 +2031,15 @@ impl App {
             if is_error { "error" } else { "ok" },
             Some(&format!("{} chars", text.chars().count())),
         );
+        crate::logging::event(
+            "tool_result",
+            serde_json::json!({
+                "server": server,
+                "tool": tool,
+                "error": is_error,
+                "chars": text.chars().count(),
+            }),
+        );
         self.state.ai.conversation.push(json!({
             "role": "tool",
             "tool_call_id": waiting.id,

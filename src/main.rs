@@ -15,6 +15,7 @@ mod error;
 mod explorer;
 mod git;
 mod input;
+mod logging;
 mod lsp;
 mod lsp_install;
 mod mcp;
