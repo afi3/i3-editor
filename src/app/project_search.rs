@@ -217,7 +217,7 @@ impl App {
                 ));
                 return Ok(());
             }
-            let text = document.rope.to_string();
+            let text = document.rope().to_string();
             let (matches, _) = matcher.find(&text);
             count = matches.len();
             if count == 0 {

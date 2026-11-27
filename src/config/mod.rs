@@ -201,6 +201,23 @@ pub struct AiConfig {
     pub keyring_account: String,
     /// Tools auto-approved for background agents; empty keeps confirmation.
     pub background_auto_tools: Vec<String>,
+    /// Named API providers; `active_provider` selects the one whose values are
+    /// copied over the fields above at load time.
+    pub providers: std::collections::BTreeMap<String, ProviderConfig>,
+    /// Name in `providers` to activate; empty keeps the top-level settings.
+    pub active_provider: String,
+}
+
+/// One named OpenAI-compatible endpoint and the key used to reach it.
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(default)]
+pub struct ProviderConfig {
+    pub base_url: String,
+    pub model: String,
+    pub api_key_env: String,
+    pub api_key: String,
+    pub keyring_service: String,
+    pub keyring_account: String,
 }
 
 impl Default for AiConfig {
@@ -238,7 +255,27 @@ impl Default for AiConfig {
             keyring_service: String::new(),
             keyring_account: String::new(),
             background_auto_tools: Vec::new(),
+            providers: BTreeMap::new(),
+            active_provider: String::new(),
         }
+    }
+}
+
+impl AiConfig {
+    /// Copy a named provider over the effective fields. False when the name is
+    /// unknown, which leaves the current settings alone.
+    pub fn activate(&mut self, name: &str) -> bool {
+        let Some(provider) = self.providers.get(name).cloned() else {
+            return false;
+        };
+        self.active_provider = name.to_string();
+        self.base_url = provider.base_url;
+        self.model = provider.model;
+        self.api_key_env = provider.api_key_env;
+        self.api_key = provider.api_key;
+        self.keyring_service = provider.keyring_service;
+        self.keyring_account = provider.keyring_account;
+        true
     }
 }
 
@@ -476,6 +513,23 @@ pub fn take_managed_lsp_server(key: &str) -> std::io::Result<Option<LspServerCon
     Ok(Some(server))
 }
 
+/// Write a file that may carry credentials: owner-only permissions, because
+/// MCP server entries can hold authorization headers and environment names.
+fn write_private(path: &Path, text: &str) -> std::io::Result<()> {
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent)?;
+    }
+    crate::editor::document::write_atomic(path, text.as_bytes())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+    }
+    Ok(())
+}
+
 fn write_managed_lsp(managed: &LspConfig) -> std::io::Result<()> {
     let Some(path) = managed_lsp_path() else {
         return Err(std::io::Error::other("no config directory"));
@@ -486,9 +540,7 @@ fn write_managed_lsp(managed: &LspConfig) -> std::io::Result<()> {
     {
         std::fs::create_dir_all(parent)?;
     }
-    let temporary = path.with_extension("toml.tmp");
-    std::fs::write(&temporary, text)?;
-    std::fs::rename(&temporary, path)
+    crate::editor::document::write_atomic(&path, text.as_bytes())
 }
 
 #[derive(Default, Deserialize, Serialize)]
@@ -540,14 +592,7 @@ pub fn save_mcp_trust(trusted: &HashSet<String>) -> std::io::Result<()> {
         return Err(std::io::Error::other("no config directory"));
     };
     let text = render_mcp_trust(trusted);
-    if let Some(parent) = path.parent()
-        && !parent.as_os_str().is_empty()
-    {
-        std::fs::create_dir_all(parent)?;
-    }
-    let temporary = path.with_extension("toml.tmp");
-    std::fs::write(&temporary, text)?;
-    std::fs::rename(&temporary, path)
+    write_private(&path, &text)
 }
 
 pub fn managed_mcp_path() -> Option<PathBuf> {
@@ -596,14 +641,7 @@ fn write_managed_mcp(managed: &McpConfig) -> std::io::Result<()> {
         return Err(std::io::Error::other("no config directory"));
     };
     let text = toml::to_string(managed).map_err(std::io::Error::other)?;
-    if let Some(parent) = path.parent()
-        && !parent.as_os_str().is_empty()
-    {
-        std::fs::create_dir_all(parent)?;
-    }
-    let temporary = path.with_extension("toml.tmp");
-    std::fs::write(&temporary, text)?;
-    std::fs::rename(&temporary, path)
+    write_private(&path, &text)
 }
 
 pub fn persist_mcp_server(key: &str, server: &crate::mcp::McpServerConfig) -> std::io::Result<()> {
@@ -662,14 +700,24 @@ pub fn save_mcp_recent(recent: &BTreeMap<String, Vec<String>>) -> std::io::Resul
         return Err(std::io::Error::other("no config directory"));
     };
     let text = render_mcp_recent(recent);
-    if let Some(parent) = path.parent()
-        && !parent.as_os_str().is_empty()
+    write_private(&path, &text)
+}
+
+/// Create the config directory if needed and keep it owner-only, since it holds
+/// MCP entries, the session, and possibly an API key.
+pub fn ensure_config_dir() -> Option<PathBuf> {
+    let dir = config_dir()?;
+    create_private_dir(&dir);
+    Some(dir)
+}
+
+fn create_private_dir(dir: &Path) {
+    let _ = std::fs::create_dir_all(dir);
+    #[cfg(unix)]
     {
-        std::fs::create_dir_all(parent)?;
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
     }
-    let temporary = path.with_extension("toml.tmp");
-    std::fs::write(&temporary, text)?;
-    std::fs::rename(&temporary, path)
 }
 
 pub fn default_path() -> Option<PathBuf> {
@@ -812,7 +860,35 @@ pub fn load_from(path: &Path) -> (AppConfig, Vec<String>) {
     config.ai.retry_base_ms = config.ai.retry_base_ms.clamp(50, 60_000);
     config.ai.retry_max_ms = config.ai.retry_max_ms.clamp(100, 120_000);
     config.ai.panel_width = config.ai.panel_width.clamp(15, 40);
+    let active = config.ai.active_provider.trim().to_string();
+    if !active.is_empty() && !config.ai.activate(&active) {
+        warnings.push(format!(
+            "ai.active_provider [{active}] is not defined under [ai.providers]; \
+             using the top-level settings"
+        ));
+    }
+    if !config.ai.api_key.trim().is_empty() && readable_by_others(path) {
+        warnings.push(format!(
+            "{} stores ai.api_key and is readable by other users; use keyring_service or \
+             api_key_env, or chmod 600 it",
+            path.display()
+        ));
+    }
     (config, warnings)
+}
+
+/// Whether other users can read `path`; the AI key must not live there.
+#[cfg(unix)]
+fn readable_by_others(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(path)
+        .map(|metadata| metadata.permissions().mode() & 0o077 != 0)
+        .unwrap_or(false)
+}
+
+#[cfg(not(unix))]
+fn readable_by_others(_path: &Path) -> bool {
+    false
 }
 
 const EDITOR_KEYS: &[&str] = &[
@@ -832,6 +908,8 @@ const APPEARANCE_KEYS: &[&str] = &[
 const TERMINAL_KEYS: &[&str] = &["height", "shell", "scrollback"];
 const GIT_KEYS: &[&str] = &["binary"];
 const AI_KEYS: &[&str] = &[
+    "providers",
+    "active_provider",
     "base_url",
     "model",
     "api_key_env",
@@ -1101,10 +1179,56 @@ pub fn persist_theme_at(path: &Path, name: &str) -> std::io::Result<()> {
     {
         std::fs::create_dir_all(parent)?;
     }
-    let temporary = path.with_extension("toml.tmp");
-    std::fs::write(&temporary, updated)?;
-    std::fs::rename(&temporary, path)?;
-    Ok(())
+    crate::editor::document::write_atomic(path, updated.as_bytes())
+}
+
+/// Record the selected AI provider in the `[ai]` table, leaving the rest of the
+/// file (comments, ordering) intact. Owner-only, because the file may hold a key.
+pub fn persist_active_provider_at(path: &Path, name: &str) -> std::io::Result<()> {
+    let existing = std::fs::read_to_string(path).unwrap_or_default();
+    let updated = set_active_provider(&existing, name);
+    write_private(path, &updated)
+}
+
+fn set_active_provider(text: &str, name: &str) -> String {
+    let escaped = name.replace('\\', "\\\\").replace('"', "\\\"");
+    let line = format!("active_provider = \"{escaped}\"");
+    let mut lines: Vec<String> = text.lines().map(str::to_string).collect();
+    let mut start = None;
+    let mut end = lines.len();
+    for (index, current) in lines.iter().enumerate() {
+        let trimmed = current.trim();
+        if start.is_none() {
+            if trimmed == "[ai]" {
+                start = Some(index);
+            }
+        } else if trimmed.starts_with('[') {
+            end = index;
+            break;
+        }
+    }
+    match start {
+        Some(start) => {
+            let existing = (start + 1..end).find(|index| {
+                lines[*index].trim_start().starts_with("active_provider")
+                    && lines[*index].contains('=')
+            });
+            match existing {
+                Some(index) => lines[index] = line,
+                None => lines.insert(start + 1, line),
+            }
+        }
+        None => {
+            if lines.last().is_some_and(|last| !last.trim().is_empty()) {
+                lines.push(String::new());
+            }
+            lines.push("[ai]".to_string());
+            lines.push(line);
+        }
+    }
+    let mut out = lines.join("\n");
+    out.push('\n');
+    out
 }
 
 fn set_theme_value(text: &str, name: &str) -> String {

@@ -73,9 +73,7 @@ mod tests {
     use crate::state::DocumentId;
 
     fn document(text: &str) -> Document {
-        let mut document = Document::empty(DocumentId(1), None);
-        document.rope = ropey::Rope::from_str(text);
-        document
+        Document::from_text(DocumentId(1), text, None)
     }
 
     #[test]

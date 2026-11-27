@@ -27,7 +27,7 @@ impl App {
             let cursor = pane.cursor;
             let anchor = pane.anchor;
             let eol = document.line_ending();
-            let (start_line, end_line) = selected_lines(&document.rope, cursor, anchor);
+            let (start_line, end_line) = selected_lines(document.rope(), cursor, anchor);
             let line_count = document.line_count();
             let (range, text, shift) = if direction < 0 {
                 if start_line == 0 {
@@ -65,8 +65,8 @@ impl App {
                 } else {
                     document.len_chars()
                 };
-                let block = document.rope.slice(line_start..next_start).to_string();
-                let next = document.rope.slice(next_start..next_end).to_string();
+                let block = document.rope().slice(line_start..next_start).to_string();
+                let next = document.rope().slice(next_start..next_end).to_string();
                 let shift = if next.ends_with('\n') {
                     next.chars().count() as isize
                 } else {
@@ -112,7 +112,7 @@ impl App {
                 return Ok(());
             };
             let cursor = pane.cursor;
-            let (start_line, end_line) = selected_lines(&document.rope, cursor, pane.anchor);
+            let (start_line, end_line) = selected_lines(document.rope(), cursor, pane.anchor);
             let line_start = document.char_of_line(start_line);
             let line_count = document.line_count();
             let range = if end_line + 1 < line_count {

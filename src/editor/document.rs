@@ -97,7 +97,7 @@ impl Eol {
 pub struct Document {
     pub id: DocumentId,
     pub path: Option<PathBuf>,
-    pub rope: Rope,
+    rope: Rope,
     pub dirty: bool,
     /// Large-file mode: the buffer is viewable but never mutated or saved.
     pub read_only: bool,
@@ -117,6 +117,23 @@ pub struct Document {
 }
 
 impl Document {
+    /// Read-only view of the buffer. Every mutation goes through a method that
+    /// bumps `revision`, so no observer can miss an edit.
+    pub fn rope(&self) -> &Rope {
+        &self.rope
+    }
+
+    /// Build a buffer from text without touching the disk. Test fixtures only:
+    /// production text arrives through `open`, `reload`, or edits.
+    #[cfg(test)]
+    pub fn from_text(id: DocumentId, text: &str, path: Option<PathBuf>) -> Self {
+        let mut document = Self::empty(id, path);
+        document.rope = Rope::from_str(text);
+        document.eol = Eol::detect(text);
+        document.touch();
+        document
+    }
+
     pub fn empty(id: DocumentId, path: Option<PathBuf>) -> Self {
         Self {
             id,
@@ -481,6 +498,7 @@ impl Document {
         self.dirty = self.history.is_modified();
         self.invalidate_syntax(line);
         self.syntax.get_mut().tree.apply_edit(edit);
+        self.touch();
     }
 
     pub fn remove(
@@ -507,6 +525,7 @@ impl Document {
         self.dirty = self.history.is_modified();
         self.invalidate_syntax(line);
         self.syntax.get_mut().tree.apply_edit(edit);
+        self.touch();
         text
     }
 
@@ -546,6 +565,7 @@ impl Document {
         self.dirty = self.history.is_modified();
         self.invalidate_syntax(line);
         self.syntax.get_mut().tree.apply_edit(edit);
+        self.touch();
     }
 
     /// Returns `(cursor, scroll)` to restore on the pane that issued the edit.
@@ -557,6 +577,7 @@ impl Document {
         self.dirty = self.history.is_modified();
         self.folded.clear();
         self.reset_syntax();
+        self.touch();
         Some(restore)
     }
 
@@ -568,6 +589,7 @@ impl Document {
         self.dirty = self.history.is_modified();
         self.folded.clear();
         self.reset_syntax();
+        self.touch();
         Some(restore)
     }
 
@@ -607,6 +629,7 @@ impl Document {
         self.dirty = true;
         self.folded.clear();
         self.reset_syntax();
+        self.touch();
         self.record_disk_state();
     }
 
@@ -674,6 +697,7 @@ impl Document {
             .record_edits(edits, cursor_before, cursor_after, scroll_before);
         self.dirty = self.history.is_modified();
         self.reset_syntax();
+        self.touch();
         true
     }
 
@@ -733,6 +757,7 @@ impl Document {
         self.dirty = false;
         self.folded.clear();
         self.reset_syntax();
+        self.touch();
         self.record_disk_state();
         Ok(())
     }
@@ -753,13 +778,25 @@ impl Document {
             }
         }
     }
+
+    /// Record the disk state `text` was based on, so a later save can tell
+    /// whether the file moved on while the buffer was dirty.
+    pub(crate) fn record_disk_stamp(&mut self, modified: Option<SystemTime>, len: u64) {
+        self.disk_modified = modified;
+        self.disk_len = len;
+    }
+
+    /// Mark the rope as changed for observers that track `revision`.
+    fn touch(&mut self) {
+        self.revision = self.revision.wrapping_add(1);
+    }
 }
 
 /// Replace `path` without ever truncating the original: write an unpredictable
-/// sibling temp file, flush it, then rename over the target. Symlinks are
-/// followed so the link survives. Existing permissions are preserved. When the
-/// rename itself fails (bind mounts, some network filesystems), the bytes are
-/// written in place as a last resort.
+/// sibling temp file, flush it, rename it over the target, then flush the
+/// directory so the rename survives a crash. Symlinks are followed so the link
+/// survives. Existing permissions are preserved. A failed rename is reported;
+/// the original file is left untouched.
 pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let target = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     let parent = target
@@ -777,29 +814,61 @@ pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
         #[cfg(unix)]
         None => {
             use std::os::unix::fs::PermissionsExt;
-            std::fs::Permissions::from_mode(0o644)
+            std::fs::Permissions::from_mode(default_file_mode(parent))
         }
         #[cfg(not(unix))]
         None => std::fs::metadata(&temporary)?.permissions(),
     })?;
     temporary.as_file().sync_all()?;
-    match temporary.persist(&target) {
-        Ok(_) => Ok(()),
-        Err(error) => {
-            drop(error.file);
-            write_in_place(&target, bytes)
-        }
+    if let Err(error) = temporary.persist(&target) {
+        return Err(std::io::Error::new(
+            error.error.kind(),
+            format!("replace {}: {}", target.display(), error.error),
+        ));
     }
+    sync_dir(parent);
+    Ok(())
 }
 
-fn write_in_place(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    let mut file = std::fs::OpenOptions::new()
+/// Flush a directory entry so a rename survives a crash. Best effort: some
+/// filesystems reject `fsync` on a directory handle.
+fn sync_dir(dir: &Path) {
+    #[cfg(unix)]
+    if let Ok(handle) = std::fs::File::open(dir) {
+        let _ = handle.sync_all();
+    }
+    #[cfg(not(unix))]
+    let _ = dir;
+}
+
+/// Mode a new file gets in `dir`: ask the kernel with a throwaway probe so the
+/// process umask decides, instead of a hard-coded 0644.
+#[cfg(unix)]
+fn default_file_mode(dir: &Path) -> u32 {
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+    let probe = dir.join(format!(
+        ".i3-mode-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|elapsed| elapsed.as_nanos())
+            .unwrap_or_default()
+    ));
+    let Ok(file) = std::fs::OpenOptions::new()
+        .create_new(true)
         .write(true)
-        .truncate(true)
-        .create(true)
-        .open(path)?;
-    file.write_all(bytes)?;
-    file.sync_all()
+        .mode(0o666)
+        .open(&probe)
+    else {
+        return 0o644;
+    };
+    let mode = file
+        .metadata()
+        .map(|metadata| metadata.permissions().mode() & 0o777)
+        .unwrap_or(0o644);
+    drop(file);
+    let _ = std::fs::remove_file(&probe);
+    mode
 }
 
 #[cfg(test)]

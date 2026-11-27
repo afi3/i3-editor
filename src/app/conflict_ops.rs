@@ -47,8 +47,8 @@ impl App {
             let separator = document.char_of_line(block.separator_line);
             let theirs_start = document.char_of_line(block.separator_line + 1);
             let theirs_end = document.char_of_line(block.end_line);
-            let ours = document.rope.slice(ours_start..separator).to_string();
-            let theirs = document.rope.slice(theirs_start..theirs_end).to_string();
+            let ours = document.rope().slice(ours_start..separator).to_string();
+            let theirs = document.rope().slice(theirs_start..theirs_end).to_string();
             let text = match choice {
                 Choice::Ours => ours,
                 Choice::Theirs => theirs,

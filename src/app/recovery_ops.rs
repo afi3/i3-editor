@@ -1,16 +1,19 @@
 //! Crash-recovery integration: swap writes, replay, and the startup prompt.
 
+use std::path::Path;
 use std::time::{Duration, Instant};
 
+use crate::editor::document::Document;
 use crate::input::{PromptKind, PromptState};
 use crate::state::{DocumentId, InputMode};
 
 use super::App;
 
 impl App {
-    /// Replay swaps left by a crash and queue the recovery prompt.
+    /// Claim this process's swap directory and replay swaps left by instances
+    /// that are gone.
     pub(crate) fn load_recoveries(&mut self) {
-        let Some(dir) = crate::recovery::default_dir() else {
+        let Some(base) = crate::recovery::default_dir() else {
             return;
         };
         self.swap_dir = Some(dir.clone());
@@ -38,7 +41,11 @@ impl App {
 
     /// Write every dirty buffer and drop swaps for clean ones.
     pub(crate) fn flush_swaps(&mut self) {
-        let Some(dir) = self.swap_dir.clone() else {
+        let Some(dir) = self
+            .swap
+            .as_ref()
+            .map(|instance| instance.dir().to_path_buf())
+        else {
             return;
         };
         if let Err(error) = crate::recovery::write_to(&dir, self.state.documents.values()) {
@@ -80,21 +87,47 @@ impl App {
         id: DocumentId,
         choice: &str,
     ) -> crate::error::Result<()> {
-        if choice.starts_with("Save") {
-            self.save_document(id)?;
-        } else if choice.starts_with("Reload") {
-            self.reload_document(id)?;
-        }
         let path = self
             .state
             .documents
             .get(&id)
             .and_then(|document| document.path.clone());
-        if let (Some(dir), Some(path)) = (&self.swap_dir, path) {
-            crate::recovery::clear(dir, &path);
+        if choice.starts_with("Save") {
+            if let Some(path) = &path
+                && self.recovered_file_changed(id, path)
+            {
+                self.open_external_change_prompt(id, path.clone());
+                return Ok(());
+            }
+            self.save_document(id)?;
+        } else if choice.starts_with("Reload") {
+            self.reload_document(id)?;
+        }
+        if let Some(path) = path
+            && let Some(dir) = self
+                .swap
+                .as_ref()
+                .map(|instance| instance.dir().to_path_buf())
+        {
+            crate::recovery::clear(&dir, &path);
         }
         self.recoveries.retain(|recovered| *recovered != id);
         self.begin_recovery_prompt();
         Ok(())
+    }
+
+    /// A recovered buffer must not overwrite a file that changed after its
+    /// swap was written, nor one whose recorded disk state no longer matches.
+    fn recovered_file_changed(&self, id: DocumentId, path: &Path) -> bool {
+        let changed = self
+            .state
+            .documents
+            .get(&id)
+            .is_some_and(Document::disk_changed);
+        changed
+            || self
+                .swap
+                .as_ref()
+                .is_some_and(|instance| crate::recovery::swap_is_stale(instance.dir(), path))
     }
 }

@@ -115,4 +115,27 @@ fn type_save_and_confirm_quit() {
 
     assert!(status.success(), "editor exit status: {status:?}");
     assert_eq!(std::fs::read_to_string(&file).expect("saved file"), "hello");
+
+    // The run also exercised the on-disk contract: a private config directory
+    // and a per-root session snapshot written on exit.
+    use std::os::unix::fs::PermissionsExt;
+    let config_dir = dir.path().join("config").join("i3-editor");
+    let mode = std::fs::metadata(&config_dir)
+        .expect("config dir")
+        .permissions()
+        .mode()
+        & 0o777;
+    assert_eq!(mode, 0o700, "config directory must be owner-only");
+
+    let session = std::fs::read_dir(&config_dir)
+        .expect("config dir")
+        .flatten()
+        .map(|entry| entry.path())
+        .find(|path| {
+            path.file_name()
+                .is_some_and(|name| name.to_string_lossy().starts_with("session-"))
+        })
+        .expect("per-root session file");
+    let saved = std::fs::read_to_string(&session).expect("session file");
+    assert!(saved.contains("note.txt"), "{saved}");
 }

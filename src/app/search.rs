@@ -75,7 +75,7 @@ impl App {
         let Some(document) = self.state.documents.get(&document_id) else {
             return;
         };
-        let text = document.rope.to_string();
+        let text = document.rope().to_string();
         let matcher = match crate::search_options::Matcher::new(&query, options) {
             Ok(matcher) => matcher,
             Err(error) => {
@@ -245,7 +245,7 @@ impl App {
             let Some(document) = documents.get_mut(&id) else {
                 return Ok(());
             };
-            let haystack = document.rope.to_string();
+            let haystack = document.rope().to_string();
             let (matches, _) = matcher.find(&haystack);
             count = matches.len();
             if count == 0 {

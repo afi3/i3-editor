@@ -3,7 +3,7 @@
 
 use crate::error::Result;
 use crate::lsp::{Event, Location};
-use crate::state::{CompletionPopup, DocumentId};
+use crate::state::{CompletionPopup, DocumentId, Focus};
 
 use super::{App, same_path};
 
@@ -46,17 +46,42 @@ impl App {
                     }
                     diagnostic_updates.push((path, diagnostics));
                 }
-                Event::Completion(items) => {
+                Event::Completion {
+                    document,
+                    revision,
+                    items,
+                } => {
+                    let current = self.state.documents.get(&document).map(|doc| doc.revision);
+                    if current != Some(revision)
+                        || self.state.active_document_id() != Some(document)
+                    {
+                        continue;
+                    }
                     let count = items.len();
                     self.state.hover = None;
-                    self.state.completions = Some(CompletionPopup { items, selected: 0 });
+                    self.state.completions = Some(CompletionPopup {
+                        document,
+                        revision,
+                        items,
+                        selected: 0,
+                    });
                     if count == 0 {
                         self.notify("no completions");
                     }
                 }
-                Event::Hover(text) => {
+                Event::Hover {
+                    document,
+                    revision,
+                    text,
+                } => {
+                    let current = self.state.documents.get(&document).map(|doc| doc.revision);
+                    if current != Some(revision)
+                        || self.state.active_document_id() != Some(document)
+                    {
+                        continue;
+                    }
                     self.state.completions = None;
-                    self.state.hover = Some(text);
+                    self.state.hover = (!text.is_empty()).then_some(text);
                 }
                 Event::Definition(location) => pending_definition = Some(location),
                 Event::Warning(message) => self.notify(message),
@@ -369,6 +394,8 @@ impl App {
                     self.state.completions = None;
                     return true;
                 };
+                let document = popup.document;
+                let revision = popup.revision;
                 self.state.completions = None;
                 let result = self.insert_text(&item.insert);
                 self.finish(result);
@@ -379,6 +406,57 @@ impl App {
             }
         }
         true
+    }
+
+    /// Replace the range the server asked for. The caller checked the document
+    /// and revision, so these offsets still describe this text.
+    fn apply_completion_range(
+        &mut self,
+        id: DocumentId,
+        range: crate::lsp::CompletionRange,
+        text: &str,
+    ) -> Result<()> {
+        let (start, end) = {
+            let Some(document) = self.state.documents.get(&id) else {
+                return Ok(());
+            };
+            let last = document.line_count().saturating_sub(1);
+            let start = char_offset(document, range.start_line.min(last), range.start_character);
+            let end = char_offset(document, range.end_line.min(last), range.end_character);
+            (start, end)
+        };
+        if end < start {
+            return Ok(());
+        }
+        let cursor_after = start + text.chars().count();
+        {
+            let crate::state::AppState {
+                documents,
+                panes,
+                focus,
+                ..
+            } = &mut self.state;
+            let Focus::Pane(pane_id) = *focus else {
+                return Ok(());
+            };
+            let Some(pane) = panes.get_mut(&pane_id) else {
+                return Ok(());
+            };
+            if pane.active != Some(id) {
+                return Ok(());
+            }
+            let Some(document) = documents.get_mut(&id) else {
+                return Ok(());
+            };
+            let scroll_before = (pane.scroll_top, pane.scroll_left);
+            document.replace(start..end, text, pane.cursor, cursor_after, scroll_before);
+            pane.cursor = cursor_after;
+            pane.anchor = None;
+            pane.target_col = None;
+        }
+        self.ensure_cursor_visible();
+        self.plugin_event("change");
+        Ok(())
     }
 
     /// Close a hover popup; any non-Esc key also closes it and continues.
@@ -393,6 +471,15 @@ impl App {
         self.state.hover = None;
         false
     }
+}
+
+/// Char offset of a UTF-16 column within `line`.
+fn char_offset(
+    document: &crate::editor::document::Document,
+    line: usize,
+    character: usize,
+) -> usize {
+    document.char_of_line(line) + crate::lsp::utf16_to_char(&document.line_text(line), character)
 }
 
 fn convert_diagnostic_columns(

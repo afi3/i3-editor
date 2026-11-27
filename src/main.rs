@@ -65,6 +65,7 @@ fn run() -> error::Result<()> {
         return update::run();
     }
 
+    config::ensure_config_dir();
     let (config, warnings) = config::load();
     if options.dump_keymap {
         use std::io::Write;

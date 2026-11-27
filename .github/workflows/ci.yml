@@ -42,6 +42,20 @@ jobs:
       - name: Test
         run: cargo test --locked
 
+  windows:
+    name: windows check
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      # Windows is compile-checked, not supported: this job exists so the
+      # `#[cfg(not(unix))]` paths never rot. Unix-only tests are gated.
+      - name: Check
+        run: cargo check --all-targets --locked
+
   audit:
     name: audit
     runs-on: ubuntu-latest

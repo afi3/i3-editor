@@ -1,10 +1,11 @@
 //! Git integration: repository discovery, line markers, status, diffs, and
 //! staging. Everything shells out to `git`; no library dependency.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::mpsc;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Change {
@@ -95,23 +96,90 @@ pub fn log(binary: &str, repo: &Path, limit: usize) -> Result<Vec<String>, Strin
     Ok(output.lines().map(str::to_string).collect())
 }
 
-/// Per-line markers for `path`: compare the worktree (including the index)
-/// against `HEAD`. Untracked files are reported as entirely added.
-pub fn line_marks(binary: &str, repo: &Path, path: &Path) -> Result<Vec<Option<Change>>, String> {
-    let Some(relative) = relative_path(repo, path) else {
-        return Ok(Vec::new());
-    };
-    if is_untracked(binary, repo, &relative)? {
-        let text = std::fs::read_to_string(path).unwrap_or_default();
-        let lines = text.lines().count().max(1);
-        return Ok(vec![Some(Change::Added); lines]);
+/// Cheap check for a `.git` entry above `root`, so a non-repository workspace
+/// does not spawn a marker worker every second. `GIT_DIR` counts because the
+/// worker discovers the real repository itself.
+pub fn has_repo(root: &Path) -> bool {
+    if std::env::var_os("GIT_DIR").is_some() {
+        return true;
     }
-    let output = run(
+    let mut current = Some(root);
+    while let Some(dir) = current {
+        if dir.join(".git").exists() {
+            return true;
+        }
+        current = dir.parent();
+    }
+    false
+}
+
+/// Per-line markers for every requested path in two `git` invocations: one
+/// status for untracked files and one diff for the whole worktree. Paths
+/// outside the repository, and paths without changes, map to no marks.
+pub fn tree_marks(
+    binary: &str,
+    repo: &Path,
+    paths: &[PathBuf],
+) -> HashMap<PathBuf, Vec<Option<Change>>> {
+    let wanted: Vec<(PathBuf, String)> = paths
+        .iter()
+        .filter_map(|path| relative_path(repo, path).map(|relative| (path.clone(), relative)))
+        .collect();
+    if wanted.is_empty() {
+        return HashMap::new();
+    }
+    let status = run(
         binary,
         repo,
         &["diff", "HEAD", "--no-color", "--unified=0", "--", &relative],
     )?;
     Ok(parse_marks(&output, path))
+}
+
+/// Background marker pass for the documents on screen.
+pub struct MarksTask {
+    result: mpsc::Receiver<HashMap<PathBuf, Vec<Option<Change>>>>,
+}
+
+impl MarksTask {
+    /// Discover the repository and compute markers off the UI thread; a missing
+    /// repository yields an empty map.
+    pub fn spawn(binary: String, root: PathBuf, paths: Vec<PathBuf>) -> Self {
+        let (sender, result) = mpsc::channel();
+        std::thread::spawn(move || {
+            let marks = match discover(&binary, &root) {
+                Some(repo) => tree_marks(&binary, &repo, &paths),
+                None => HashMap::new(),
+            };
+            let _ = sender.send(marks);
+        });
+        Self { result }
+    }
+
+    pub fn try_recv(&self) -> Option<HashMap<PathBuf, Vec<Option<Change>>>> {
+        self.result.try_recv().ok()
+    }
+}
+
+/// The `diff --git` section that belongs to one repository-relative path.
+fn section<'a>(diff: &'a str, relative: &str) -> Option<&'a str> {
+    let expected = format!("a/{relative} b/{relative}");
+    let mut start = None;
+    let mut end = diff.len();
+    let mut offset = 0;
+    for line in diff.split_inclusive('\n') {
+        if let Some(rest) = line.strip_prefix("diff --git ") {
+            if start.is_some() {
+                end = offset;
+                break;
+            }
+            if rest.trim_end() == expected {
+                start = Some(offset);
+            }
+        }
+        offset += line.len();
+    }
+    start.map(|start| &diff[start..end])
 }
 
 fn parse_marks(diff: &str, path: &Path) -> Vec<Option<Change>> {
@@ -487,7 +555,8 @@ mod tests {
         git(&dir, &["commit", "-q", "-m", "base"]);
 
         std::fs::write(&file, "one\nTWO\nthree\nfour\n").expect("edit");
-        let marks = line_marks("git", &dir, &file).expect("marks");
+        let marks = tree_marks("git", &dir, std::slice::from_ref(&file));
+        let marks = marks.get(&file).expect("marks");
         assert_eq!(marks[1], Some(Change::Modified));
         assert_eq!(marks[3], Some(Change::Added));
         assert_eq!(marks[0], None);
@@ -499,8 +568,44 @@ mod tests {
         let dir = repo("untracked");
         let file = dir.join("new.txt");
         std::fs::write(&file, "a\nb\n").expect("write");
-        let marks = line_marks("git", &dir, &file).expect("marks");
-        assert_eq!(marks, vec![Some(Change::Added), Some(Change::Added)]);
+        let marks = tree_marks("git", &dir, std::slice::from_ref(&file));
+        assert_eq!(
+            marks.get(&file),
+            Some(&vec![Some(Change::Added), Some(Change::Added)])
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn one_pass_covers_every_requested_file() {
+        let dir = repo("tree");
+        let changed = dir.join("a.txt");
+        let clean = dir.join("b.txt");
+        let fresh = dir.join("c.txt");
+        std::fs::write(&changed, "one\n").expect("seed");
+        std::fs::write(&clean, "two\n").expect("seed");
+        git(&dir, &["add", "."]);
+        git(&dir, &["commit", "-q", "-m", "base"]);
+        std::fs::write(&changed, "one\nmore\n").expect("edit");
+        std::fs::write(&fresh, "new\n").expect("create");
+        let unicode = dir.join("catatan-é.txt");
+        std::fs::write(&unicode, "satu\n").expect("create");
+
+        let marks = tree_marks(
+            "git",
+            &dir,
+            &[
+                changed.clone(),
+                clean.clone(),
+                fresh.clone(),
+                unicode.clone(),
+            ],
+        );
+        assert_eq!(marks[&changed][0], None);
+        assert_eq!(marks[&changed][1], Some(Change::Added));
+        assert!(marks[&clean].is_empty());
+        assert_eq!(marks[&fresh], vec![Some(Change::Added)]);
+        assert_eq!(marks[&unicode], vec![Some(Change::Added)]);
         std::fs::remove_dir_all(&dir).ok();
     }
 

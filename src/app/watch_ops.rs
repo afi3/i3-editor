@@ -26,15 +26,40 @@ impl App {
         let active = self.state.workspaces.active().id;
         let mut paths = Vec::new();
         let mut active_paths = Vec::new();
+        let mut rescan = false;
+        let mut error = None;
         for (id, watcher) in &self.watchers {
-            let events = drain_watcher(watcher);
+            let drained = watcher.drain(WATCH_BUDGET);
+            rescan |= drained.rescan;
+            error = error.or(drained.error);
             if *id == active {
-                active_paths.extend(events.iter().cloned());
+                active_paths.extend(drained.paths.iter().cloned());
             }
-            paths.extend(events);
+            paths.extend(drained.paths);
         }
         if let Some(watcher) = &self.external_watcher {
-            paths.extend(drain_watcher(watcher));
+            let drained = watcher.drain(WATCH_BUDGET);
+            rescan |= drained.rescan;
+            error = error.or(drained.error);
+            paths.extend(drained.paths);
+        }
+        if let Some(error) = error {
+            self.notify(format!("file watcher: {error}"));
+        }
+        if rescan {
+            // The queue overflowed, so the dropped events are unknown: rebuild
+            // every cache and recheck open buffers against the disk.
+            self.state.explorer.refresh();
+            self.quick_open_files = None;
+            for document in self.state.documents.values() {
+                if document.disk_changed()
+                    && let Some(path) = document.path.clone()
+                {
+                    paths.push(path);
+                }
+            }
+            self.notify("file watcher overflow; reloaded the tree");
+            self.dirty = true;
         }
         if paths.is_empty() {
             return;
@@ -374,20 +399,4 @@ fn direct_child(file: &str, dir: &str) -> bool {
             .and_then(|rest| rest.strip_prefix('/'))
     };
     rest.is_some_and(|rest| !rest.is_empty() && !rest.contains('/'))
-}
-
-fn drain_watcher(watcher: &crate::watch::Watcher) -> Vec<PathBuf> {
-    let mut paths = Vec::new();
-    for _ in 0..WATCH_BUDGET {
-        let Some(event) = watcher.try_recv() else {
-            break;
-        };
-        let Ok(event) = event else {
-            continue;
-        };
-        if crate::watch::relevant(&event.kind) {
-            paths.extend(event.paths);
-        }
-    }
-    paths
 }

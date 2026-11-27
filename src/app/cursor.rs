@@ -157,7 +157,7 @@ impl App {
                 return Ok(());
             };
             let tab_width = document.indent.tab_width.max(1);
-            let rope = &document.rope;
+            let rope = document.rope();
             let cursor = pane.cursor;
 
             if extend && pane.anchor.is_none() {
@@ -282,7 +282,7 @@ impl App {
             let line = document.line_of_char(pane.cursor);
             let text = document.line_text(line);
             let eol = document.line_ending();
-            let insert_at = line_content_end(&document.rope, line);
+            let insert_at = line_content_end(document.rope(), line);
             let scroll = (pane.scroll_top, pane.scroll_left);
             document.insert(insert_at, &format!("{eol}{text}"), pane.cursor, scroll);
             document.history.break_run();

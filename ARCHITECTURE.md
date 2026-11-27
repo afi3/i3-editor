@@ -179,9 +179,14 @@ clears the syntax memo, and clamps cursors in every pane showing that document.
 
 **Sessions are validated snapshots.** `src/session.rs` serializes workspaces,
 layout trees (axis, tiling/tabbed mode, active child, weights), pane tabs, cursor,
-and scroll to `session.toml`. The run loop writes the same snapshot every five
-seconds and on exit, so a crash loses at most the last few seconds of layout.
-Restore only runs without a CLI path when the saved root matches the current
+and scroll to `session-<hash>.toml`, keyed by the workspace root, so two editors
+in different projects keep their own layout. The run loop writes the same
+snapshot every five seconds and on exit, so a crash loses at most the last few
+seconds of layout. The write goes through `write_atomic` with a unique temporary
+file and a directory flush, so two editors in the same config directory cannot
+collide on a fixed `.tmp` name. A legacy `session.toml` from an older build is
+read until the first save writes the per-root file. Restore only runs without a
+CLI path when the saved root matches the current
 directory. The snapshot is capped and validated first (version, workspace/pane/
 document counts, split child and weight ranges, every pane referenced exactly
 once); a failure is reported and the default workspace stays. Only files on disk
@@ -257,7 +262,8 @@ Typing never writes; `Enter` on the replacement field is the per-file
 confirmation. A clean open buffer is rewritten as a single `Document::replace`
 so undo crosses the save, then saved through the atomic path; a dirty buffer is
 refused. Any other file is read, rewritten with the same `Matcher`, and replaced
-atomically (`write_atomic`, with an in-place fallback when rename is refused).
+atomically (`write_atomic`: sibling temp file, flush, rename, then a directory
+flush; a refused rename is reported instead of truncating the file).
 
 **Structure comes from the same grammars, parsed on demand.** `structure::symbols`
 and `structure::folds` build a fresh tree with the language's tree-sitter grammar
@@ -325,7 +331,7 @@ plugin. Reloading replaces both the Lua state and the registry, which unregister
 everything atomically. The watcher watches the plugin directory next to
 `config.toml` and routes those events to `App::reload_plugins`.
 
-**Git is a thin CLI adapter.** `git::line_marks` parses `git diff HEAD -U0` hunk
+**Git is a thin CLI adapter.** `git::tree_marks` parses `git diff HEAD -U0` hunk
 headers into one marker per new-side line; untracked files are read and marked
 added. `git::status` parses porcelain `XY` codes, `diff` returns unified text for
 the read-only overlay, and stage/unstage/commit call `git add`, `git restore
@@ -339,9 +345,13 @@ and the unborn-repository case. `git::pull` refuses uncommitted changes and uses
 prompts disabled. `conflict::blocks` finds complete `<<<<<<<`/`=======`/`>>>>>>>`
 groups; `App::resolve_conflict` replaces one block with ours, theirs, or both as
 a single document edit, and `git_conflicts` opens a filtered status prompt.
-`App::refresh_git_marks`
-recomputes only documents shown in panes, once per second and after
-open/save/git actions. Every helper returns git's stderr/stdout on failure, which
+`App::refresh_git_marks` schedules a marker pass for the documents shown in
+panes, once per second and after open/save/git actions. The pass runs on a
+worker thread (`git::MarksTask`) and costs two `git` invocations for the whole
+set — one `status --porcelain` for untracked files and one
+`diff HEAD --unified=0` split per path — so the UI thread only polls a channel in
+`pump_git_marks` and redraws when the marks actually changed. Every helper
+returns git's stderr/stdout on failure, which
 the command path puts in the status bar.
 
 **LSP is threads and channels, not a runtime.** `lsp::LspManager` owns one
@@ -351,17 +361,28 @@ that channel in `App::pump_lsp` once per frame. Requests carry an id whose
 `ReplyKind` lives in the server's pending map, so completion, hover, and
 definition replies need no global dispatcher. `initialize` runs first; requests
 sent before the response are queued per server and flushed once it arrives.
-Documents compare the rope text with the last sent text and emit
+Documents compare a `Document::revision` counter with the last synced revision
+and only materialize text when it changed, then emit
 `didOpen`/`didChange`/`didClose`; `didChange` follows the server's
 `textDocumentSync` capability. Incremental servers receive one contiguous
 replacement range computed by common prefix/suffix in the old text, with
 UTF-16 columns; full-sync servers receive the whole document, and `None`
 suppresses changes. Positions convert between char offsets and UTF-16 columns at
-the boundary. Diagnostics are stored per document
+the boundary. Completion replies carry the requesting document id and revision;
+a reply whose revision or active document moved on is dropped, and an item's
+`textEdit` range (or `InsertReplaceEdit.insert`) is applied as a replacement
+instead of an insert at the cursor. Diagnostics are stored per document
 id and rendered by the gutter and status bar. A server that fails to spawn is
 marked failed and reported once, so edits never wait on a language server.
 Pending requests carry a send timestamp: an unanswered `initialize` fails the
-server after 60 s, and other requests are dropped after 15 s. Changing the
+server after 60 s, and other requests are dropped after 15 s. Each pump handles
+at most 512 messages per server, so a server that floods diagnostics cannot hold
+a frame open. A closed pipe or a failed write marks the server dead: it is
+dropped together with its queued requests and open documents, its diagnostics are
+cleared through empty `Diagnostics` events, and one warning names it. `failed`
+keeps it from being restarted this session. A test-only counter records every
+buffer copy handed to a server, and its test fails if an idle document is
+serialized again — the deterministic guard for the revision check. Changing the
 workspace root or the `[lsp.*]` tables calls `LspManager::restart`, which drops
 the old children and reopens the documents against the new root/config on the
 next pump.
@@ -396,7 +417,9 @@ and stderr logs render in read-only overlays with no automatic buffer or shell
 mutation. `resources/list`, `resources/read`, `prompts/list`, and `prompts/get`
 feed palette menus and the same read-only overlay. `mcp_add` writes managed
 server entries to `mcp.toml`; recent tool choices are kept in `mcp_recent.toml`
-and sorted first.
+and sorted first. Those three files, and the trust record, are written
+atomically with owner-only (`0600`) permissions, because a server entry can hold
+an `Authorization` header.
 
 **The AI assistant is a bounded worker loop, not a runtime.** `ai::spawn_chat`
 writes the OpenAI-compatible request to a private temporary file and runs
@@ -507,7 +530,12 @@ buffers. When the OS refuses a recursive watch, the watcher falls back to the
 root plus expanded explorer directories and reports one warning. The loop drains
 all watchers, coalesces paths, and only rebuilds the explorer when the event came
 from the active workspace. Open buffers react to their own paths regardless of
-workspace. A second non-recursive watcher covers the parent directories of open
+workspace. `Watcher::drain` keeps the two signals a raw queue carries beyond
+paths: a backend error becomes one status message, and a `Flag::Rescan` event —
+what inotify and FSEvents emit when their queue overflows — rebuilds the
+explorer, drops the quick-open cache, and rechecks every open buffer against the
+disk, because the dropped events are unknown. A second non-recursive watcher
+covers the parent directories of open
 documents outside every workspace root; `sync_external_watcher` adds and removes
 those directories as documents open and close, and drops the watcher when none
 remain.
@@ -520,16 +548,28 @@ moved in without child events and a `.gitignore`/`.ignore` change drop the cache
 so the next request rescans. Switching workspace or toggling hidden files drops
 the cache as well.
 
-**Crash recovery is a swap directory, not a journal.** `recovery::write_to`
-writes each dirty document to `<config>/i3-editor/swap/` through `tempfile` +
-rename, keyed by the hex-encoded path, and deletes swaps for clean documents.
-The event loop runs it at most once per second. Startup replays swaps into
+**Crash recovery is a swap directory, not a journal.** Every editor instance
+claims its own subdirectory of `<config>/i3-editor/swap/`, named from its pid
+and start time and guarded by an advisory lock, so instances never prune or
+clear each other's swaps. `recovery::write_to` writes each dirty document into
+that subdirectory through `tempfile` + rename, keyed by the hex-encoded path,
+and deletes swaps for clean documents; the event loop runs it at most once per
+second. The disk state (mtime and size) the buffer was based on lives in a
+`.stamp` sidecar, so the swap payload stays plain buffer text that an older
+build can still read after a downgrade. Startup adopts swaps from directories
+whose lock it can take (the owner
+is gone), leaves running instances alone, and replays the rest into
 `Document::restore` (fresh undo history, dirty flag), attaches recovered buffers
-as tabs, and prompts per file: save, reload, or keep. A graceful exit clears the
-directory, so discarded quit choices cannot come back.
+as tabs, and prompts per file: save, reload, or keep. The recorded stamp is
+restored too, so saving a recovered buffer asks whenever the file moved on after
+the buffer's last load or save — not merely after the last swap write. A
+graceful exit removes only its own subdirectory.
 
 **Rendering is read-only and demand-driven.** `ui::render` takes `&AppState`.
 The only mutation before a draw is `compute_layout`, which fills the rect cache.
+A pane builds its visible rows from `Document::line_len` without materializing
+lines it does not draw, and its gutter severity index once per draw instead of
+scanning every diagnostic per row.
 The event loop sets `App.dirty` on input, shell output, watcher events, LSP
 traffic, search batches, and due Git refreshes; it draws only when that flag is
 set, then clears it. The idle poll is one second when no shell, search, or LSP

@@ -310,6 +310,7 @@ impl App {
             Command::PrevTerminal => self.cycle_terminal(-1),
             Command::TerminalRename => self.rename_terminal_prompt(),
             Command::SelectTheme => self.open_prompt(PromptKind::Theme),
+            Command::NextAiProvider => self.next_ai_provider()?,
             Command::SelectWorkspace => self.open_prompt(PromptKind::SelectWorkspace),
             other => return Ok(Some(other)),
         }

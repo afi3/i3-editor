@@ -61,7 +61,7 @@ impl App {
             selecting: None,
             enhanced: false,
             recoveries: Vec::new(),
-            swap_dir: None,
+            swap: None,
             last_swap: std::time::Instant::now(),
             lsp: None,
             mcp: None,
@@ -87,6 +87,7 @@ impl App {
             plugins: None,
             block_anchor: None,
             git_status_entries: Vec::new(),
+            git_marks_task: None,
             last_git: std::time::Instant::now(),
             search_history: Default::default(),
             history_path: None,
@@ -184,8 +185,9 @@ pub struct App {
     pub(crate) enhanced: bool,
     /// Documents restored from swap files, resolved one prompt at a time.
     pub(crate) recoveries: Vec<crate::state::DocumentId>,
-    /// Swap directory; `None` when no config directory can be resolved.
-    pub(crate) swap_dir: Option<PathBuf>,
+    /// This process's swap directory; `None` when no config directory can be
+    /// resolved or the directory could not be claimed.
+    pub(crate) swap: Option<crate::recovery::Instance>,
     /// Time of the last swap pass, to bound writes.
     pub(crate) last_swap: std::time::Instant,
     /// Language servers for open documents; `None` in headless fixtures.
@@ -223,12 +225,14 @@ pub struct App {
     pub(crate) plugins: Option<crate::plugins::Plugins>,
     /// Entries backing the Git status prompt.
     pub(crate) git_status_entries: Vec<crate::git::StatusEntry>,
+    /// Running per-line marker pass; `None` when idle.
+    pub(crate) git_marks_task: Option<crate::git::MarksTask>,
     /// Time of the last git marker refresh.
     pub(crate) last_git: std::time::Instant,
     /// Persistent search queries and options.
     pub(crate) search_history: crate::search_history::SearchHistory,
     pub(crate) history_path: Option<PathBuf>,
-    /// Session file used by periodic autosave and graceful exit.
+    /// Session file override; `None` resolves a per-root file at save time.
     pub(crate) session_path: Option<PathBuf>,
     pub(crate) last_session_save: std::time::Instant,
     /// Set by input or background work; cleared after a successful draw.
@@ -342,7 +346,7 @@ impl App {
             selecting: None,
             enhanced,
             recoveries: Vec::new(),
-            swap_dir: None,
+            swap: None,
             last_swap: std::time::Instant::now(),
             lsp: None,
             mcp: None,
@@ -368,10 +372,11 @@ impl App {
             plugins: None,
             block_anchor: None,
             git_status_entries: Vec::new(),
+            git_marks_task: None,
             last_git: std::time::Instant::now(),
             search_history,
             history_path,
-            session_path: crate::session::default_path(),
+            session_path: None,
             last_session_save: std::time::Instant::now(),
             dirty: true,
             watch_signature: None,
@@ -496,6 +501,7 @@ impl App {
             self.pump_sampling();
             self.pump_lsp_install();
             self.refresh_git_if_due();
+            self.pump_git_marks();
             self.autosave_swaps();
             if self.dirty {
                 self.draw()?;
@@ -520,8 +526,8 @@ impl App {
             // statusline fresh without a per-frame callback cost.
             self.refresh_plugin_status();
         }
-        if let Some(dir) = &self.swap_dir {
-            crate::recovery::clear_all(dir);
+        if let Some(instance) = self.swap.take() {
+            instance.release();
         }
         self.save_session()?;
         Ok(())
@@ -718,11 +724,15 @@ impl App {
     }
 
     fn save_session(&self) -> Result<()> {
-        let Some(path) = &self.session_path else {
-            return Ok(());
+        let path = match &self.session_path {
+            Some(path) => path.clone(),
+            None => match crate::session::path_for(&self.state.explorer.root) {
+                Some(path) => path,
+                None => return Ok(()),
+            },
         };
-        crate::session::save_to(path, &self.state)
-            .map_err(|error| Error::io("write session", path, error))
+        crate::session::save_to(&path, &self.state)
+            .map_err(|error| Error::io("write session", &path, error))
     }
 
     fn autosave_session(&mut self) {

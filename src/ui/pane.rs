@@ -267,6 +267,7 @@ pub fn render(
     let matched = selected.add_modifier(Modifier::UNDERLINED);
     let number_style = Style::default().bg(theme.background).fg(theme.gutter);
     let cursor_line = document.line_of_char(pane.cursor);
+    let severities = line_severities(state, document);
 
     let buffer = frame.buffer_mut();
     let wrap = state.config.editor.word_wrap;
@@ -306,14 +307,18 @@ pub fn render(
                 highlighted,
                 number_style,
                 background,
+                severities.get(&line_index).copied(),
             );
         }
         let full = document.line_text(line_index);
-        let text: String = full
-            .chars()
-            .skip(visual.start)
-            .take(visual.end - visual.start)
-            .collect();
+        let text: String = if visual.start == 0 && visual.end == document.line_len(line_index) {
+            full
+        } else {
+            full.chars()
+                .skip(visual.start)
+                .take(visual.end - visual.start)
+                .collect()
+        };
         let line_start = document.char_of_line(line_index) + visual.start;
         let spans = row_spans(document, *visual, wrap);
         draw_text_line(
@@ -486,6 +491,27 @@ fn visible_lines(
     lines
 }
 
+/// Lowest severity per line for one document, built once per draw instead of
+/// scanning the whole diagnostic list for every rendered row.
+fn line_severities(
+    state: &AppState,
+    document: &Document,
+) -> std::collections::HashMap<usize, crate::lsp::Severity> {
+    let mut severities = std::collections::HashMap::new();
+    let Some(diagnostics) = state.lsp_diagnostics.get(&document.id) else {
+        return severities;
+    };
+    for diagnostic in diagnostics {
+        let entry = severities
+            .entry(diagnostic.line)
+            .or_insert(diagnostic.severity);
+        if diagnostic.severity < *entry {
+            *entry = diagnostic.severity;
+        }
+    }
+    severities
+}
+
 #[allow(clippy::too_many_arguments)]
 fn render_gutter_cell(
     buffer: &mut Buffer,
@@ -498,6 +524,7 @@ fn render_gutter_cell(
     highlighted: bool,
     number_style: Style,
     background: Color,
+    severity: Option<crate::lsp::Severity>,
 ) {
     let digit_cells = u16::try_from(digits).unwrap_or(u16::MAX);
     let label = format!("{:>width$}", line_index + 1, width = digits);
@@ -527,16 +554,6 @@ fn render_gutter_cell(
             Style::default().bg(background).fg(color),
         );
     }
-    let severity = state
-        .lsp_diagnostics
-        .get(&document.id)
-        .and_then(|diagnostics| {
-            diagnostics
-                .iter()
-                .filter(|diagnostic| diagnostic.line == line_index)
-                .map(|diagnostic| diagnostic.severity)
-                .min()
-        });
     let Some(severity) = severity else {
         return;
     };
@@ -570,7 +587,7 @@ fn visual_rows_for(
         .map(|line| textutil::VisualRow {
             line,
             start: 0,
-            end: document.line_text(line).chars().count(),
+            end: document.line_len(line),
         })
         .collect()
 }
@@ -689,7 +706,7 @@ fn highlight_brackets(
     gutter: u16,
     tab_width: usize,
 ) {
-    let Some((first, second)) = textutil::matching_bracket(&document.rope, pane.cursor) else {
+    let Some((first, second)) = textutil::matching_bracket(document.rope(), pane.cursor) else {
         return;
     };
     let buffer = frame.buffer_mut();

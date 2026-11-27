@@ -151,10 +151,25 @@ impl App {
             return false;
         };
         if super::help::read_only_key(view, combo) {
-            self.state.mcp_view = None;
-            self.mcp_resource_view = None;
+            self.close_mcp_overlays();
         }
         true
+    }
+
+    /// Close the MCP overlays and release the resource subscription they held,
+    /// so a server stops pushing updates for a resource nobody is viewing.
+    pub(crate) fn close_mcp_overlays(&mut self) {
+        self.state.mcp_view = None;
+        let Some((server, uri)) = self.mcp_resource_view.take() else {
+            return;
+        };
+        if self
+            .mcp_subscriptions
+            .remove(&(server.clone(), uri.clone()))
+            && let Some(mcp) = self.mcp.as_mut()
+        {
+            let _ = mcp.unsubscribe_resource(&server, &uri);
+        }
     }
 
     pub(crate) fn pump_mcp(&mut self) {

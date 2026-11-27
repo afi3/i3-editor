@@ -508,17 +508,25 @@ impl App {
     }
 
     fn submit_external_change(&mut self, prompt: &PromptState) -> Result<()> {
-        match prompt.selected_candidate() {
-            Some("Overwrite with the buffer") => match prompt.target.clone() {
-                Some(path) => self.force_save_to(path),
-                None => Ok(()),
+        let id = prompt.document;
+        let result = match prompt.selected_candidate() {
+            Some("Overwrite with the buffer") => match (id, prompt.target.clone()) {
+                (Some(id), Some(path)) => self.force_save_document(id, path),
+                _ => Ok(()),
             },
-            Some("Reload from disk") => match prompt.document {
+            Some("Reload from disk") => match id {
                 Some(id) => self.reload_document(id),
                 None => Ok(()),
             },
             _ => Ok(()),
+        };
+        result?;
+        // A recovery prompt hands over to this one; resume with the next file.
+        if let Some(id) = id {
+            self.recoveries.retain(|recovered| *recovered != id);
         }
+        self.begin_recovery_prompt();
+        Ok(())
     }
 
     fn submit_session_prompt(&mut self, prompt: PromptState) -> Result<()> {
@@ -547,8 +555,9 @@ impl App {
             PromptKind::QuitDirty => {
                 match prompt.selected_candidate() {
                     Some("Save all and quit") => {
-                        self.save_all()?;
-                        self.state.should_quit = true;
+                        if self.save_all()? {
+                            self.state.should_quit = true;
+                        }
                     }
                     Some("Discard all and quit") => self.state.should_quit = true,
                     _ => {}
@@ -675,7 +684,7 @@ impl App {
                     return false;
                 };
                 let language = crate::syntax::Language::from_path(document.path.as_deref());
-                let symbols = crate::structure::symbols(&document.rope, language);
+                let symbols = crate::structure::symbols(document.rope(), language);
                 if symbols.is_empty() {
                     self.notify("no symbols in this document");
                     return false;

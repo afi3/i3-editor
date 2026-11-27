@@ -1,12 +1,18 @@
 //! Crash recovery: swap files for dirty buffers.
 //!
-//! A swap file is written at most once per second while a buffer is dirty and
-//! removed on the next write after a save. A crash leaves it behind, and the
-//! next start offers to save, reload, or keep the recovered buffer. Graceful
-//! exits remove the whole directory before the process goes away.
+//! Every running editor owns a subdirectory of `<config>/swap` named from its
+//! pid and start time and guarded by an advisory lock on `lock`; a running
+//! owner is recognised by that lock being held. Inside the subdirectory a swap
+//! file is written at most once per second while a buffer is dirty and removed
+//! on the next write after a save. A crash leaves the subdirectory behind, and
+//! the next start adopts swaps from directories whose owner is gone while
+//! leaving the swaps of running instances alone. A graceful exit removes only
+//! its own subdirectory.
 
 use std::collections::{HashMap, HashSet};
+use std::fs::File;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::editor::document::Document;
 use crate::state::{DocumentId, Ids};
@@ -15,12 +21,15 @@ use crate::state::{DocumentId, Ids};
 /// than losing the last few edits.
 const MAX_SWAP_BYTES: u64 = 16 << 20;
 
+const LOCK_NAME: &str = "lock";
+
 pub fn default_dir() -> Option<PathBuf> {
     crate::config::config_dir().map(|dir| dir.join("swap"))
 }
 
 /// Write every dirty document and drop swaps for documents that are no longer
-/// dirty. Callers treat failure as a warning, not a fatal error.
+/// dirty. `dir` is this instance's own subdirectory. Callers treat failure as a
+/// warning, not a fatal error.
 pub fn write_to<'a>(
     dir: &Path,
     documents: impl Iterator<Item = &'a Document>,
@@ -31,38 +40,63 @@ pub fn write_to<'a>(
         let Some(path) = &document.path else {
             continue;
         };
-        if !document.dirty || document.rope.len_bytes() as u64 > MAX_SWAP_BYTES {
+        if !document.dirty || document.rope().len_bytes() as u64 > MAX_SWAP_BYTES {
             continue;
         }
         let name = swap_name(path);
         let mut temporary = tempfile::Builder::new()
             .prefix(".i3-swap-")
             .tempfile_in(dir)?;
-        std::io::Write::write_all(&mut temporary, document.rope.to_string().as_bytes())?;
+        std::io::Write::write_all(&mut temporary, document.rope().to_string().as_bytes())?;
         temporary
             .persist(dir.join(&name))
             .map_err(|error| error.error)?;
+        // The disk stamp lives beside the swap, so the payload stays plain
+        // buffer text and an older build can still read it after a downgrade.
+        let _ = std::fs::write(dir.join(stamp_name(path)), stamp_text(document));
         keep.insert(name);
     }
     for entry in std::fs::read_dir(dir)?.flatten() {
         let name = entry.file_name().to_string_lossy().into_owned();
         if name.ends_with(".swap") && !keep.contains(&name) {
+            let path = entry.path();
+            let _ = std::fs::remove_file(path.with_extension("stamp"));
+            let _ = std::fs::remove_file(path);
+        } else if let Some(base) = name.strip_suffix(".stamp")
+            && !keep.contains(&format!("{base}.swap"))
+        {
             let _ = std::fs::remove_file(entry.path());
         }
     }
     Ok(())
 }
 
-/// Restore swaps into `documents`, opening any file that is not already open.
-/// Returns the recovered documents in directory order.
+/// Replay swaps left by instances that are gone into `documents`, opening any
+/// file that is not already open. Swaps of a running instance are left alone.
+/// Adopted swaps move into `own`, so one directory owns them from now on.
 pub fn recover_from(
-    dir: &Path,
+    base: &Path,
+    own: &Path,
     documents: &mut HashMap<DocumentId, Document>,
     ids: &mut Ids,
 ) -> Vec<DocumentId> {
-    let Ok(entries) = std::fs::read_dir(dir) else {
+    let Ok(entries) = std::fs::read_dir(base) else {
         return Vec::new();
     };
+    // Swaps written by versions without instance directories sit in `base`.
+    let mut sources = vec![base.to_path_buf()];
+    let mut abandoned = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path == own || !entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+            continue;
+        }
+        if owner_gone(&path) {
+            sources.push(path.clone());
+            abandoned.push(path);
+        }
+    }
+
     let mut open_paths: HashMap<PathBuf, DocumentId> = documents
         .iter()
         .filter_map(|(id, document)| {
@@ -84,13 +118,17 @@ pub fn recover_from(
             let _ = std::fs::remove_file(entry.path());
             continue;
         }
+        let Ok(metadata) = entry.metadata() else {
+            continue;
+        };
+        if metadata.len() > MAX_SWAP_BYTES {
+            continue;
+        }
         let Ok(text) = std::fs::read_to_string(entry.path()) else {
             let _ = std::fs::remove_file(entry.path());
             continue;
         };
-        if text.len() as u64 > MAX_SWAP_BYTES {
-            continue;
-        }
+        let stamp = read_stamp(&entry.path());
         let key = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
         let id = match open_paths.get(&key).copied() {
             Some(id) => id,
@@ -102,37 +140,120 @@ pub fn recover_from(
                         open_paths.insert(key, id);
                         id
                     }
+                    // The file cannot be opened now; leave its swap where it is
+                    // so a later start can try again.
                     Err(_) => continue,
                 }
             }
         };
-        if let Some(document) = documents.get_mut(&id) {
-            document.restore(&text);
-            recovered.push(id);
+        let Some(document) = documents.get_mut(&id) else {
+            continue;
+        };
+        document.restore(&text);
+        if let Some((modified, len)) = stamp {
+            document.record_disk_stamp(modified, len);
+        }
+        recovered.push(id);
+        adopt(&entry.path(), own, &name);
+    }
+}
+
+/// Move an adopted swap under `own` so this process prunes and clears it.
+fn adopt(swap: &Path, own: &Path, name: &str) {
+    if swap.parent() == Some(own) {
+        return;
+    }
+    let target = own.join(name);
+    let adopted = if std::fs::rename(swap, &target).is_ok() {
+        true
+    } else if std::fs::copy(swap, &target).is_ok() {
+        let _ = std::fs::remove_file(swap);
+        true
+    } else {
+        false
+    };
+    if !adopted {
+        return;
+    }
+    let stamp = swap.with_extension("stamp");
+    if stamp.exists() {
+        let target = target.with_extension("stamp");
+        if std::fs::rename(&stamp, &target).is_err() && std::fs::copy(&stamp, &target).is_ok() {
+            let _ = std::fs::remove_file(&stamp);
         }
     }
-    recovered
+}
+
+/// Whether the instance that owns `dir` is gone, judged by taking its lock.
+fn owner_gone(dir: &Path) -> bool {
+    let Ok(lock) = File::options()
+        .read(true)
+        .write(true)
+        .open(dir.join(LOCK_NAME))
+    else {
+        // No lock file means either the pre-directory layout or a directory
+        // that is still being claimed; take it over only if it holds a swap.
+        return has_swaps(dir);
+    };
+    match lock.try_lock() {
+        Ok(()) => true,
+        Err(std::fs::TryLockError::WouldBlock) => false,
+        Err(std::fs::TryLockError::Error(_)) => false,
+    }
+}
+
+fn has_swaps(dir: &Path) -> bool {
+    std::fs::read_dir(dir).is_ok_and(|entries| {
+        entries
+            .flatten()
+            .any(|entry| entry.file_name().to_string_lossy().ends_with(".swap"))
+    })
+}
+
+/// True when the file on disk changed after the swap that holds it was written,
+/// so saving the recovered buffer would overwrite newer content.
+pub fn swap_is_stale(dir: &Path, path: &Path) -> bool {
+    let swap = std::fs::metadata(dir.join(swap_name(path))).and_then(|meta| meta.modified());
+    let file = std::fs::metadata(path).and_then(|meta| meta.modified());
+    matches!((swap, file), (Ok(swap), Ok(file)) if file > swap)
 }
 
 /// Remove the swap for one path, after the user resolved it.
 pub fn clear(dir: &Path, path: &Path) {
     let _ = std::fs::remove_file(dir.join(swap_name(path)));
-}
-
-/// Remove every swap file; used on a graceful exit.
-pub fn clear_all(dir: &Path) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        if entry.file_name().to_string_lossy().ends_with(".swap") {
-            let _ = std::fs::remove_file(entry.path());
-        }
-    }
+    let _ = std::fs::remove_file(dir.join(stamp_name(path)));
 }
 
 fn swap_name(path: &Path) -> String {
     format!("{}.swap", hex(path.to_string_lossy().as_bytes()))
+}
+
+fn stamp_name(path: &Path) -> String {
+    format!("{}.stamp", hex(path.to_string_lossy().as_bytes()))
+}
+
+/// Disk state the buffer was based on, stored next to the swap.
+fn stamp_text(document: &Document) -> String {
+    let stamp = document
+        .disk_modified
+        .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+        .map(|elapsed| elapsed.as_nanos().to_string())
+        .unwrap_or_else(|| "-".to_string());
+    format!("{stamp} {}", document.disk_len)
+}
+
+/// Read the stamp beside `swap`, if a previous build wrote one.
+fn read_stamp(swap: &Path) -> Option<(Option<SystemTime>, u64)> {
+    let text = std::fs::read_to_string(swap.with_extension("stamp")).ok()?;
+    let (stamp, len) = text.trim().split_once(' ')?;
+    let len = len.parse::<u64>().ok()?;
+    let modified = if stamp == "-" {
+        None
+    } else {
+        let nanos = u64::try_from(stamp.parse::<u128>().ok()?).ok()?;
+        Some(UNIX_EPOCH + Duration::from_nanos(nanos))
+    };
+    Some((modified, len))
 }
 
 fn path_from_name(name: &str) -> Option<PathBuf> {
@@ -177,60 +298,88 @@ mod tests {
         dir
     }
 
+    fn swaps(dir: &Path) -> Vec<PathBuf> {
+        std::fs::read_dir(dir)
+            .map(|entries| {
+                entries
+                    .flatten()
+                    .map(|entry| entry.path())
+                    .filter(|path| path.extension().is_some_and(|ext| ext == "swap"))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     #[test]
     fn a_dirty_buffer_is_written_and_removed_after_save() {
-        let dir = dir("dirty");
-        let file = dir.join("note.txt");
+        let base = dir("dirty");
+        let file = base.join("note.txt");
         std::fs::write(&file, "one\n").expect("seed");
         let mut document = Document::open(DocumentId(1), file.clone()).expect("open");
         document.insert(4, "x", 0, (0, 0));
 
-        write_to(&dir, [&document].into_iter()).expect("swap");
-        let swaps: Vec<_> = std::fs::read_dir(&dir)
-            .expect("dir")
-            .flatten()
-            .filter(|entry| entry.file_name().to_string_lossy().ends_with(".swap"))
-            .collect();
-        assert_eq!(swaps.len(), 1);
+        let crashed = Instance::claim(&base).expect("swap");
+        write_to(crashed.dir(), [&document].into_iter()).expect("swap");
+        assert_eq!(swaps(crashed.dir()).len(), 1);
+        // A crash leaves the directory and releases its lock.
+        drop(crashed);
 
+        let instance = Instance::claim(&base).expect("swap");
         let mut documents = HashMap::new();
         let mut ids = Ids::default();
-        let recovered = recover_from(&dir, &mut documents, &mut ids);
+        let recovered = recover_from(&base, instance.dir(), &mut documents, &mut ids);
         assert_eq!(recovered.len(), 1);
         let restored = documents.get_mut(&recovered[0]).expect("document");
-        assert_eq!(restored.rope.to_string(), "one\nx");
+        assert_eq!(restored.rope().to_string(), "one\nx");
         assert!(restored.dirty);
 
         restored.save().expect("save");
-        write_to(&dir, documents.values()).expect("prune");
-        assert!(
-            std::fs::read_dir(&dir)
-                .expect("dir")
-                .flatten()
-                .all(|entry| { !entry.file_name().to_string_lossy().ends_with(".swap") })
-        );
-        std::fs::remove_dir_all(&dir).ok();
+        write_to(instance.dir(), documents.values()).expect("prune");
+        assert!(swaps(instance.dir()).is_empty());
+        std::fs::remove_dir_all(&base).ok();
     }
 
     #[test]
     fn a_swap_without_its_file_is_dropped() {
-        let dir = dir("orphan");
-        let file = dir.join("gone.txt");
+        let base = dir("orphan");
+        let file = base.join("gone.txt");
         std::fs::write(&file, "x\n").expect("seed");
         let mut document = Document::open(DocumentId(1), file.clone()).expect("open");
         document.insert(0, "y", 0, (0, 0));
-        write_to(&dir, [&document].into_iter()).expect("swap");
+
+        let crashed = Instance::claim(&base).expect("swap");
+        write_to(crashed.dir(), [&document].into_iter()).expect("swap");
+        drop(crashed);
         std::fs::remove_file(&file).expect("remove");
+
+        let instance = Instance::claim(&base).expect("swap");
+        let mut documents = HashMap::new();
+        let mut ids = Ids::default();
+        assert!(recover_from(&base, instance.dir(), &mut documents, &mut ids).is_empty());
+        assert!(swaps(instance.dir()).is_empty());
+        std::fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn a_running_instance_keeps_its_swaps() {
+        let base = dir("live");
+        let file = base.join("note.txt");
+        std::fs::write(&file, "one\n").expect("seed");
+        let mut document = Document::open(DocumentId(1), file).expect("open");
+        document.insert(4, "x", 0, (0, 0));
+
+        let first = Instance::claim(&base).expect("first");
+        let second = Instance::claim(&base).expect("second");
+        write_to(first.dir(), [&document].into_iter()).expect("swap");
+        write_to(second.dir(), std::iter::empty::<&Document>()).expect("prune");
 
         let mut documents = HashMap::new();
         let mut ids = Ids::default();
-        assert!(recover_from(&dir, &mut documents, &mut ids).is_empty());
         assert!(
-            std::fs::read_dir(&dir)
-                .expect("dir")
-                .flatten()
-                .all(|entry| { !entry.file_name().to_string_lossy().ends_with(".swap") })
+            recover_from(&base, second.dir(), &mut documents, &mut ids).is_empty(),
+            "a live instance's swaps are not adopted"
         );
-        std::fs::remove_dir_all(&dir).ok();
+        assert_eq!(swaps(first.dir()).len(), 1);
+        std::fs::remove_dir_all(&base).ok();
     }
 }

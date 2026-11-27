@@ -29,6 +29,10 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 /// Startup may be slower (indexing); keep the server alive longer.
 const INITIALIZE_TIMEOUT: Duration = Duration::from_secs(60);
 
+/// Messages handled per server per pump; a server that floods diagnostics
+/// cannot hold the frame open.
+const DRAIN_BUDGET: usize = 512;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Severity {
     Error,
@@ -51,6 +55,18 @@ pub struct CompletionItem {
     /// Text inserted on Enter; `textEdit.newText`, `insertText`, or the label.
     pub insert: String,
     pub detail: String,
+    /// Range the server asked to replace, in UTF-16 units. `None` means insert
+    /// at the cursor, which is what `insertText` requests.
+    pub range: Option<CompletionRange>,
+}
+
+/// A `textEdit` range; columns are UTF-16 code units, as the protocol defines.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CompletionRange {
+    pub start_line: usize,
+    pub start_character: usize,
+    pub end_line: usize,
+    pub end_character: usize,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -67,8 +83,20 @@ pub enum Event {
         path: PathBuf,
         diagnostics: Vec<Diagnostic>,
     },
-    Completion(Vec<CompletionItem>),
-    Hover(String),
+    Completion {
+        /// Document and text generation the request was made against; a reply
+        /// for an older revision is stale and must be dropped.
+        document: DocumentId,
+        revision: u64,
+        items: Vec<CompletionItem>,
+    },
+    Hover {
+        /// Document and text generation the request was made against.
+        document: DocumentId,
+        revision: u64,
+        /// Empty when the server has nothing to say, which closes the popup.
+        text: String,
+    },
     Definition(Option<Location>),
     Warning(String),
 }
@@ -100,17 +128,28 @@ struct QueuedRequest {
     method: &'static str,
     params: Value,
     kind: ReplyKind,
+    target: Target,
+}
+
+/// Document and text generation a request was made against.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Target {
+    document: DocumentId,
+    revision: u64,
 }
 
 struct PendingRequest {
     method: &'static str,
     kind: ReplyKind,
+    /// Absent for handshake requests such as `initialize`.
+    target: Option<Target>,
     sent: Instant,
 }
 
 struct OpenDocument {
     key: String,
     version: i64,
+    revision: u64,
     text: String,
 }
 
@@ -120,6 +159,8 @@ struct Server {
     child: Option<Child>,
     next_id: i64,
     initialized: bool,
+    /// The pipe broke: a write failed or the reader saw EOF.
+    dead: bool,
     sync: SyncKind,
     pending: HashMap<i64, PendingRequest>,
 }
@@ -172,24 +213,32 @@ impl Server {
             child,
             next_id: 1,
             initialized: false,
+            dead: false,
             sync: SyncKind::Full,
             pending: HashMap::new(),
         }
     }
 
-    fn request(&mut self, method: &'static str, params: Value, kind: ReplyKind) -> Option<i64> {
+    fn request(
+        &mut self,
+        method: &'static str,
+        params: Value,
+        kind: ReplyKind,
+        target: Option<Target>,
+    ) -> Option<i64> {
         let id = self.next_id;
         self.next_id += 1;
-        write_frame(
-            &mut self.writer,
-            &json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}),
-        )
-        .ok()?;
+        let frame = json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params});
+        if write_frame(&mut self.writer, &frame).is_err() {
+            self.dead = true;
+            return None;
+        }
         self.pending.insert(
             id,
             PendingRequest {
                 method,
                 kind,
+                target,
                 sent: Instant::now(),
             },
         );
@@ -197,10 +246,10 @@ impl Server {
     }
 
     fn notify(&mut self, method: &str, params: Value) {
-        let _ = write_frame(
-            &mut self.writer,
-            &json!({"jsonrpc": "2.0", "method": method, "params": params}),
-        );
+        let frame = json!({"jsonrpc": "2.0", "method": method, "params": params});
+        if write_frame(&mut self.writer, &frame).is_err() {
+            self.dead = true;
+        }
     }
 
     fn did_open(&mut self, path: &Path, text: &str) {
@@ -269,6 +318,12 @@ pub struct LspManager {
     opened: HashMap<PathBuf, OpenDocument>,
     queued: Vec<QueuedRequest>,
     diagnostics: HashMap<PathBuf, Vec<Diagnostic>>,
+    /// Canonical paths by document path; `pump` runs on every frame and must
+    /// not hit the filesystem for a path that has not changed.
+    canonical_paths: HashMap<PathBuf, PathBuf>,
+    /// Buffers copied for a server; test-only so the guard costs nothing.
+    #[cfg(test)]
+    materialized: usize,
 }
 
 impl LspManager {
@@ -287,6 +342,9 @@ impl LspManager {
             opened: HashMap::new(),
             queued: Vec::new(),
             diagnostics: HashMap::new(),
+            canonical_paths: HashMap::new(),
+            #[cfg(test)]
+            materialized: 0,
         }
     }
 
@@ -304,11 +362,14 @@ impl LspManager {
         *self = Self::new(config, root);
     }
 
-    /// Sync open documents and dispatch every queued server message.
+    /// Sync open documents and dispatch every queued server message. A
+    /// document's text is only materialized when its revision changed.
     pub fn pump(&mut self, documents: &HashMap<DocumentId, Document>) -> Vec<Event> {
         let mut events = Vec::new();
-        let mut desired: Vec<(PathBuf, String, String)> = Vec::new();
-        for document in documents.values() {
+        #[cfg(test)]
+        let mut materialized = 0usize;
+        let mut desired: Vec<(PathBuf, String, DocumentId)> = Vec::new();
+        for (id, document) in documents {
             if document.read_only {
                 continue;
             }
@@ -318,10 +379,10 @@ impl LspManager {
             let Some(key) = self.config_key(path) else {
                 continue;
             };
-            desired.push((canonical(path), key, document.rope.to_string()));
+            desired.push((self.canonical(path), key, *id));
         }
 
-        for (path, key, text) in &desired {
+        for (path, key, id) in &desired {
             self.ensure_server(key, &mut events);
             let Some(server) = self.servers.get_mut(key) else {
                 continue;
@@ -329,26 +390,40 @@ impl LspManager {
             if !server.initialized {
                 continue;
             }
-            match self.opened.get_mut(path) {
-                None => {
-                    server.did_open(path, text);
-                    self.opened.insert(
-                        path.clone(),
-                        OpenDocument {
-                            key: key.clone(),
-                            version: 1,
-                            text: text.clone(),
-                        },
-                    );
+            let Some(document) = documents.get(id) else {
+                continue;
+            };
+            if !self.opened.contains_key(path) {
+                let text = document.rope().to_string();
+                #[cfg(test)]
+                {
+                    materialized += 1;
                 }
-                Some(open) if open.key == *key && open.text != *text => {
-                    if server.sync != SyncKind::None {
-                        open.version += 1;
-                        server.did_change(path, open.version, &open.text, text);
-                    }
-                    open.text = text.clone();
+                server.did_open(path, &text);
+                self.opened.insert(
+                    path.clone(),
+                    OpenDocument {
+                        key: key.clone(),
+                        version: 1,
+                        revision: document.revision,
+                        text,
+                    },
+                );
+            } else if let Some(open) = self.opened.get_mut(path)
+                && open.key == *key
+                && open.revision != document.revision
+            {
+                let text = document.rope().to_string();
+                #[cfg(test)]
+                {
+                    materialized += 1;
                 }
-                Some(_) => {}
+                if server.sync != SyncKind::None {
+                    open.version += 1;
+                    server.did_change(path, open.version, &open.text, &text);
+                }
+                open.text = text;
+                open.revision = document.revision;
             }
         }
 
@@ -372,7 +447,18 @@ impl LspManager {
             self.drain(&key, &mut events);
         }
         self.expire(&mut events);
+        #[cfg(test)]
+        {
+            self.materialized += materialized;
+        }
         events
+    }
+
+    /// How many times a buffer was copied for a server; guards the revision
+    /// check that keeps an idle document out of `to_string`.
+    #[cfg(test)]
+    pub(crate) fn materializations_for_test(&self) -> usize {
+        self.materialized
     }
 
     fn expire(&mut self, events: &mut Vec<Event>) {
@@ -421,7 +507,7 @@ impl LspManager {
             Ok(mut server) => {
                 let params = initialize_params(&self.root);
                 if server
-                    .request("initialize", params, ReplyKind::Initialize)
+                    .request("initialize", params, ReplyKind::Initialize, None)
                     .is_none()
                 {
                     self.failed.insert(key.to_string());
@@ -442,11 +528,20 @@ impl LspManager {
     fn drain(&mut self, key: &str, events: &mut Vec<Event>) {
         let mut published = Vec::new();
         let mut initialized = false;
+        let mut dead = false;
         {
             let Some(server) = self.servers.get_mut(key) else {
                 return;
             };
-            while let Ok(message) = server.incoming.try_recv() {
+            for _ in 0..DRAIN_BUDGET {
+                let message = match server.incoming.try_recv() {
+                    Ok(message) => message,
+                    Err(mpsc::TryRecvError::Empty) => break,
+                    Err(mpsc::TryRecvError::Disconnected) => {
+                        dead = true;
+                        break;
+                    }
+                };
                 let Some(id) = message.get("id").and_then(Value::as_i64) else {
                     if message.get("method").and_then(Value::as_str)
                         == Some("textDocument/publishDiagnostics")
@@ -467,24 +562,62 @@ impl LspManager {
                         server.notify("initialized", json!({}));
                     }
                     ReplyKind::Completion => {
+                        let Some(target) = pending.target else {
+                            continue;
+                        };
                         let items = parse_completion(message.get("result"));
-                        events.push(Event::Completion(items));
+                        events.push(Event::Completion {
+                            document: target.document,
+                            revision: target.revision,
+                            items,
+                        });
                     }
                     ReplyKind::Hover => {
-                        let text = parse_hover(message.get("result"));
-                        if !text.is_empty() {
-                            events.push(Event::Hover(text));
-                        }
+                        let Some(target) = pending.target else {
+                            continue;
+                        };
+                        events.push(Event::Hover {
+                            document: target.document,
+                            revision: target.revision,
+                            text: parse_hover(message.get("result")),
+                        });
                     }
                     ReplyKind::Definition => {
                         events.push(Event::Definition(parse_definition(message.get("result"))));
                     }
                 }
             }
+            dead |= server.dead;
         }
         for (path, diagnostics) in published {
             self.diagnostics.insert(path.clone(), diagnostics.clone());
             events.push(Event::Diagnostics { path, diagnostics });
+        }
+        if dead {
+            // The pipe closed or a write failed. Drop the server, its queued
+            // requests, its open documents, and its diagnostics, and report it
+            // once; `failed` keeps it from being retried this session.
+            let orphaned: Vec<PathBuf> = self
+                .opened
+                .iter()
+                .filter(|(_, open)| open.key == key)
+                .map(|(path, _)| path.clone())
+                .collect();
+            self.opened.retain(|_, open| open.key != key);
+            self.queued.retain(|request| request.key != key);
+            for path in orphaned {
+                self.diagnostics.remove(&path);
+                events.push(Event::Diagnostics {
+                    path,
+                    diagnostics: Vec::new(),
+                });
+            }
+            self.servers.remove(key);
+            self.failed.insert(key.to_string());
+            events.push(Event::Warning(format!(
+                "LSP {key} exited; completion and diagnostics are off"
+            )));
+            return;
         }
         if initialized {
             let queued: Vec<QueuedRequest> = self
@@ -496,12 +629,18 @@ impl LspManager {
                     method: request.method,
                     params: request.params.clone(),
                     kind: request.kind,
+                    target: request.target,
                 })
                 .collect();
             self.queued.retain(|request| request.key != key);
             if let Some(server) = self.servers.get_mut(key) {
                 for request in queued {
-                    server.request(request.method, request.params, request.kind);
+                    server.request(
+                        request.method,
+                        request.params,
+                        request.kind,
+                        Some(request.target),
+                    );
                 }
             }
         }
@@ -550,7 +689,15 @@ impl LspManager {
         match self.servers.get_mut(&key) {
             Some(server) if server.initialized => {
                 server
-                    .request(method, params, kind)
+                    .request(
+                        method,
+                        params,
+                        kind,
+                        Some(Target {
+                            document: document.id,
+                            revision: document.revision,
+                        }),
+                    )
                     .ok_or_else(|| format!("LSP {key}: cannot send {method}"))?;
             }
             Some(_) => self.queued.push(QueuedRequest {
@@ -558,6 +705,10 @@ impl LspManager {
                 method,
                 params,
                 kind,
+                target: Target {
+                    document: document.id,
+                    revision: document.revision,
+                },
             }),
             None => {
                 let mut events = Vec::new();
@@ -570,6 +721,10 @@ impl LspManager {
                     method,
                     params,
                     kind,
+                    target: Target {
+                        document: document.id,
+                        revision: document.revision,
+                    },
                 });
             }
         }
@@ -765,13 +920,18 @@ fn parse_completion(result: Option<&Value>) -> Vec<CompletionItem> {
                 .and_then(Value::as_str)
                 .unwrap_or_default()
                 .to_string();
-            let insert = item
-                .get("textEdit")
+            let text_edit = item.get("textEdit");
+            let insert = text_edit
                 .and_then(|edit| edit.get("newText"))
                 .and_then(Value::as_str)
                 .or_else(|| item.get("insertText").and_then(Value::as_str))
                 .unwrap_or(&label)
                 .to_string();
+            // `InsertReplaceEdit` carries both ranges; plain accept inserts
+            // over the `insert` range.
+            let range = text_edit
+                .and_then(|edit| edit.get("insert").or_else(|| edit.get("range")))
+                .and_then(parse_range);
             let detail = item
                 .get("detail")
                 .and_then(Value::as_str)
@@ -781,9 +941,21 @@ fn parse_completion(result: Option<&Value>) -> Vec<CompletionItem> {
                 label,
                 insert,
                 detail,
+                range,
             }
         })
         .collect()
+}
+
+fn parse_range(value: &Value) -> Option<CompletionRange> {
+    let start = value.get("start")?;
+    let end = value.get("end")?;
+    Some(CompletionRange {
+        start_line: start.get("line")?.as_u64()? as usize,
+        start_character: start.get("character")?.as_u64()? as usize,
+        end_line: end.get("line")?.as_u64()? as usize,
+        end_character: end.get("character")?.as_u64()? as usize,
+    })
 }
 
 fn parse_hover(result: Option<&Value>) -> String {
@@ -987,7 +1159,7 @@ pub fn write_frame(writer: &mut impl Write, message: &Value) -> std::io::Result<
     writer.flush()
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 impl LspManager {
     /// Attach an in-process transport instead of spawning a process. The peer
     /// end stays with the caller for the fake server thread.
@@ -1004,6 +1176,7 @@ impl LspManager {
                 "initialize",
                 initialize_params(&self.root),
                 ReplyKind::Initialize,
+                None,
             )
             .is_none()
         {
@@ -1022,7 +1195,7 @@ impl LspManager {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use crate::config::LspConfig;
@@ -1086,8 +1259,8 @@ mod tests {
     ) {
         for event in manager.pump(documents) {
             match event {
-                Event::Completion(items) => replies.completion = Some(items),
-                Event::Hover(text) => replies.hover = Some(text),
+                Event::Completion { items, .. } => replies.completion = Some(items),
+                Event::Hover { text, .. } => replies.hover = Some(text),
                 Event::Definition(location) => replies.definition = Some(location),
                 _ => {}
             }
@@ -1230,7 +1403,10 @@ mod tests {
         }
         assert!(!manager.opened.is_empty(), "document never opened");
 
-        documents.get_mut(&id).expect("document").rope = ropey::Rope::from_str("fn main() {!}\n");
+        documents
+            .get_mut(&id)
+            .expect("document")
+            .insert(11, "!", 0, (0, 0));
         let end = Instant::now() + Duration::from_secs(5);
         while Instant::now() < end && seen.lock().expect("lock").is_empty() {
             manager.pump(&documents);
@@ -1262,7 +1438,16 @@ mod tests {
             let result = match method {
                 Some("initialize") => json!({"capabilities": {}}),
                 Some("textDocument/completion") => json!({
-                    "items": [{"label": "answer", "detail": "u32", "insertText": "answer"}]
+                    "items": [
+                        {"label": "answer", "detail": "u32", "insertText": "answer"},
+                        {"label": "builder", "textEdit": {
+                            "newText": "builder",
+                            "range": {
+                                "start": {"line": 0, "character": 0},
+                                "end": {"line": 0, "character": 3}
+                            }
+                        }}
+                    ]
                 }),
                 Some("textDocument/hover") => {
                     json!({"contents": {"kind": "plaintext", "value": "u32"}})
@@ -1300,6 +1485,16 @@ mod tests {
         let completion = replies.completion.expect("completion");
         assert_eq!(completion[0].label, "answer");
         assert_eq!(completion[0].detail, "u32");
+        assert_eq!(completion[0].range, None);
+        assert_eq!(
+            completion[1].range,
+            Some(CompletionRange {
+                start_line: 0,
+                start_character: 0,
+                end_line: 0,
+                end_character: 3,
+            })
+        );
         assert_eq!(replies.hover.expect("hover"), "u32");
         let definition = replies.definition.expect("definition").expect("location");
         assert_eq!(
@@ -1308,6 +1503,146 @@ mod tests {
         );
         assert_eq!(definition.line, 0);
         assert_eq!(definition.character, 3);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn an_empty_hover_reply_still_reaches_the_app() {
+        let dir = std::env::temp_dir().join(format!("i3-lsp-hover-empty-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let (id, document) = document(&dir);
+        let mut manager = manager();
+        let (stream, peer) = UnixStream::pair().expect("pair");
+        manager.attach_for_test("fake", stream).expect("attach");
+        fake_server(peer, |message| {
+            let result = match message.get("method").and_then(Value::as_str) {
+                Some("initialize") => json!({"capabilities": {}}),
+                Some("textDocument/hover") => json!({"contents": ""}),
+                _ => return None,
+            };
+            Some(json!({"jsonrpc": "2.0", "id": message["id"], "result": result}))
+        });
+        let mut documents = HashMap::new();
+        documents.insert(id, document);
+
+        let end = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < end && !manager.servers["fake"].initialized {
+            manager.pump(&documents);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        manager.hover(&documents[&id], 0).expect("hover");
+
+        let mut hover = None;
+        let end = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < end && hover.is_none() {
+            for event in manager.pump(&documents) {
+                if let Event::Hover { text, .. } = event {
+                    hover = Some(text);
+                }
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(
+            hover.as_deref(),
+            Some(""),
+            "an empty reply must arrive so the popup closes"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn an_unchanged_document_is_not_serialized_again() {
+        let dir = std::env::temp_dir().join(format!("i3-lsp-nocopy-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let (id, document) = document(&dir);
+        let mut manager = manager();
+        let (stream, peer) = UnixStream::pair().expect("pair");
+        manager.attach_for_test("fake", stream).expect("attach");
+        fake_server(peer, |message| {
+            let result = match message.get("method").and_then(Value::as_str) {
+                Some("initialize") => json!({"capabilities": {}}),
+                _ => return None,
+            };
+            Some(json!({"jsonrpc": "2.0", "id": message["id"], "result": result}))
+        });
+        let mut documents = HashMap::new();
+        documents.insert(id, document);
+
+        let end = Instant::now() + Duration::from_secs(15);
+        while Instant::now() < end && !manager.servers["fake"].initialized {
+            manager.pump(&documents);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(manager.servers["fake"].initialized);
+        // The handshake lands in the same pump that still saw the server as
+        // uninitialized, so one more pump performs `didOpen`.
+        manager.pump(&documents);
+        let opened = manager.materializations_for_test();
+        assert_eq!(opened, 1, "didOpen needs the text exactly once");
+
+        for _ in 0..5 {
+            manager.pump(&documents);
+        }
+        assert_eq!(
+            manager.materializations_for_test(),
+            opened,
+            "an idle document must not be copied again"
+        );
+
+        documents
+            .get_mut(&id)
+            .expect("document")
+            .insert(11, "!", 0, (0, 0));
+        manager.pump(&documents);
+        assert_eq!(
+            manager.materializations_for_test(),
+            opened + 1,
+            "one edit copies the buffer once"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_server_that_closes_its_pipe_is_reported_and_dropped() {
+        let dir = std::env::temp_dir().join(format!("i3-lsp-death-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let (id, document) = document(&dir);
+        let mut manager = manager();
+        let (stream, peer) = UnixStream::pair().expect("pair");
+        manager.attach_for_test("fake", stream).expect("attach");
+        std::thread::spawn(move || {
+            let read = peer.try_clone().expect("clone");
+            let mut reader = BufReader::new(read);
+            let mut writer = peer;
+            // Answer the handshake, then close the pipe like a crashed server.
+            if let Some(message) = read_frame(&mut reader) {
+                let _ = write_frame(
+                    &mut writer,
+                    &json!({
+                        "jsonrpc": "2.0",
+                        "id": message["id"],
+                        "result": {"capabilities": {}}
+                    }),
+                );
+            }
+        });
+        let mut documents = HashMap::new();
+        documents.insert(id, document);
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut warning = None;
+        while Instant::now() < deadline && warning.is_none() {
+            for event in manager.pump(&documents) {
+                if let Event::Warning(text) = event {
+                    warning = Some(text);
+                }
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let warning = warning.expect("server death reported");
+        assert!(warning.contains("fake"), "{warning}");
+        assert!(manager.servers.is_empty(), "dead server must be dropped");
+        assert!(manager.failed.contains("fake"), "must not be retried");
         std::fs::remove_dir_all(&dir).ok();
     }
 

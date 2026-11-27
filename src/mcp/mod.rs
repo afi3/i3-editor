@@ -1,9 +1,8 @@
 //! MCP client core: stdio JSON-RPC transport, lifecycle, and tool calls.
 //!
-//! MCP uses newline-delimited JSON-RPC 2.0 messages over stdio. This module
-//! deliberately has no UI or permission policy yet; the next slice wires the
-//! `mcp` menu and trust prompts to these primitives.
-#![allow(dead_code)]
+//! MCP uses newline-delimited JSON-RPC 2.0 messages over stdio. The menus,
+//! trust prompts, and approvals live in `crate::app::mcp_ops`; this module only
+//! speaks the protocol and reports events.
 
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::io::{BufRead, BufReader, Write};
@@ -162,7 +161,8 @@ pub enum ToolContent {
 #[derive(Debug)]
 pub enum Event {
     Tools {
-        server: String,
+        /// Payload kept whole for the tool overlay and the tests that read it.
+        #[allow(dead_code)]
         tools: Vec<Tool>,
     },
     ToolResult {
@@ -215,7 +215,8 @@ pub enum Event {
         params: Value,
     },
     Log {
-        server: String,
+        /// Read by the tests and the log overlay.
+        #[allow(dead_code)]
         line: String,
     },
     Warning(String),
@@ -351,10 +352,7 @@ impl McpManager {
         Some(format!("{:x}", hash.finalize()))
     }
 
-    pub fn is_configured(&self) -> bool {
-        !self.configs.is_empty()
-    }
-
+    #[cfg(test)]
     pub fn is_running(&self, server: &str) -> bool {
         self.servers.contains_key(server)
     }
@@ -470,6 +468,9 @@ impl McpManager {
         )
     }
 
+    /// Counterpart to `subscribe_resource`. The UI has no unsubscribe command
+    /// yet, so only the tests exercise it.
+    #[allow(dead_code)]
     pub fn unsubscribe_resource(&mut self, server: &str, uri: &str) -> Result<(), String> {
         self.request(
             server,
@@ -708,10 +709,7 @@ impl McpManager {
                             server.logs.pop_front();
                         }
                     }
-                    events.push(Event::Log {
-                        server: name.to_string(),
-                        line,
-                    });
+                    events.push(Event::Log { line });
                 }
                 Incoming::ProtocolError(message) => {
                     events.push(Event::Warning(format!("MCP {name}: {message}")));
@@ -766,10 +764,7 @@ impl McpManager {
                     server.tools = tools.clone();
                     server.tools_loaded = true;
                 }
-                events.push(Event::Tools {
-                    server: name.to_string(),
-                    tools,
-                });
+                events.push(Event::Tools { tools });
             }
             ReplyKind::CallTool => {
                 let (content, is_error) = parse_tool_result(result);

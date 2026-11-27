@@ -3,6 +3,33 @@
 use super::App;
 
 impl App {
+    /// Palette command: switch to the next configured AI provider.
+    pub(crate) fn next_ai_provider(&mut self) -> crate::error::Result<()> {
+        if self.state.config.ai.providers.is_empty() {
+            self.notify("no [ai.providers.*] entries in config.toml");
+            return Ok(());
+        }
+        let names: Vec<String> = self.state.config.ai.providers.keys().cloned().collect();
+        let current = names
+            .iter()
+            .position(|name| *name == self.state.config.ai.active_provider);
+        let next = current.map_or(0, |index| (index + 1) % names.len());
+        let name = names[next].clone();
+        if self.state.config.ai.activate(&name) {
+            let model = self.state.config.ai.model.clone();
+            let saved = self.state.config_path.clone().map_or(Ok(()), |path| {
+                crate::config::persist_active_provider_at(&path, &name)
+            });
+            match saved {
+                Ok(()) => self.notify(format!("AI provider: {name} ({model})")),
+                Err(error) => self.notify(format!(
+                    "AI provider: {name} ({model}); config.toml not saved: {error}"
+                )),
+            }
+        }
+        Ok(())
+    }
+
     pub(crate) fn reload_config(&mut self) {
         let Some(path) = self.state.config_path.clone() else {
             return;

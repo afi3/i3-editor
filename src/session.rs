@@ -10,7 +10,6 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::config;
 use crate::editor::document::Document;
 use crate::state::{AppState, DocumentId, Focus, Pane, PaneId};
 use crate::workspace::layout::{LayoutNode, MAX_CHILDREN, MAX_TABS, MAX_WEIGHT, SplitMode};
@@ -122,14 +121,20 @@ impl From<Mode> for SplitMode {
 }
 
 pub fn default_path() -> Option<PathBuf> {
-    config::config_dir().map(|dir| dir.join("session.toml"))
+    crate::config::config_dir().map(|dir| dir.join("session.toml"))
 }
 
 /// Restore the session for this directory. Warnings are returned for the status
 /// bar; a missing or foreign session is not an error.
 pub fn restore(state: &mut AppState) -> Vec<String> {
-    let Some(path) = default_path() else {
-        return Vec::new();
+    let path = match path_for(&state.explorer.root) {
+        Some(path) if path.exists() => path,
+        // Older builds kept one file for every root; read it until the next
+        // save writes the per-root file.
+        _ => match default_path() {
+            Some(path) => path,
+            None => return Vec::new(),
+        },
     };
     match restore_from(&path, state) {
         Ok(warnings) => warnings,
@@ -154,9 +159,7 @@ pub fn save_to(path: &Path, state: &AppState) -> std::io::Result<()> {
     {
         std::fs::create_dir_all(parent)?;
     }
-    let temporary = path.with_extension("toml.tmp");
-    std::fs::write(&temporary, text)?;
-    std::fs::rename(&temporary, path)
+    crate::editor::document::write_atomic(path, text.as_bytes())
 }
 
 fn snapshot(state: &AppState) -> Option<Session> {

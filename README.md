@@ -18,6 +18,10 @@ macOS (Intel and Apple Silicon) and Linux (x86_64 and aarch64):
 curl -fsSL https://raw.githubusercontent.com/afi3/i3-editor/main/install.sh | sh
 ```
 
+Windows is compile-checked in CI but not supported and not released; the
+Unix-only tests are gated, and the sandboxed verification commands need
+`sandbox-exec` or `bwrap`.
+
 The installer downloads the release asset for your platform, verifies its
 SHA-256 checksum, and puts `i3-editor` in `~/.local/bin` (add that to `PATH` if the
 script asks). Options:
@@ -347,22 +351,27 @@ open documents outside every root get a non-recursive parent watcher.
   on dirty ones.
 - `rename_workspace` from the palette prompts for a new workspace-tab name.
 - `workspace_terminal_dir` sets where new terminal tabs for the active workspace
-  start; the directory is stored in `session.toml`. Changing the workspace root
+  start; the directory is stored in the session file. Changing the workspace root
   updates it only while it still equals the old root.
-- `session.toml` stores each workspace root, so a restored session keeps the
-  independent environments.
+- Each workspace root gets its own `session-<hash>.toml` in the config directory,
+  so two editors in different projects do not overwrite each other. A legacy
+  `session.toml` is read once and replaced on the next save.
 
 ### Crash recovery
 
-- Dirty buffers with a path are written at most once per second to
-  `<config>/i3-editor/swap/`, using an unpredictable temporary file and an
-  atomic rename. Untitled buffers and files above 16 MiB are skipped.
-- On the next start each swap reopens the file as a tab and asks once per file:
-  **Save recovered buffer** (overwrite the file), **Reload from disk** (drop the
-  recovered text), or **Keep unsaved buffer**. `Esc` keeps the buffer.
+- Dirty buffers with a path are written at most once per second into a
+  per-instance subdirectory of `<config>/i3-editor/swap/`, using an
+  unpredictable temporary file and an atomic rename. A lock in that
+  subdirectory marks the owner as running, so concurrent editors never touch
+  each other's swaps. Untitled buffers and files above 16 MiB are skipped.
+- On the next start each swap left by a finished instance reopens the file as a
+  tab and asks once per file: **Save recovered buffer** (overwrite the file),
+  **Reload from disk** (drop the recovered text), or **Keep unsaved buffer**.
+  `Esc` keeps the buffer. Saving asks again when the file changed after the
+  buffer's last load or save.
 - A saved or discarded buffer drops its swap on the next pass. A graceful exit
-  deletes the swap directory, so choosing "discard all and quit" cannot resurrect
-  the discarded text on the next start.
+  removes only its own subdirectory, so choosing "discard all and quit" cannot
+  resurrect the discarded text on the next start.
 
 ### Language servers (LSP)
 
@@ -529,6 +538,19 @@ agent_auto_queue = false         # queue pending objectives after ai_queue_objec
 background_auto_tools = []       # empty keeps write confirmation; e.g. ["native/edit_file"]
 keyring_service = ""             # optional OS keyring service
 keyring_account = ""
+
+# Named providers. `active_provider` copies the chosen block over the fields
+# above at load time, so each provider can carry its own key source.
+# active_provider = "openrouter"
+# [ai.providers.openrouter]
+# base_url = "https://openrouter.ai/api/v1"
+# model = "anthropic/claude-sonnet-4"
+# api_key_env = "OPENROUTER_API_KEY"
+#
+# [ai.providers.local]
+# base_url = "http://127.0.0.1:11434/v1"
+# model = "qwen2.5-coder"
+# api_key_env = ""
 input_cost_per_million = 0.0     # optional USD pricing for the title cost meter
 output_cost_per_million = 0.0
 max_context_tokens = 16000       # prompt budget; old turns are dropped
@@ -718,6 +740,9 @@ unavailable server or timeout does not block the turn.
 - `keyring_service`/`keyring_account` read the API key from the OS keyring
   (`security` on macOS, `secret-tool` on Linux). If configured but unavailable,
   the request fails instead of silently using another key.
+- A plaintext `api_key` in a `config.toml` that other users can read is reported
+  at startup; prefer the keyring or `api_key_env`, or `chmod 600` the file. The
+  config directory itself is created (and tightened) to `0700`.
 - With `persist_history = true`, the transcript and conversation are saved to
   `<config>/i3-editor/ai_history.json` and restored at the next start.
   `ai_clear` removes both the visible history and that file. Tool output and

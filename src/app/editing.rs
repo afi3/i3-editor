@@ -71,8 +71,9 @@ impl App {
         Ok(())
     }
 
-    /// Save every modified document that has a path.
-    pub(crate) fn save_all(&mut self) -> Result<()> {
+    /// Save every modified document that has a path. Returns false when a save
+    /// was deferred to the external-change prompt, so the caller must not quit.
+    pub(crate) fn save_all(&mut self) -> Result<bool> {
         let ids: Vec<DocumentId> = self
             .state
             .documents
@@ -81,9 +82,22 @@ impl App {
             .map(|(id, _)| *id)
             .collect();
         for id in ids {
-            self.save_document(id)?;
+            let Some(path) = self
+                .state
+                .documents
+                .get(&id)
+                .and_then(|document| document.path.clone())
+            else {
+                self.save_document(id)?;
+                continue;
+            };
+            if !self.save_document_to(id, path, false)? {
+                self.apply_document_indents();
+                return Ok(false);
+            }
         }
-        Ok(())
+        self.apply_document_indents();
+        Ok(true)
     }
 
     pub(crate) fn new_scratch(&mut self) -> Result<()> {
@@ -120,14 +134,18 @@ impl App {
     }
 
     pub(crate) fn save_to(&mut self, path: PathBuf) -> Result<()> {
-        self.save_to_inner(path, false)
-    }
-
-    fn save_to_inner(&mut self, path: PathBuf, force: bool) -> Result<()> {
         let id = self
             .state
             .active_document_id()
             .ok_or(Error::NoActiveDocument)?;
+        self.save_document_to(id, path, false)?;
+        self.apply_document_indents();
+        Ok(())
+    }
+
+    /// Save `id` to `path`. Returns false when the external-change prompt took
+    /// over instead of writing. `force` skips the disk check.
+    fn save_document_to(&mut self, id: DocumentId, path: PathBuf, force: bool) -> Result<bool> {
         let same_path = {
             let document = self
                 .state
@@ -144,7 +162,7 @@ impl App {
                 .is_some_and(Document::disk_changed);
             if changed {
                 self.open_external_change_prompt(id, path);
-                return Ok(());
+                return Ok(false);
             }
         }
         let document = self
@@ -157,16 +175,17 @@ impl App {
         } else {
             document.save_as(path.clone())?;
         }
-        self.apply_document_indents();
         self.notify(format!("saved {}", path.display()));
         self.state.explorer.refresh();
         self.refresh_git_marks();
         self.plugin_event("save");
-        Ok(())
+        Ok(true)
     }
 
-    pub(crate) fn force_save_to(&mut self, path: PathBuf) -> Result<()> {
-        self.save_to_inner(path, true)
+    pub(crate) fn force_save_document(&mut self, id: DocumentId, path: PathBuf) -> Result<()> {
+        self.save_document_to(id, path, true)?;
+        self.apply_document_indents();
+        Ok(())
     }
 
     /// Ask what to do when the file changed under a modified buffer.
@@ -416,7 +435,7 @@ impl App {
             };
             let mut parts = Vec::with_capacity(ranges.len());
             for range in &ranges {
-                parts.push(document.rope.slice(range.clone()).to_string());
+                parts.push(document.rope().slice(range.clone()).to_string());
             }
             let copied = parts.join("\n");
             *clipboard = copied.clone();
@@ -480,7 +499,7 @@ impl App {
                     .zip(self.state.active_document())
                     .map(|(pane, document)| {
                         document
-                            .rope
+                            .rope()
                             .get_char(pane.cursor)
                             .map(|next| next == closer)
                             .unwrap_or(false)
@@ -504,7 +523,7 @@ impl App {
                 .zip(self.state.active_document())
                 .is_some_and(|(pane, document)| {
                     document
-                        .rope
+                        .rope()
                         .get_char(pane.cursor)
                         .is_some_and(|next| next == ch)
                 });
@@ -673,12 +692,12 @@ impl App {
                 if range.start < range.end {
                     ranges.push(range);
                 } else if backward {
-                    let start = textutil::prev_grapheme(&document.rope, range.start);
+                    let start = textutil::prev_grapheme(document.rope(), range.start);
                     if start < range.start {
                         ranges.push(start..range.start);
                     }
                 } else {
-                    let end = textutil::next_grapheme(&document.rope, range.start);
+                    let end = textutil::next_grapheme(document.rope(), range.start);
                     if end > range.start {
                         ranges.push(range.start..end);
                     }

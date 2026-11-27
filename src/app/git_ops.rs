@@ -20,37 +20,75 @@ impl App {
         }
         self.last_git = Instant::now();
         self.refresh_git_marks();
-        self.dirty = true;
     }
 
-    /// Recompute per-line markers for documents shown in panes.
+    /// Schedule a marker pass for the documents shown in panes. The work runs on
+    /// a worker thread; `pump_git_marks` installs the result.
     pub(crate) fn refresh_git_marks(&mut self) {
-        let binary = self.state.config.git.binary.clone();
-        let root = self.state.explorer.root.clone();
-        let Some(repo) = git::discover(&binary, &root) else {
-            self.state.git_marks.clear();
+        if self.git_marks_task.is_some() {
             return;
-        };
-        let mut ids = std::collections::HashSet::new();
-        for pane in self.state.panes.values() {
-            ids.extend(pane.tabs.iter().copied());
         }
-        let shown: Vec<(DocumentId, PathBuf)> = ids
-            .into_iter()
-            .filter_map(|id| {
-                self.state
+        if !git::has_repo(&self.state.explorer.root) {
+            if !self.state.git_marks.is_empty() {
+                self.state.git_marks.clear();
+                self.dirty = true;
+            }
+            return;
+        }
+        let mut paths: Vec<PathBuf> = Vec::new();
+        for pane in self.state.panes.values() {
+            for id in &pane.tabs {
+                if let Some(path) = self
+                    .state
                     .documents
-                    .get(&id)
-                    .and_then(|document| document.path.clone().map(|path| (id, path)))
-            })
-            .collect();
-        let mut marks = HashMap::new();
-        for (id, path) in shown {
-            if let Ok(lines) = git::line_marks(&binary, &repo, &path) {
-                marks.insert(id, lines);
+                    .get(id)
+                    .and_then(|document| document.path.clone())
+                {
+                    paths.push(path);
+                }
             }
         }
-        self.state.git_marks = marks;
+        paths.sort();
+        paths.dedup();
+        if paths.is_empty() {
+            self.state.git_marks.clear();
+            return;
+        }
+        self.git_marks_task = Some(crate::git::MarksTask::spawn(
+            self.state.config.git.binary.clone(),
+            self.state.explorer.root.clone(),
+            paths,
+        ));
+    }
+
+    /// Install a finished marker pass, redrawing only when the marks changed.
+    pub(crate) fn pump_git_marks(&mut self) {
+        let Some(task) = self.git_marks_task.as_ref() else {
+            return;
+        };
+        let Some(marks) = task.try_recv() else {
+            return;
+        };
+        self.git_marks_task = None;
+        let mut by_path: HashMap<PathBuf, Vec<DocumentId>> = HashMap::new();
+        for (id, document) in &self.state.documents {
+            if let Some(path) = &document.path {
+                by_path.entry(path.clone()).or_default().push(*id);
+            }
+        }
+        let mut mapped: HashMap<DocumentId, Vec<Option<git::Change>>> = HashMap::new();
+        for (path, lines) in marks {
+            let Some(ids) = by_path.get(&path) else {
+                continue;
+            };
+            for id in ids {
+                mapped.insert(*id, lines.clone());
+            }
+        }
+        if self.state.git_marks != mapped {
+            self.state.git_marks = mapped;
+            self.dirty = true;
+        }
     }
 
     fn active_git_file(&self) -> Result<(PathBuf, String)> {

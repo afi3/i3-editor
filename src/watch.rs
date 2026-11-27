@@ -137,10 +137,46 @@ impl Watcher {
         &self.watched
     }
 
-    /// Next queued event without blocking, or `None` when the queue is empty.
-    pub fn try_recv(&self) -> Option<notify::Result<Event>> {
-        self.events.try_recv().ok()
+    /// Coalesce up to `budget` queued events. Overflow and backend errors are
+    /// reported here instead of being dropped silently.
+    pub fn drain(&self, budget: usize) -> Drain {
+        collect(self.events.try_iter().take(budget))
     }
+}
+
+/// One coalesced read of the watcher queue.
+#[derive(Debug, Default)]
+pub struct Drain {
+    /// Paths whose events survived filtering.
+    pub paths: Vec<PathBuf>,
+    /// The kernel queue overflowed, so events were lost: every cached view of
+    /// the tree has to be rebuilt.
+    pub rescan: bool,
+    /// First backend error, surfaced once as a status message.
+    pub error: Option<String>,
+}
+
+fn collect(events: impl Iterator<Item = notify::Result<Event>>) -> Drain {
+    let mut drain = Drain::default();
+    for event in events {
+        let event = match event {
+            Ok(event) => event,
+            Err(error) => {
+                if drain.error.is_none() {
+                    drain.error = Some(error.to_string());
+                }
+                continue;
+            }
+        };
+        if event.need_rescan() {
+            drain.rescan = true;
+            continue;
+        }
+        if relevant(&event.kind) {
+            drain.paths.extend(event.paths);
+        }
+    }
+    drain
 }
 
 /// Whether an event can change explorer rows or an open buffer. Reads and other
@@ -195,5 +231,25 @@ mod tests {
     fn access_events_are_ignored() {
         assert!(!relevant(&EventKind::Access(AccessKind::Any)));
         assert!(relevant(&EventKind::Create(CreateKind::File)));
+    }
+
+    #[test]
+    fn overflow_requests_a_rescan() {
+        let event = Event::new(EventKind::Other).set_flag(notify::event::Flag::Rescan);
+        let drained = collect(std::iter::once(Ok(event)));
+        assert!(drained.rescan);
+        assert!(drained.paths.is_empty());
+    }
+
+    #[test]
+    fn backend_errors_are_reported_once() {
+        let drained = collect(
+            [
+                Err(notify::Error::generic("first")),
+                Err(notify::Error::generic("second")),
+            ]
+            .into_iter(),
+        );
+        assert_eq!(drained.error.as_deref(), Some("first"));
     }
 }

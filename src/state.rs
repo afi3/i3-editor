@@ -240,7 +240,7 @@ impl Pane {
 
     pub fn select_all(&mut self, document: &Document) {
         self.anchor = Some(0);
-        self.cursor = document.rope.len_chars();
+        self.cursor = document.rope().len_chars();
         self.extra.clear();
     }
 }
@@ -338,8 +338,12 @@ pub struct HunkPicker {
 }
 
 /// Completion rows rendered above the prompt layer.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct CompletionPopup {
+    /// Document and text revision the items were requested for. Accepting a
+    /// popup whose revision moved on would splice text into a changed buffer.
+    pub document: DocumentId,
+    pub revision: u64,
     pub items: Vec<crate::lsp::CompletionItem>,
     pub selected: usize,
 }

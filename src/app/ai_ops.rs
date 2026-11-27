@@ -802,7 +802,7 @@ impl App {
             .map(|path| path.display().to_string())
             .unwrap_or_else(|| "<untitled>".to_string());
         let text = crate::ai::truncate_text(
-            &document.rope.to_string(),
+            &document.rope().to_string(),
             self.state.config.ai.max_tool_output_chars,
         );
         let label = format!("{path} (file)");
@@ -830,7 +830,7 @@ impl App {
             .unwrap_or_else(|| "<untitled>".to_string());
         let text = ranges
             .iter()
-            .map(|range| document.rope.slice(range.clone()).to_string())
+            .map(|range| document.rope().slice(range.clone()).to_string())
             .collect::<Vec<_>>()
             .join("\n");
         let text = crate::ai::truncate_text(&text, self.state.config.ai.max_tool_output_chars);

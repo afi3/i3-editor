@@ -46,7 +46,7 @@ fn toggle_line_comments(
     pane: &mut crate::state::Pane,
     prefix: &str,
 ) {
-    let (start_line, end_line) = selected_lines(&document.rope, pane.cursor, pane.anchor);
+    let (start_line, end_line) = selected_lines(document.rope(), pane.cursor, pane.anchor);
     let mut lines: Vec<String> = (start_line..=end_line)
         .map(|line| document.line_text(line))
         .collect();
@@ -92,7 +92,7 @@ fn toggle_line_comments(
         document.len_chars()
     };
     let trailing =
-        document.rope.char(block_end.saturating_sub(1)) == '\n' && block_end > block_start;
+        document.rope().char(block_end.saturating_sub(1)) == '\n' && block_end > block_start;
     let eol = document.line_ending();
     let mut text = lines.join(eol);
     if trailing {
@@ -127,7 +127,7 @@ fn toggle_block_comment(
             (line_start + start)..(line_start + end.max(start))
         }
     };
-    let selected = document.rope.slice(range.clone()).to_string();
+    let selected = document.rope().slice(range.clone()).to_string();
     let text = if let Some(inner) = selected
         .strip_prefix(open)
         .and_then(|rest| rest.strip_suffix(close))

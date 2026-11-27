@@ -459,8 +459,7 @@ mod tests {
         panes.insert(pane_id, pane);
 
         let mut documents = HashMap::new();
-        let mut document = Document::empty(document_id, Some(dir.join("main.rs")));
-        document.rope = ropey::Rope::from_str(text);
+        let document = Document::from_text(document_id, text, Some(dir.join("main.rs")));
         documents.insert(document_id, document);
 
         let mut workspaces = WorkspaceManager::default();
@@ -540,11 +539,11 @@ mod tests {
         let pane_id = PaneId(1);
         for index in 0..10 {
             let id = DocumentId(100 + index);
-            let mut document = Document::empty(
+            let document = Document::from_text(
                 id,
+                "x\n",
                 Some(dir.join(format!("long-document-name-{index}.txt"))),
             );
-            document.rope = ropey::Rope::from_str("x\n");
             state.documents.insert(id, document);
             state.panes.get_mut(&pane_id).expect("pane").tabs.push(id);
         }
@@ -1137,10 +1136,13 @@ mod tests {
         assert!(screen.contains('•'), "{screen}");
 
         state.completions = Some(CompletionPopup {
+            document: DocumentId(1),
+            revision: 0,
             items: vec![CompletionItem {
                 label: "answer".to_string(),
                 insert: "answer".to_string(),
                 detail: "u32".to_string(),
+                range: None,
             }],
             selected: 0,
         });
