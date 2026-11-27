@@ -190,13 +190,13 @@ fn build_index(
     let mut index = crate::semantic::Index::empty(model);
     index.entries = entries;
     index.files = hashes;
+    let chunk_count = index.entries.len();
     index
         .save(path)
         .map_err(|error| format!("semantic index not saved: {error}"))?;
+    crate::semantic::remember(path, std::sync::Arc::new(index));
     let mut summary = format!(
-        "semantic index: {} chunks from {} file(s), {embedded} embedded, {reused} reused",
-        index.entries.len(),
-        indexed
+        "semantic index: {chunk_count} chunks from {indexed} file(s), {embedded} embedded, {reused} reused"
     );
     if unreadable > 0 {
         summary.push_str(&format!(", {unreadable} skipped"));
@@ -329,7 +329,7 @@ fn semantic_hits(
     used: usize,
 ) -> Hit {
     let mut notes = Vec::new();
-    let Some(index) = crate::semantic::Index::load(path) else {
+    let Some(index) = crate::semantic::load_cached(path) else {
         notes.push("[context] semantic index missing".to_string());
         return Hit {
             attachments: Vec::new(),

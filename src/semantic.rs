@@ -4,6 +4,7 @@
 //! release build carries no dead code.
 
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, LazyLock, Mutex};
 
 use serde::{Deserialize, Serialize};
 
@@ -21,13 +22,55 @@ pub fn default_path() -> Option<PathBuf> {
     crate::config::config_dir().map(|dir| dir.join("semantic_index.json"))
 }
 
-#[cfg(test)]
-static TEST_PATH: std::sync::Mutex<Option<PathBuf>> = std::sync::Mutex::new(None);
+/// File stamp (mtime nanos, length) and the parsed index for it.
+type Cached = ((u64, u64), Arc<Index>);
+
+/// Parsed indexes keyed by file stamp, so a prompt does not re-parse the whole
+/// file unless it changed. Shared by the query workers.
+static CACHE: LazyLock<Mutex<Option<Cached>>> = LazyLock::new(|| Mutex::new(None));
+
+fn stamp(path: &Path) -> Option<(u64, u64)> {
+    let metadata = std::fs::metadata(path).ok()?;
+    let modified = metadata
+        .modified()
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_nanos() as u64;
+    Some((modified, metadata.len()))
+}
+
+/// Parse `path` once per file change. Callers get a shared handle, so the
+/// vectors are not copied per prompt.
+pub fn load_cached(path: &Path) -> Option<Arc<Index>> {
+    let stamp = stamp(path)?;
+    let mut slot = CACHE.lock().ok()?;
+    if let Some((cached, index)) = slot.as_ref()
+        && *cached == stamp
+    {
+        return Some(Arc::clone(index));
+    }
+    let index = Arc::new(Index::load(path)?);
+    *slot = Some((stamp, Arc::clone(&index)));
+    Some(index)
+}
+
+/// Record a freshly written index so the next prompt reuses it.
+pub fn remember(path: &Path, index: Arc<Index>) {
+    let Some(stamp) = stamp(path) else {
+        return;
+    };
+    if let Ok(mut slot) = CACHE.lock() {
+        *slot = Some((stamp, index));
+    }
+}
 
 /// Point the index at `path` for one test, or back at the real location.
 #[cfg(test)]
+static TEST_PATH: Mutex<Option<PathBuf>> = Mutex::new(None);
+
 #[cfg(test)]
-static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+static TEST_LOCK: Mutex<()> = Mutex::new(());
 
 /// Serialise tests that move the index path; the override is process-global.
 #[cfg(test)]
@@ -266,4 +309,28 @@ mod tests {
         }
         std::fs::remove_dir_all(&dir).ok();
     }
+}
+
+#[test]
+fn the_index_is_parsed_once_per_file_change() {
+    let dir = std::env::temp_dir().join(format!("i3-semantic-cache-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("dir");
+    let path = dir.join("semantic_index.json");
+
+    let first_index = Index::empty("one-model");
+    first_index.save(&path).expect("save");
+    let first = load_cached(&path).expect("first load");
+    let second = load_cached(&path).expect("cached load");
+    assert!(
+        Arc::ptr_eq(&first, &second),
+        "an unchanged file must not be parsed twice"
+    );
+
+    let changed = Index::empty("another-model-name");
+    changed.save(&path).expect("save again");
+    let third = load_cached(&path).expect("reload");
+    assert_eq!(third.model, "another-model-name");
+    assert!(!Arc::ptr_eq(&first, &third), "a changed file re-parses");
+    std::fs::remove_dir_all(&dir).ok();
 }
