@@ -41,6 +41,7 @@ pub enum PromptKind {
     Theme,
     SelectWorkspace,
     AiProvider,
+    McpSubscriptions,
     Mcp,
     McpTrust,
     McpTools,
@@ -121,6 +122,7 @@ impl PromptKind {
                 | PromptKind::CommitMessage
                 | PromptKind::SelectWorkspace
                 | PromptKind::AiProvider
+                | PromptKind::McpSubscriptions
                 | PromptKind::AiBackground
                 | PromptKind::AiObjectiveAdd
                 | PromptKind::AiObjectives
@@ -184,6 +186,7 @@ impl PromptKind {
         match self {
             PromptKind::SelectWorkspace => Some("Workspace"),
             PromptKind::AiProvider => Some("AI provider"),
+            PromptKind::McpSubscriptions => Some("MCP subscriptions"),
             _ => None,
         }
     }
@@ -297,6 +300,7 @@ impl PromptKind {
                 | PromptKind::LargeFile
                 | PromptKind::SelectWorkspace
                 | PromptKind::AiProvider
+                | PromptKind::McpSubscriptions
                 | PromptKind::McpTrust
                 | PromptKind::McpTools
                 | PromptKind::McpConfirm

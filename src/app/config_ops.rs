@@ -21,28 +21,34 @@ impl App {
         }
     }
 
-    /// Palette command: release every MCP resource subscription this session
-    /// holds, so servers stop pushing updates for resources nobody views.
-    pub(crate) fn unsubscribe_all_mcp_resources(&mut self) {
-        if self.mcp_subscriptions.is_empty() {
+    /// Candidates for the subscription picker: `server uri`, one per row.
+    pub(crate) fn fill_subscription_candidates(&mut self, prompt: &mut crate::input::PromptState) {
+        let candidates: Vec<String> = self
+            .mcp_subscriptions
+            .iter()
+            .map(|(server, uri)| format!("{server} {uri}"))
+            .collect();
+        if candidates.is_empty() {
             self.notify("no MCP resources are subscribed");
             return;
         }
-        let subscriptions: Vec<(String, String)> = self.mcp_subscriptions.iter().cloned().collect();
-        let mut released = 0usize;
-        for (server, uri) in &subscriptions {
-            if let Some(mcp) = self.mcp.as_mut()
-                && mcp.unsubscribe_resource(server, uri).is_ok()
-            {
-                released += 1;
-            }
-            self.mcp_subscriptions
-                .remove(&(server.clone(), uri.clone()));
+        prompt.set_candidates(candidates);
+    }
+
+    /// Release one subscription chosen from the picker.
+    pub(crate) fn unsubscribe_mcp_subscription(&mut self, candidate: &str) {
+        let Some((server, uri)) = candidate.split_once(' ') else {
+            return;
+        };
+        let key = (server.to_string(), uri.to_string());
+        if !self.mcp_subscriptions.remove(&key) {
+            self.notify(format!("{candidate} is not subscribed"));
+            return;
         }
-        self.notify(format!(
-            "released {released} of {} MCP resource subscription(s)",
-            subscriptions.len()
-        ));
+        if let Some(mcp) = self.mcp.as_mut() {
+            let _ = mcp.unsubscribe_resource(server, uri);
+        }
+        self.notify(format!("released {uri} from {server}"));
     }
 
     /// Candidates for the provider picker; the list is the registry order.

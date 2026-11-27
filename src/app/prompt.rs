@@ -324,6 +324,12 @@ impl App {
                 }
                 Ok(())
             }
+            PromptKind::McpSubscriptions => {
+                if let Some(candidate) = prompt.selected_candidate() {
+                    self.unsubscribe_mcp_subscription(candidate);
+                }
+                Ok(())
+            }
             PromptKind::Messages => Ok(()),
             PromptKind::Find => self.commit_search(prompt.fields[0].clone()),
             PromptKind::FindInFiles => {
@@ -667,6 +673,7 @@ impl App {
             }
             PromptKind::SelectWorkspace => self.fill_workspace_candidates(prompt),
             PromptKind::AiProvider => self.fill_provider_candidates(prompt),
+            PromptKind::McpSubscriptions => self.fill_subscription_candidates(prompt),
             PromptKind::Messages => {
                 if self.state.warnings.is_empty() {
                     self.notify("no messages");

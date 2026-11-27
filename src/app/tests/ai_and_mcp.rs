@@ -384,26 +384,32 @@ fn watcher_faults_are_logged() {
 }
 
 #[test]
-fn releasing_mcp_subscriptions_clears_their_bookkeeping() {
+fn the_subscription_picker_releases_one_entry() {
     let (mut app, dir) = fixture("x\n");
     app.mcp_subscriptions
         .insert(("mock".to_string(), "mock://readme".to_string()));
+    app.mcp_subscriptions
+        .insert(("mock".to_string(), "mock://notes".to_string()));
 
-    app.dispatch(Command::McpUnsubscribe).expect("release");
-    assert!(app.mcp_subscriptions.is_empty());
+    app.dispatch(Command::McpUnsubscribe).expect("open picker");
+    let InputMode::Prompt(prompt) = &mut app.state.mode else {
+        panic!("subscription prompt missing")
+    };
+    assert_eq!(prompt.candidates.len(), 2, "{:?}", prompt.candidates);
+    prompt.selected = prompt
+        .candidates
+        .iter()
+        .position(|candidate| candidate == "mock mock://notes")
+        .expect("notes candidate");
+    app.submit_prompt().expect("release one");
+
+    assert_eq!(app.mcp_subscriptions.len(), 1);
     assert!(
-        app.state.ui.message.contains("released 0 of 1"),
-        "{}",
-        app.state.ui.message
+        app.mcp_subscriptions
+            .contains(&("mock".to_string(), "mock://readme".to_string()))
     );
-
-    app.dispatch(Command::McpUnsubscribe)
-        .expect("release again");
     assert!(
-        app.state
-            .ui
-            .message
-            .contains("no MCP resources are subscribed"),
+        app.state.ui.message.contains("mock://notes"),
         "{}",
         app.state.ui.message
     );
