@@ -48,7 +48,16 @@ impl QueryTask {
     }
 
     pub(crate) fn try_recv(&self) -> Option<Hit> {
-        self.rx.try_recv().ok()
+        match self.rx.try_recv() {
+            Ok(hit) => Some(hit),
+            Err(mpsc::TryRecvError::Empty) => None,
+            // A failed spawn or a panic inside the worker drops the sender; the
+            // task must still finish, otherwise it would block every submit.
+            Err(mpsc::TryRecvError::Disconnected) => Some(Hit {
+                attachments: Vec::new(),
+                notes: vec!["[context] semantic query worker stopped".to_string()],
+            }),
+        }
     }
 }
 
@@ -75,7 +84,13 @@ impl IndexTask {
     }
 
     pub(crate) fn try_recv(&self) -> Option<Result<String, String>> {
-        self.rx.try_recv().ok()
+        match self.rx.try_recv() {
+            Ok(result) => Some(result),
+            Err(mpsc::TryRecvError::Empty) => None,
+            Err(mpsc::TryRecvError::Disconnected) => {
+                Some(Err("semantic index worker stopped".to_string()))
+            }
+        }
     }
 }
 
@@ -309,4 +324,34 @@ fn hash_text(text: &str) -> String {
     use sha2::{Digest, Sha256};
     let digest = Sha256::digest(text.as_bytes());
     digest.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_stopped_query_worker_reports_instead_of_hanging() {
+        let (tx, rx) = mpsc::channel::<Hit>();
+        drop(tx);
+        let task = QueryTask {
+            question: "q".to_string(),
+            attachments: Vec::new(),
+            rx,
+        };
+        let hit = task.try_recv().expect("must not hang");
+        assert!(
+            hit.notes.iter().any(|note| note.contains("worker stopped")),
+            "{:?}",
+            hit.notes
+        );
+    }
+
+    #[test]
+    fn a_stopped_index_worker_reports_an_error() {
+        let (tx, rx) = mpsc::channel::<Result<String, String>>();
+        drop(tx);
+        let task = IndexTask { rx };
+        assert!(matches!(task.try_recv(), Some(Err(_))));
+    }
 }

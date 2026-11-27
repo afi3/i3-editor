@@ -912,6 +912,10 @@ impl App {
             self.notify("waiting for MCP tools");
             return;
         }
+        if self.semantic_task.is_some() {
+            self.notify("still preparing semantic context; wait for it to finish");
+            return;
+        }
         let question = self.state.ai.input.trim().to_string();
         let attachments = std::mem::take(&mut self.state.ai.attachments);
         if question.is_empty() && attachments.is_empty() {
@@ -920,7 +924,6 @@ impl App {
         if attachments.is_empty()
             && self.state.config.ai.semantic_memory
             && !self.state.config.ai.embedding_model.trim().is_empty()
-            && self.semantic_task.is_none()
         {
             let lexical = if self.state.config.ai.auto_context {
                 self.auto_ai_context(&question)

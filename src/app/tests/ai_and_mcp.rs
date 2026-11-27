@@ -701,6 +701,26 @@ fn semantic_query_embedding_does_not_block_the_editor() {
         app.state.ai.conversation
     );
 
+    // A second Enter while the worker runs must not start a competing request.
+    app.state.ai.input = "second question".to_string();
+    app.state.ai.cursor = app.state.ai.input.chars().count();
+    app.handle_key(ratatui::crossterm::event::KeyEvent::new(
+        ratatui::crossterm::event::KeyCode::Enter,
+        ratatui::crossterm::event::KeyModifiers::NONE,
+    ));
+    assert!(
+        app.state
+            .ui
+            .message
+            .contains("still preparing semantic context"),
+        "{}",
+        app.state.ui.message
+    );
+    assert!(
+        app.semantic_task.is_some(),
+        "the first question keeps its worker"
+    );
+
     let deadline = Instant::now() + Duration::from_secs(15);
     while Instant::now() < deadline {
         app.pump_semantic();
