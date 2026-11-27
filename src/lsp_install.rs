@@ -193,7 +193,7 @@ fn install_python(
         return Ok(server(provider, &command, &[]));
     }
     let venv = directory.join("python");
-    let pylsp = venv.join("bin").join("pylsp");
+    let pylsp = venv_binary(&venv, "pylsp");
     if !pylsp.is_file() {
         let python = find_on_path("python3")
             .or_else(|| find_on_path("python"))
@@ -201,7 +201,7 @@ fn install_python(
         status(tx, "creating an isolated Python environment");
         let venv_arg = venv.to_string_lossy().into_owned();
         run_path(&python, &["-m", "venv", venv_arg.as_str()], None)?;
-        let python = venv.join("bin").join("python");
+        let python = venv_binary(&venv, "python");
         status(tx, "installing python-lsp-server with pip");
         run_path(
             &python,
@@ -264,6 +264,19 @@ fn npm_install_args(prefix: &str, packages: &[&str]) -> Vec<String> {
     args
 }
 
+/// Venv layout differs by platform: `bin/` on Unix, `Scripts/` with `.exe` on
+/// Windows. The editor is Unix-only in practice, but the binary is compiled
+/// there too.
+fn venv_binary(venv: &Path, name: &str) -> PathBuf {
+    let directory = if cfg!(windows) { "Scripts" } else { "bin" };
+    let file = if cfg!(windows) {
+        format!("{name}.exe")
+    } else {
+        name.to_string()
+    };
+    venv.join(directory).join(file)
+}
+
 fn install_lua(
     provider: &Provider,
     directory: &Path,
@@ -289,7 +302,10 @@ fn install_lua(
             tx,
             &format!("downloading Lua language server {LUA_VERSION}"),
         );
-        run("curl", &["-fL", "--retry", "2", "-o", path(&archive), &url])?;
+        run(
+            "curl",
+            &["-fL", "--retry", "2", "-o", path(&archive)?, &url],
+        )?;
         let actual = crate::update::sha256_file(&archive).map_err(|error| error.to_string())?;
         if !actual.eq_ignore_ascii_case(checksum) {
             let _ = fs::remove_file(&archive);
@@ -297,7 +313,7 @@ fn install_lua(
         }
         status(tx, "extracting Lua language server");
         fs::create_dir_all(&root).map_err(|error| error.to_string())?;
-        run("tar", &["-xzf", path(&archive), "-C", path(&root)])?;
+        crate::update::safe_extract(&archive, &root)?;
         let _ = fs::remove_file(&archive);
     }
     if !command.is_file() {
@@ -353,11 +369,30 @@ fn find_on_path(binary: &str) -> Option<PathBuf> {
     let path = std::env::var_os("PATH")?;
     std::env::split_paths(&path)
         .map(|directory| directory.join(binary))
-        .find(|candidate| candidate.is_file())
+        .find(|candidate| is_executable(candidate))
 }
 
-fn path(path: &Path) -> &str {
-    path.to_str().unwrap_or_default()
+/// A candidate must be a regular file the user can execute; a directory or a
+/// non-executable file earlier on PATH is not a usable binary.
+fn is_executable(path: &Path) -> bool {
+    let Ok(metadata) = std::fs::metadata(path) else {
+        return false;
+    };
+    if !metadata.is_file() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        metadata.permissions().mode() & 0o111 != 0
+    }
+    #[cfg(not(unix))]
+    true
+}
+
+fn path(path: &Path) -> Result<&str, String> {
+    path.to_str()
+        .ok_or_else(|| format!("path is not valid UTF-8: {}", path.display()))
 }
 
 fn run(program: &str, args: &[&str]) -> Result<String, String> {
@@ -438,6 +473,24 @@ fn run_with_timeout(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[cfg(unix)]
+    fn venv_binaries_resolve_per_platform() {
+        let venv = Path::new("/venv");
+        assert_eq!(venv_binary(venv, "pylsp"), Path::new("/venv/bin/pylsp"));
+        assert_eq!(venv_binary(venv, "python"), Path::new("/venv/bin/python"));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn path_rejects_non_utf8() {
+        use std::os::unix::ffi::OsStrExt;
+
+        let name = std::ffi::OsStr::from_bytes(b"bad\xff");
+        assert!(path(Path::new(name)).is_err());
+        assert_eq!(path(Path::new("ok")).expect("utf8"), "ok");
+    }
 
     #[test]
     fn npm_installs_skip_lifecycle_scripts() {

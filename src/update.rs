@@ -255,22 +255,52 @@ pub(crate) fn sha256_file(path: &Path) -> Result<String> {
     Ok(format!("{:x}", hasher.finalize()))
 }
 
-fn extract(archive: &Path, directory: &Path) -> Result<()> {
+/// A tar member may not be absolute or climb out of the target directory.
+fn entry_is_safe(line: &str) -> bool {
+    !line.starts_with('/') && !line.split('/').any(|part| part == "..")
+}
+
+/// Extract with a member check first. The checksum already ties the archive to
+/// the release, but extraction is the step that writes to disk.
+pub(crate) fn safe_extract(archive: &Path, directory: &Path) -> std::result::Result<(), String> {
+    let listing = Command::new("tar")
+        .arg("-tzf")
+        .arg(archive)
+        .output()
+        .map_err(|error| format!("tar is required: {error}"))?;
+    if !listing.status.success() {
+        return Err(format!(
+            "cannot list {}: {}",
+            archive.display(),
+            stderr(&listing.stderr)
+        ));
+    }
+    let names = String::from_utf8_lossy(&listing.stdout);
+    for line in names.lines().filter(|line| !line.trim().is_empty()) {
+        if !entry_is_safe(line) {
+            return Err(format!("refusing unsafe archive entry: {line}"));
+        }
+    }
     let output = Command::new("tar")
         .arg("-xzf")
         .arg(archive)
         .arg("-C")
         .arg(directory)
+        .arg("--no-same-owner")
         .output()
-        .map_err(|error| Error::Update(format!("tar is required for --update: {error}")))?;
+        .map_err(|error| format!("tar is required: {error}"))?;
     if !output.status.success() {
-        return Err(Error::Update(format!(
+        return Err(format!(
             "cannot extract {}: {}",
             archive.display(),
             stderr(&output.stderr)
-        )));
+        ));
     }
     Ok(())
+}
+
+fn extract(archive: &Path, directory: &Path) -> Result<()> {
+    safe_extract(archive, directory).map_err(Error::Update)
 }
 
 /// Replace `current` with `new` without truncating the old file first. The
@@ -470,5 +500,19 @@ mod prerelease_tests {
         // A final release supersedes its pre-release, never the other way.
         assert!(is_newer("0.3.0", "0.3.0-rc.1"));
         assert!(!is_newer("0.3.0-rc.1", "0.3.0"));
+    }
+}
+
+#[cfg(test)]
+mod archive_tests {
+    use super::*;
+
+    #[test]
+    fn archive_members_may_not_escape_the_target() {
+        assert!(entry_is_safe("i3-editor"));
+        assert!(entry_is_safe("./bin/i3-editor"));
+        assert!(!entry_is_safe("../escape"));
+        assert!(!entry_is_safe("a/../../escape"));
+        assert!(!entry_is_safe("/etc/passwd"));
     }
 }
