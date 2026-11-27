@@ -413,8 +413,8 @@ fn watcher_faults_are_logged() {
     assert!(text.contains("\"event\":\"watcher_error\""), "{text}");
     assert!(text.contains("boom"), "{text}");
     assert!(
-        app.state.ui.message.contains("overflow"),
-        "{}",
+        app.state.ui.message.contains("overflow") && app.state.ui.message.contains("boom"),
+        "the error must survive the rescan notice: {}",
         app.state.ui.message
     );
     std::fs::remove_dir_all(&dir).ok();
@@ -453,7 +453,8 @@ Connection: close
     app.state.config.ai.embedding_model = "mock-embed".to_string();
     crate::semantic::use_path_for_test(Some(dir.join("semantic_index.json")));
     crate::logging::use_path_for_test(Some(dir.join("log.jsonl")));
-    // A blank buffer has no chunks, so it must not inflate the summary.
+    // A blank buffer has no chunks, and a dirty one is skipped: neither may
+    // inflate the summary.
     let blank = dir.join("blank.txt");
     std::fs::write(&blank, "\n\n\n").expect("blank");
     let blank_id = app.state.ids.document();
@@ -461,6 +462,11 @@ Connection: close
         blank_id,
         crate::editor::document::Document::open(blank_id, blank).expect("open blank"),
     );
+    app.state
+        .documents
+        .get_mut(&blank_id)
+        .expect("blank")
+        .insert(0, "x", 0, (0, 0));
     app.dispatch(Command::AiSemanticIndex).expect("index");
     assert!(
         app.semantic_index_task.is_some(),
@@ -478,8 +484,17 @@ Connection: close
     }
     assert!(app.semantic_index_task.is_none(), "build did not finish");
     assert!(
+        app.state
+            .ai
+            .entries
+            .iter()
+            .any(|line| line.contains("dirty buffer(s) skipped")),
+        "{:?}",
+        app.state.ai.entries
+    );
+    assert!(
         app.state.ui.message.contains("from 1 file(s)"),
-        "a blank buffer must not be counted: {}",
+        "a skipped buffer must not be counted: {}",
         app.state.ui.message
     );
     app.dispatch(Command::AiSemanticStatus).expect("status");
@@ -539,6 +554,10 @@ fn an_unchanged_file_is_embedded_only_once() {
         app.state.ui.message
     );
 
+    assert!(
+        crate::semantic::Index::load(&index_path).is_some(),
+        "the first build must have written the index"
+    );
     build(&mut app);
     assert!(
         app.state.ui.message.contains("1 reused"),

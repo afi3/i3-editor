@@ -32,7 +32,9 @@ static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 /// Serialise tests that move the index path; the override is process-global.
 #[cfg(test)]
 pub(crate) fn lock_for_test() -> std::sync::MutexGuard<'static, ()> {
-    TEST_LOCK.lock().expect("semantic test lock")
+    TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 #[cfg(test)]

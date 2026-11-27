@@ -43,12 +43,12 @@ impl App {
             error = error.or(drained.error);
             paths.extend(drained.paths);
         }
+        let mut notice = error.as_ref().map(|error| format!("file watcher: {error}"));
         if let Some(error) = error {
             crate::logging::event(
                 "watcher_error",
                 serde_json::json!({"error": error.as_str()}),
             );
-            self.notify(format!("file watcher: {error}"));
         }
         if rescan {
             crate::logging::event("watcher_rescan", serde_json::json!({}));
@@ -63,8 +63,14 @@ impl App {
                     paths.push(path);
                 }
             }
-            self.notify("file watcher overflow; reloaded the tree");
+            notice = Some(match notice {
+                Some(previous) => format!("{previous}; overflow, tree reloaded"),
+                None => "file watcher overflow; reloaded the tree".to_string(),
+            });
             self.dirty = true;
+        }
+        if let Some(notice) = notice {
+            self.notify(notice);
         }
         if paths.is_empty() {
             return;

@@ -924,6 +924,7 @@ impl App {
         if attachments.is_empty()
             && self.state.config.ai.semantic_memory
             && !self.state.config.ai.embedding_model.trim().is_empty()
+            && let Some(index_path) = crate::semantic::default_path()
         {
             let lexical = if self.state.config.ai.auto_context {
                 self.auto_ai_context(&question)
@@ -942,6 +943,7 @@ impl App {
             self.semantic_task = Some(crate::app::semantic_ops::QueryTask::spawn(
                 self.state.config.ai.clone(),
                 model,
+                index_path,
                 question.clone(),
                 lexical,
                 used,

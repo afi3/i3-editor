@@ -29,6 +29,7 @@ impl QueryTask {
     pub(crate) fn spawn(
         config: AiConfig,
         model: String,
+        index_path: std::path::PathBuf,
         question: String,
         attachments: Vec<AiAttachment>,
         used: usize,
@@ -38,7 +39,7 @@ impl QueryTask {
         let _ = std::thread::Builder::new()
             .name("i3-semantic-query".to_string())
             .spawn(move || {
-                let _ = tx.send(semantic_hits(&config, &model, &query, used));
+                let _ = tx.send(semantic_hits(&config, &model, &index_path, &query, used));
             });
         Self {
             question,
@@ -61,8 +62,8 @@ impl QueryTask {
     }
 }
 
-/// One in-flight index build. Chunking and embedding run off the UI thread; the
-/// snapshot of open buffer text is taken before spawning.
+/// One in-flight index build. The worker reads the files itself, so the UI
+/// thread never copies buffer text.
 pub(crate) struct IndexTask {
     rx: Receiver<Result<String, String>>,
 }
@@ -71,14 +72,15 @@ impl IndexTask {
     pub(crate) fn spawn(
         config: AiConfig,
         model: String,
-        files: Vec<(std::path::PathBuf, String)>,
+        index_path: std::path::PathBuf,
+        paths: Vec<std::path::PathBuf>,
         max_chars: usize,
     ) -> Self {
         let (tx, rx) = mpsc::channel();
         let _ = std::thread::Builder::new()
             .name("i3-semantic-index".to_string())
             .spawn(move || {
-                let _ = tx.send(build_index(&config, &model, &files, max_chars));
+                let _ = tx.send(build_index(&config, &model, &index_path, &paths, max_chars));
             });
         Self { rx }
     }
@@ -97,18 +99,36 @@ impl IndexTask {
 fn build_index(
     config: &AiConfig,
     model: &str,
-    files: &[(std::path::PathBuf, String)],
+    path: &std::path::Path,
+    paths: &[std::path::PathBuf],
     max_chars: usize,
 ) -> Result<String, String> {
-    let path = crate::semantic::default_path()
-        .ok_or_else(|| "no config directory for the semantic index".to_string())?;
-    let previous = crate::semantic::Index::load(&path).filter(|index| index.model == model);
+    const MAX_FILE: u64 = 16 << 20;
+    let mut unreadable = 0usize;
+    let mut files: Vec<(std::path::PathBuf, String)> = Vec::new();
+    for path in paths {
+        let too_large = std::fs::metadata(path)
+            .map(|meta| meta.len() > MAX_FILE)
+            .unwrap_or(true);
+        if too_large {
+            unreadable += 1;
+            continue;
+        }
+        match std::fs::read_to_string(path) {
+            Ok(text) => files.push((path.clone(), text)),
+            Err(_) => unreadable += 1,
+        }
+    }
+    if files.is_empty() {
+        return Err("no readable file to index".to_string());
+    }
+    let previous = crate::semantic::Index::load(path).filter(|index| index.model == model);
     let mut entries = Vec::new();
     let mut hashes = std::collections::BTreeMap::new();
     let mut reused = 0usize;
     let mut embedded = 0usize;
     let mut indexed = 0usize;
-    for (file, text) in files {
+    for (file, text) in &files {
         let hash = hash_text(text);
         hashes.insert(file.clone(), hash.clone());
         if let Some(previous) = &previous
@@ -151,13 +171,17 @@ fn build_index(
     index.entries = entries;
     index.files = hashes;
     index
-        .save(&path)
+        .save(path)
         .map_err(|error| format!("semantic index not saved: {error}"))?;
-    Ok(format!(
+    let mut summary = format!(
         "semantic index: {} chunks from {} file(s), {embedded} embedded, {reused} reused",
         index.entries.len(),
         indexed
-    ))
+    );
+    if unreadable > 0 {
+        summary.push_str(&format!(", {unreadable} skipped"));
+    }
+    Ok(summary)
 }
 
 impl App {
@@ -173,30 +197,43 @@ impl App {
             self.notify("set ai.embedding_model before indexing");
             return Ok(());
         }
-        let files: Vec<(std::path::PathBuf, String)> = self
-            .state
-            .documents
-            .values()
-            .filter(|document| !document.read_only)
-            .filter_map(|document| {
-                document
-                    .path
-                    .clone()
-                    .map(|path| (path, document.rope().to_string()))
-            })
-            .collect();
-        if files.is_empty() {
-            self.notify("open a file to index");
+        let mut skipped_dirty = 0usize;
+        let mut paths = Vec::new();
+        for document in self.state.documents.values() {
+            if document.read_only {
+                continue;
+            }
+            let Some(path) = &document.path else {
+                continue;
+            };
+            if document.dirty {
+                skipped_dirty += 1;
+                continue;
+            }
+            paths.push(path.clone());
+        }
+        if paths.is_empty() {
+            self.notify("open a saved file to index");
             return Ok(());
         }
         let max_chars = self.state.config.ai.semantic_max_chars.max(500);
         self.state.ai.entries.push(format!(
             "[context] building the semantic index with {model}"
         ));
+        if skipped_dirty > 0 {
+            self.state.ai.entries.push(format!(
+                "[context] {skipped_dirty} dirty buffer(s) skipped; save them to index"
+            ));
+        }
+        let Some(index_path) = crate::semantic::default_path() else {
+            self.notify("no config directory for the semantic index");
+            return Ok(());
+        };
         self.semantic_index_task = Some(IndexTask::spawn(
             self.state.config.ai.clone(),
             model.clone(),
-            files,
+            index_path,
+            paths,
             max_chars,
         ));
         self.notify(format!(
@@ -258,15 +295,15 @@ impl App {
     }
 }
 
-fn semantic_hits(config: &AiConfig, model: &str, query: &str, used: usize) -> Hit {
+fn semantic_hits(
+    config: &AiConfig,
+    model: &str,
+    path: &std::path::Path,
+    query: &str,
+    used: usize,
+) -> Hit {
     let mut notes = Vec::new();
-    let Some(path) = crate::semantic::default_path() else {
-        return Hit {
-            attachments: Vec::new(),
-            notes,
-        };
-    };
-    let Some(index) = crate::semantic::Index::load(&path) else {
+    let Some(index) = crate::semantic::Index::load(path) else {
         notes.push("[context] semantic index missing".to_string());
         return Hit {
             attachments: Vec::new(),
