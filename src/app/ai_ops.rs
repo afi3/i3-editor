@@ -1814,9 +1814,16 @@ impl App {
             return;
         };
         self.native_verify = None;
+        // The result belongs to whichever tool was awaiting it: an explicit
+        // `verify` call, or the edit whose automatic pass just ran.
+        let Some(waiting) = self.state.ai.waiting.take() else {
+            return;
+        };
+        let tool = waiting.tool.clone();
+        self.state.ai.waiting = Some(waiting);
         self.finish_ai_tool(
             crate::native::SERVER,
-            "verify",
+            &tool,
             &[ToolContent::Text(result.output)],
             !result.success,
         );

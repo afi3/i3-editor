@@ -298,6 +298,108 @@ fn ai_commands_open_and_toggle_the_panel() {
 }
 
 #[test]
+fn a_failed_verify_after_an_edit_reaches_the_next_request() {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::time::{Duration, Instant};
+
+    let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
+    let address = listener.local_addr().expect("address");
+    let responses = [
+        r#"{"choices":[{"message":{"role":"assistant","content":null,"tool_calls":[{"id":"call-1","type":"function","function":{"name":"native__write_file","arguments":"{\"path\":\"new.txt\",\"content\":\"hi\\n\"}"}}]}}]}"#,
+        r#"{"choices":[{"message":{"role":"assistant","content":"final answer"}}]}"#,
+    ];
+    std::thread::spawn(move || {
+        for body in responses {
+            let Ok((mut stream, _)) = listener.accept() else {
+                return;
+            };
+            let mut request = [0u8; 65536];
+            let _ = stream.read(&mut request);
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            let _ = stream.write_all(response.as_bytes());
+        }
+    });
+
+    let (mut app, dir) = fixture("x\n");
+    app.state.config.ai = crate::ai::test_config(format!("http://{address}/v1"));
+    app.state.config.ai.verify_after_edit = true;
+    app.state.config.ai.verify_after_edit_command = "t".to_string();
+    app.state.config.ai.verify.insert(
+        "t".to_string(),
+        crate::config::VerifyConfig {
+            command: "sh".to_string(),
+            args: vec!["-c".to_string(), "echo broken; exit 1".to_string()],
+            timeout_secs: 5,
+            sandbox: false,
+        },
+    );
+
+    app.dispatch(Command::AiChat).expect("ai panel");
+    app.state.ai.input = "write the file".to_string();
+    app.state.ai.cursor = app.state.ai.input.chars().count();
+    app.handle_key(ratatui::crossterm::event::KeyEvent::new(
+        ratatui::crossterm::event::KeyCode::Enter,
+        ratatui::crossterm::event::KeyModifiers::NONE,
+    ));
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while Instant::now() < deadline && app.state.ai.pending.is_empty() {
+        app.pump_ai();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let call = app
+        .state
+        .ai
+        .pending
+        .front()
+        .cloned()
+        .expect("pending write");
+    assert_eq!(call.server, "native");
+    assert_eq!(call.tool, "write_file");
+
+    app.handle_key(ratatui::crossterm::event::KeyEvent::new(
+        ratatui::crossterm::event::KeyCode::Char('y'),
+        ratatui::crossterm::event::KeyModifiers::NONE,
+    ));
+    let verify_output = |app: &App| {
+        app.state.ai.conversation.iter().any(|message| {
+            message
+                .get("content")
+                .and_then(|value| value.as_str())
+                .is_some_and(|text| text.contains("broken"))
+        })
+    };
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while Instant::now() < deadline && !verify_output(&app) {
+        app.pump_native_verify();
+        app.pump_ai();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(
+        app.state
+            .ai
+            .entries
+            .iter()
+            .any(|line| line.contains("[verify] t after edit")),
+        "the automatic pass never started: {:?}",
+        app.state.ai.entries
+    );
+    assert!(
+        verify_output(&app),
+        "the failure did not reach the model: {:?}",
+        app.state.ai.conversation
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.join("new.txt")).expect("written file"),
+        "hi\n"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn ai_harness_confirms_a_tool_and_returns_the_final_answer() {
     use std::collections::BTreeMap;
     use std::io::{Read, Write};
