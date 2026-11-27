@@ -454,6 +454,21 @@ Connection: close
     crate::semantic::use_path_for_test(Some(dir.join("semantic_index.json")));
     crate::logging::use_path_for_test(Some(dir.join("log.jsonl")));
     app.dispatch(Command::AiSemanticIndex).expect("index");
+    assert!(
+        app.semantic_index_task.is_some(),
+        "the build must run in the background"
+    );
+    assert!(
+        app.state.ui.message.contains("building in the background"),
+        "{}",
+        app.state.ui.message
+    );
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    while std::time::Instant::now() < deadline && app.semantic_index_task.is_some() {
+        app.pump_semantic();
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(app.semantic_index_task.is_none(), "build did not finish");
     app.dispatch(Command::AiSemanticStatus).expect("status");
     assert!(
         app.state.ui.message.contains("semantic index: 1 chunks"),
@@ -495,15 +510,23 @@ fn an_unchanged_file_is_embedded_only_once() {
     let index_path = dir.join("semantic_index.json");
     crate::semantic::use_path_for_test(Some(index_path.clone()));
 
-    app.dispatch(Command::AiSemanticIndex).expect("first build");
+    let build = |app: &mut App| {
+        app.dispatch(Command::AiSemanticIndex).expect("build");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        while std::time::Instant::now() < deadline && app.semantic_index_task.is_some() {
+            app.pump_semantic();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(app.semantic_index_task.is_none(), "build did not finish");
+    };
+    build(&mut app);
     assert!(
         app.state.ui.message.contains("1 embedded"),
         "{}",
         app.state.ui.message
     );
 
-    app.dispatch(Command::AiSemanticIndex)
-        .expect("second build");
+    build(&mut app);
     assert!(
         app.state.ui.message.contains("1 reused"),
         "{}",

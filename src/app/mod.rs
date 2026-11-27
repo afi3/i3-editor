@@ -67,6 +67,7 @@ impl App {
             lsp: None,
             mcp: None,
             semantic_task: None,
+            semantic_index_task: None,
             ai_task: None,
             ai_stream: None,
             ai_streamed: false,
@@ -198,6 +199,8 @@ pub struct App {
     pub(crate) mcp: Option<crate::mcp::McpManager>,
     /// In-flight semantic query embedding; `None` when idle.
     pub(crate) semantic_task: Option<crate::app::semantic_ops::QueryTask>,
+    /// In-flight semantic index build.
+    pub(crate) semantic_index_task: Option<crate::app::semantic_ops::IndexTask>,
     /// Running AI request, if any.
     pub(crate) ai_task: Option<crate::ai::Task>,
     pub(crate) ai_stream: Option<crate::ai::StreamTask>,
@@ -355,6 +358,7 @@ impl App {
             lsp: None,
             mcp: None,
             semantic_task: None,
+            semantic_index_task: None,
             ai_task: None,
             ai_stream: None,
             ai_streamed: false,

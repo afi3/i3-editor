@@ -52,91 +52,140 @@ impl QueryTask {
     }
 }
 
+/// One in-flight index build. Chunking and embedding run off the UI thread; the
+/// snapshot of open buffer text is taken before spawning.
+pub(crate) struct IndexTask {
+    rx: Receiver<Result<String, String>>,
+}
+
+impl IndexTask {
+    pub(crate) fn spawn(
+        config: AiConfig,
+        model: String,
+        files: Vec<(std::path::PathBuf, String)>,
+        max_chars: usize,
+    ) -> Self {
+        let (tx, rx) = mpsc::channel();
+        let _ = std::thread::Builder::new()
+            .name("i3-semantic-index".to_string())
+            .spawn(move || {
+                let _ = tx.send(build_index(&config, &model, &files, max_chars));
+            });
+        Self { rx }
+    }
+
+    pub(crate) fn try_recv(&self) -> Option<Result<String, String>> {
+        self.rx.try_recv().ok()
+    }
+}
+
+fn build_index(
+    config: &AiConfig,
+    model: &str,
+    files: &[(std::path::PathBuf, String)],
+    max_chars: usize,
+) -> Result<String, String> {
+    let path = crate::semantic::default_path()
+        .ok_or_else(|| "no config directory for the semantic index".to_string())?;
+    let previous = crate::semantic::Index::load(&path).filter(|index| index.model == model);
+    let mut entries = Vec::new();
+    let mut hashes = std::collections::BTreeMap::new();
+    let mut reused = 0usize;
+    let mut embedded = 0usize;
+    for (file, text) in files {
+        let hash = hash_text(text);
+        hashes.insert(file.clone(), hash.clone());
+        if let Some(previous) = &previous
+            && previous.files.get(file) == Some(&hash)
+        {
+            entries.extend(
+                previous
+                    .entries
+                    .iter()
+                    .filter(|entry| &entry.chunk.path == file)
+                    .cloned(),
+            );
+            reused += 1;
+            continue;
+        }
+        let chunks: Vec<crate::semantic::Chunk> = crate::semantic::chunk(file, text, 40)
+            .into_iter()
+            .filter(|chunk| chunk.text.chars().count() <= max_chars)
+            .collect();
+        if chunks.is_empty() {
+            continue;
+        }
+        for batch in chunks.chunks(16) {
+            let inputs: Vec<String> = batch.iter().map(|chunk| chunk.text.clone()).collect();
+            let vectors = crate::ai::embed(config, model, &inputs)?;
+            embedded += batch.len();
+            for (chunk, vector) in batch.iter().zip(vectors) {
+                entries.push(crate::semantic::Entry {
+                    chunk: chunk.clone(),
+                    vector,
+                });
+            }
+        }
+    }
+    if entries.is_empty() {
+        return Err("open a file to index".to_string());
+    }
+    let mut index = crate::semantic::Index::empty(model);
+    index.entries = entries;
+    index.files = hashes;
+    index
+        .save(&path)
+        .map_err(|error| format!("semantic index not saved: {error}"))?;
+    Ok(format!(
+        "semantic index: {} chunks from {} file(s), {embedded} embedded, {reused} reused",
+        index.entries.len(),
+        files.len()
+    ))
+}
+
 impl App {
-    /// Rebuild the semantic index from open documents. Explicit on purpose: every
+    /// Rebuild the semantic index in the background. Explicit on purpose: every
     /// run costs embedding calls, so nothing here happens on a timer.
     pub(crate) fn ai_semantic_index(&mut self) -> crate::error::Result<()> {
+        if self.semantic_index_task.is_some() {
+            self.notify("semantic index build already running");
+            return Ok(());
+        }
         let model = self.state.config.ai.embedding_model.trim().to_string();
         if model.is_empty() {
             self.notify("set ai.embedding_model before indexing");
             return Ok(());
         }
-        let Some(path) = crate::semantic::default_path() else {
-            self.notify("no config directory for the semantic index");
-            return Ok(());
-        };
-        let max_chars = self.state.config.ai.semantic_max_chars.max(500);
-        let previous = crate::semantic::Index::load(&path).filter(|index| index.model == model);
-        let mut entries = Vec::new();
-        let mut hashes = std::collections::BTreeMap::new();
-        let mut files = 0usize;
-        let mut reused = 0usize;
-        let mut embedded = 0usize;
-        for document in self.state.documents.values() {
-            if document.read_only {
-                continue;
-            }
-            let Some(file) = &document.path else {
-                continue;
-            };
-            let text = document.rope().to_string();
-            let hash = hash_text(&text);
-            hashes.insert(file.clone(), hash.clone());
-            if let Some(previous) = &previous
-                && previous.files.get(file) == Some(&hash)
-            {
-                entries.extend(
-                    previous
-                        .entries
-                        .iter()
-                        .filter(|entry| &entry.chunk.path == file)
-                        .cloned(),
-                );
-                files += 1;
-                reused += 1;
-                continue;
-            }
-            let chunks: Vec<crate::semantic::Chunk> = crate::semantic::chunk(file, &text, 40)
-                .into_iter()
-                .filter(|chunk| chunk.text.chars().count() <= max_chars)
-                .collect();
-            if chunks.is_empty() {
-                continue;
-            }
-            for batch in chunks.chunks(16) {
-                let inputs: Vec<String> = batch.iter().map(|chunk| chunk.text.clone()).collect();
-                let vectors = match crate::ai::embed(&self.state.config.ai, &model, &inputs) {
-                    Ok(vectors) => vectors,
-                    Err(error) => {
-                        self.notify(format!("semantic index failed: {error}"));
-                        return Ok(());
-                    }
-                };
-                embedded += batch.len();
-                for (chunk, vector) in batch.iter().zip(vectors) {
-                    entries.push(crate::semantic::Entry {
-                        chunk: chunk.clone(),
-                        vector,
-                    });
-                }
-            }
-            files += 1;
-        }
-        if entries.is_empty() {
+        let files: Vec<(std::path::PathBuf, String)> = self
+            .state
+            .documents
+            .values()
+            .filter(|document| !document.read_only)
+            .filter_map(|document| {
+                document
+                    .path
+                    .clone()
+                    .map(|path| (path, document.rope().to_string()))
+            })
+            .collect();
+        if files.is_empty() {
             self.notify("open a file to index");
             return Ok(());
         }
-
-        let mut index = crate::semantic::Index::empty(model.clone());
-        index.entries = entries;
-        index.files = hashes;
-        match index.save(&path) {
-            Ok(()) => self.notify(format!(
-                "semantic index: {} chunks from {files} file(s), {embedded} embedded, {reused} reused",
-                index.entries.len()
-            )),
-            Err(error) => self.notify(format!("semantic index not saved: {error}")),
-        }
+        let max_chars = self.state.config.ai.semantic_max_chars.max(500);
+        self.state.ai.entries.push(format!(
+            "[context] building the semantic index with {model}"
+        ));
+        self.semantic_index_task = Some(IndexTask::spawn(
+            self.state.config.ai.clone(),
+            model.clone(),
+            files,
+            max_chars,
+        ));
+        self.notify(format!(
+            "semantic index: building in the background with {model}"
+        ));
+        self.dirty = true;
         Ok(())
     }
 
@@ -162,6 +211,18 @@ impl App {
     /// Finish the question once its query embedding lands. Does nothing while the
     /// task is still running, so the loop keeps drawing and taking input.
     pub(crate) fn pump_semantic(&mut self) {
+        if let Some(task) = self.semantic_index_task.as_ref()
+            && let Some(result) = task.try_recv()
+        {
+            self.semantic_index_task = None;
+            let message = match result {
+                Ok(summary) => summary,
+                Err(error) => format!("semantic index failed: {error}"),
+            };
+            self.state.ai.entries.push(format!("[context] {message}"));
+            self.notify(message);
+            self.dirty = true;
+        }
         let Some(task) = self.semantic_task.as_ref() else {
             return;
         };
