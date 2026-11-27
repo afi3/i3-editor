@@ -1,0 +1,1913 @@
+use super::*;
+
+#[test]
+fn next_ai_provider_cycles_the_configured_registry() {
+    let (mut app, dir) = fixture("x\n");
+    {
+        let ai = &mut app.state.config.ai;
+        ai.providers.insert(
+            "alpha".to_string(),
+            crate::config::ProviderConfig {
+                base_url: "https://alpha.test/v1".to_string(),
+                model: "alpha-model".to_string(),
+                ..Default::default()
+            },
+        );
+        ai.providers.insert(
+            "beta".to_string(),
+            crate::config::ProviderConfig {
+                base_url: "https://beta.test/v1".to_string(),
+                model: "beta-model".to_string(),
+                ..Default::default()
+            },
+        );
+        assert!(ai.activate("alpha"));
+    }
+    assert_eq!(app.state.config.ai.model, "alpha-model");
+    app.state.config_path = Some(dir.join("config.toml"));
+
+    app.dispatch(Command::NextAiProvider)
+        .expect("next provider");
+    assert_eq!(app.state.config.ai.active_provider, "beta");
+    assert_eq!(app.state.config.ai.base_url, "https://beta.test/v1");
+    assert_eq!(app.state.config.ai.model, "beta-model");
+    assert!(
+        app.state.ui.message.contains("beta-model"),
+        "{}",
+        app.state.ui.message
+    );
+    let saved = std::fs::read_to_string(dir.join("config.toml")).expect("config file");
+    assert!(
+        saved.contains("active_provider = \"beta\""),
+        "switch must be persisted: {saved}"
+    );
+
+    app.dispatch(Command::NextAiProvider).expect("wrap around");
+    assert_eq!(app.state.config.ai.active_provider, "alpha");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn next_ai_provider_without_a_registry_reports_it() {
+    let (mut app, dir) = fixture("x\n");
+    app.dispatch(Command::NextAiProvider).expect("no registry");
+    assert!(
+        app.state.ui.message.contains("ai.providers"),
+        "{}",
+        app.state.ui.message
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn tab_inserts_spaces_up_to_the_next_stop() {
+    let (mut app, dir) = fixture("x\n");
+    app.state.config.editor.tab_size = 4;
+    app.dispatch(Command::InsertTab).expect("tab");
+    assert_eq!(text(&app), "    x\n");
+    assert_eq!(cursor(&app), 4);
+
+    let (mut app, dir_two) = fixture("x\n");
+    app.state.config.editor.tab_size = 4;
+    app.dispatch(Command::InsertText("abc".to_string()))
+        .expect("type");
+    press(&mut app, ratatui::crossterm::event::KeyCode::Tab);
+    assert_eq!(
+        text(&app),
+        "abc x\n",
+        "one space reaches the stop at column 4"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+    std::fs::remove_dir_all(&dir_two).ok();
+}
+
+#[test]
+fn tab_is_literal_when_insert_spaces_is_off() {
+    let (mut app, dir) = fixture("x\n");
+    app.state.config.editor.insert_spaces = false;
+    app.apply_document_indents();
+    app.dispatch(Command::InsertTab).expect("tab");
+    assert_eq!(text(&app), "\tx\n");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn save_as_existing_path_asks_before_overwriting() {
+    let (mut app, dir) = fixture("one\n");
+    let other = dir.join("other.txt");
+    std::fs::write(&other, "keep\n").expect("seed");
+
+    app.dispatch(Command::SavePrompt).expect("save as");
+    let InputMode::Prompt(prompt) = &mut app.state.mode else {
+        panic!("save-as prompt missing")
+    };
+    prompt.fields[0] = other.to_string_lossy().into_owned();
+    app.submit_prompt().expect("submit");
+
+    let InputMode::Prompt(prompt) = &app.state.mode else {
+        panic!("overwrite confirmation missing")
+    };
+    assert_eq!(prompt.kind, crate::input::PromptKind::Overwrite);
+    assert_eq!(prompt.target.as_deref(), Some(other.as_path()));
+    assert_eq!(std::fs::read_to_string(&other).expect("read"), "keep\n");
+
+    press(&mut app, ratatui::crossterm::event::KeyCode::Enter);
+    assert!(!app.state.mode.is_prompt());
+    assert_eq!(std::fs::read_to_string(&other).expect("read"), "one\n");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn save_as_new_path_writes_without_confirmation() {
+    let (mut app, dir) = fixture("one\n");
+    let new = dir.join("new.txt");
+
+    app.dispatch(Command::SavePrompt).expect("save as");
+    let InputMode::Prompt(prompt) = &mut app.state.mode else {
+        panic!("save-as prompt missing")
+    };
+    prompt.fields[0] = new.to_string_lossy().into_owned();
+    app.submit_prompt().expect("submit");
+
+    assert!(!app.state.mode.is_prompt());
+    assert_eq!(std::fs::read_to_string(&new).expect("read"), "one\n");
+    assert_eq!(
+        app.state
+            .active_document()
+            .and_then(|document| document.path.clone()),
+        Some(new)
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn config_visibility_is_applied_at_startup() {
+    use crate::terminal::Setup;
+    use ratatui::Terminal;
+    use ratatui::backend::CrosstermBackend;
+    use ratatui::layout::Rect;
+
+    let backend = CrosstermBackend::new(std::io::stdout());
+    let terminal = Terminal::with_options(
+        backend,
+        ratatui::TerminalOptions {
+            viewport: ratatui::Viewport::Fixed(Rect::new(0, 0, 80, 24)),
+        },
+    )
+    .expect("terminal");
+
+    let mut config = AppConfig::default();
+    config.explorer.visible = false;
+    let dir = std::env::temp_dir().join(format!("i3-config-vis-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    let app = App::new(
+        Setup {
+            terminal,
+            keyboard_enhancement: false,
+        },
+        config,
+        Vec::new(),
+        vec![crate::app::OpenTarget {
+            path: dir.clone(),
+            line: None,
+        }],
+    )
+    .expect("app");
+    assert!(!app.state.explorer.visible);
+    assert!(
+        app.state
+            .ui
+            .message
+            .contains("keyboard enhancement unavailable"),
+        "{}",
+        app.state.ui.message
+    );
+    assert!(
+        !app.state
+            .keymap
+            .global
+            .values()
+            .any(|command| matches!(command, Command::SwitchWorkspace(0))),
+        "ctrl+1 must be dropped without enhancement"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn palette_workspace_cycling_wraps() {
+    let (mut app, dir) = fixture("x\n");
+    app.dispatch(Command::NewWorkspace).expect("new workspace");
+    assert_eq!(app.state.workspaces.active, 1);
+    app.dispatch(Command::NextWorkspace).expect("next");
+    assert_eq!(app.state.workspaces.active, 0);
+    app.dispatch(Command::PrevWorkspace).expect("previous");
+    assert_eq!(app.state.workspaces.active, 1);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn messages_lists_every_startup_warning() {
+    let (mut app, dir) = fixture("x\n");
+    app.state.warnings = vec!["first warning".to_string(), "second warning".to_string()];
+    app.dispatch(Command::Messages).expect("messages");
+    let InputMode::Prompt(prompt) = &app.state.mode else {
+        panic!("messages prompt missing")
+    };
+    assert_eq!(prompt.kind, crate::input::PromptKind::Messages);
+    assert_eq!(prompt.candidates, app.state.warnings);
+    app.submit_prompt().expect("close");
+    assert!(!app.state.mode.is_prompt());
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn startup_message_points_at_the_remaining_warnings() {
+    assert_eq!(crate::app::startup_message(&[]), "");
+    assert_eq!(crate::app::startup_message(&["only".to_string()]), "only");
+    assert_eq!(
+        crate::app::startup_message(&["first".to_string(), "second".to_string()]),
+        "first (+1 more; palette: messages)"
+    );
+}
+
+#[test]
+fn palette_lists_and_switches_workspaces() {
+    let (mut app, dir) = fixture("x\n");
+    app.dispatch(Command::NewWorkspace).expect("new workspace");
+    assert_eq!(app.state.workspaces.active, 1);
+
+    app.dispatch(Command::Palette).expect("palette");
+    let InputMode::Prompt(prompt) = &mut app.state.mode else {
+        panic!("palette prompt missing")
+    };
+    assert!(
+        prompt
+            .candidates
+            .iter()
+            .any(|name| name == "select_workspace")
+    );
+    assert!(
+        !prompt
+            .candidates
+            .iter()
+            .any(|name| name.starts_with("switch_workspace_"))
+    );
+    app.dispatch(Command::SelectWorkspace)
+        .expect("workspace prompt");
+    let InputMode::Prompt(prompt) = &mut app.state.mode else {
+        panic!("workspace prompt missing")
+    };
+    let first = prompt
+        .candidates
+        .iter()
+        .find(|candidate| candidate.starts_with("1  "))
+        .cloned()
+        .expect("first workspace");
+    prompt.select_candidate(&first);
+    app.submit_prompt().expect("switch");
+    assert_eq!(app.state.workspaces.active, 0);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn ai_commands_open_and_toggle_the_panel() {
+    use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    let (mut app, dir) = fixture("x\n");
+    app.dispatch(Command::AiChat).expect("ai_chat");
+    assert!(app.state.ai.visible);
+    assert!(app.state.ai.focused);
+    assert!(!app.state.ai.entries.is_empty());
+
+    app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    assert!(!app.state.ai.focused);
+
+    app.dispatch(Command::AiPanel).expect("ai_panel");
+    assert!(!app.state.ai.visible);
+    app.dispatch(Command::AiPanel).expect("ai_panel");
+    assert!(app.state.ai.visible);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn ai_harness_confirms_a_tool_and_returns_the_final_answer() {
+    use std::collections::BTreeMap;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::time::{Duration, Instant};
+
+    if std::process::Command::new("python3")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        eprintln!("skipping AI harness: python3 unavailable");
+        return;
+    }
+    let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
+    let address = listener.local_addr().expect("address");
+    let responses = [
+        r#"{"choices":[{"message":{"role":"assistant","content":null,"tool_calls":[{"id":"call-1","type":"function","function":{"name":"mock__echo","arguments":"{\"text\":\"hello\"}"}}]}}]}"#,
+        r#"{"choices":[{"message":{"role":"assistant","content":"final answer"}}]}"#,
+    ];
+    std::thread::spawn(move || {
+        for body in responses {
+            let Ok((mut stream, _)) = listener.accept() else {
+                return;
+            };
+            let mut request = [0u8; 8192];
+            let _ = stream.read(&mut request);
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            let _ = stream.write_all(response.as_bytes());
+        }
+    });
+
+    let (mut app, dir) = fixture("x\n");
+    let script = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+        .join("mock_mcp.py");
+    let mcp = crate::mcp::McpServerConfig {
+        command: "python3".to_string(),
+        args: vec![script.to_string_lossy().into_owned()],
+        cwd: None,
+        env: BTreeMap::from([("MOCK_MCP_MODE".to_string(), "normal".to_string())]),
+        url: None,
+        allow_sampling: false,
+        auth_token_env: None,
+        headers: BTreeMap::new(),
+    };
+    app.state
+        .config
+        .mcp
+        .servers
+        .insert("mock".to_string(), mcp.clone());
+    app.mcp = Some(crate::mcp::McpManager::new(
+        BTreeMap::from([("mock".to_string(), mcp)]),
+        dir.clone(),
+    ));
+    app.state.config.ai = crate::ai::test_config(format!("http://{address}/v1"));
+    app.mcp
+        .as_mut()
+        .expect("mcp")
+        .list_tools("mock")
+        .expect("load tools");
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while Instant::now() < deadline {
+        app.pump_mcp();
+        if app
+            .mcp
+            .as_ref()
+            .and_then(|mcp| mcp.tools("mock"))
+            .is_some_and(|tools| !tools.is_empty())
+        {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(
+        app.mcp
+            .as_ref()
+            .and_then(|mcp| mcp.tools("mock"))
+            .is_some_and(|tools| !tools.is_empty()),
+        "mock MCP tools did not load"
+    );
+
+    app.dispatch(Command::AiChat).expect("ai panel");
+    app.state.ai.input = "use echo".to_string();
+    app.state.ai.cursor = app.state.ai.input.chars().count();
+    app.handle_key(ratatui::crossterm::event::KeyEvent::new(
+        ratatui::crossterm::event::KeyCode::Enter,
+        ratatui::crossterm::event::KeyModifiers::NONE,
+    ));
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while Instant::now() < deadline && app.state.ai.pending.is_empty() {
+        app.pump_ai();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let call = app.state.ai.pending.front().cloned().expect("pending tool");
+    assert_eq!(call.server, "mock");
+    assert_eq!(call.tool, "echo");
+
+    app.handle_key(ratatui::crossterm::event::KeyEvent::new(
+        ratatui::crossterm::event::KeyCode::Char('y'),
+        ratatui::crossterm::event::KeyModifiers::NONE,
+    ));
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while Instant::now() < deadline
+        && !app
+            .state
+            .ai
+            .entries
+            .iter()
+            .any(|line| line.contains("final answer"))
+    {
+        app.pump_mcp();
+        app.pump_ai();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(
+        app.state
+            .ai
+            .entries
+            .iter()
+            .any(|line| line.contains("final answer")),
+        "{:?}",
+        app.state.ai.entries
+    );
+    assert_eq!(text(&app), "x\n", "AI harness must not edit the buffer");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn ai_waits_for_mcp_tools_before_the_first_request() {
+    use std::collections::BTreeMap;
+    use std::time::{Duration, Instant};
+
+    if std::process::Command::new("python3")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        eprintln!("skipping AI tool readiness: python3 unavailable");
+        return;
+    }
+    let (mut app, dir) = fixture("x\n");
+    let script = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+        .join("mock_mcp.py");
+    let mcp = crate::mcp::McpServerConfig {
+        command: "python3".to_string(),
+        args: vec![script.to_string_lossy().into_owned()],
+        cwd: None,
+        env: BTreeMap::from([("MOCK_MCP_MODE".to_string(), "normal".to_string())]),
+        url: None,
+        allow_sampling: false,
+        auth_token_env: None,
+        headers: BTreeMap::new(),
+    };
+    app.state
+        .config
+        .mcp
+        .servers
+        .insert("mock".to_string(), mcp.clone());
+    app.mcp = Some(crate::mcp::McpManager::new(
+        BTreeMap::from([("mock".to_string(), mcp)]),
+        dir.clone(),
+    ));
+    let hash = app
+        .mcp
+        .as_ref()
+        .and_then(|mcp| mcp.config_hash("mock"))
+        .expect("config hash");
+    app.mcp_trusted.insert(hash);
+    app.state.config.ai.base_url.clear();
+
+    app.dispatch(Command::AiChat).expect("ai panel");
+    app.state.ai.input = "hello".to_string();
+    app.state.ai.cursor = app.state.ai.input.chars().count();
+    app.handle_key(ratatui::crossterm::event::KeyEvent::new(
+        ratatui::crossterm::event::KeyCode::Enter,
+        ratatui::crossterm::event::KeyModifiers::NONE,
+    ));
+    assert!(app.ai_task.is_none(), "request must wait for tools");
+    assert!(app.state.ai.queued_question.is_some());
+    assert!(
+        app.state
+            .ai
+            .entries
+            .iter()
+            .any(|line| line.contains("loading"))
+    );
+
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while Instant::now() < deadline && app.state.ai.queued_question.is_some() {
+        app.pump_mcp();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(app.state.ai.queued_question.is_none());
+    assert!(
+        app.state.ai.tool_map.contains_key("mock__echo"),
+        "first request must carry the loaded MCP tools"
+    );
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while Instant::now() < deadline && app.ai_task.is_some() {
+        app.pump_ai();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(
+        app.state
+            .ai
+            .conversation
+            .iter()
+            .any(|message| message["role"] == "user" && message["content"] == "hello")
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn cancelling_an_ai_tool_call_stops_the_mcp_server() {
+    use crate::state::AiWaiting;
+    use std::collections::BTreeMap;
+    use std::time::{Duration, Instant};
+
+    if std::process::Command::new("python3")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        eprintln!("skipping AI cancellation: python3 unavailable");
+        return;
+    }
+    let (mut app, dir) = fixture("x\n");
+    let script = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+        .join("mock_mcp.py");
+    let mcp = crate::mcp::McpServerConfig {
+        command: "python3".to_string(),
+        args: vec![script.to_string_lossy().into_owned()],
+        cwd: None,
+        env: BTreeMap::from([("MOCK_MCP_MODE".to_string(), "normal".to_string())]),
+        url: None,
+        allow_sampling: false,
+        auth_token_env: None,
+        headers: BTreeMap::new(),
+    };
+    app.state
+        .config
+        .mcp
+        .servers
+        .insert("mock".to_string(), mcp.clone());
+    app.mcp = Some(crate::mcp::McpManager::new(
+        BTreeMap::from([("mock".to_string(), mcp)]),
+        dir.clone(),
+    ));
+    app.mcp
+        .as_mut()
+        .expect("mcp")
+        .list_tools("mock")
+        .expect("load tools");
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while Instant::now() < deadline {
+        app.pump_mcp();
+        if app
+            .mcp
+            .as_ref()
+            .and_then(|mcp| mcp.tools("mock"))
+            .is_some_and(|tools| !tools.is_empty())
+        {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(app.mcp.as_ref().is_some_and(|mcp| mcp.is_running("mock")));
+
+    app.dispatch(Command::AiChat).expect("ai panel");
+    app.state.ai.waiting = Some(AiWaiting {
+        id: "call-cancel".to_string(),
+        server: "mock".to_string(),
+        tool: "echo".to_string(),
+        capability: "destructive".to_string(),
+    });
+    app.handle_key(ratatui::crossterm::event::KeyEvent::new(
+        ratatui::crossterm::event::KeyCode::Esc,
+        ratatui::crossterm::event::KeyModifiers::NONE,
+    ));
+    assert!(!app.mcp.as_ref().is_some_and(|mcp| mcp.is_running("mock")));
+    assert!(app.state.ai.waiting.is_none());
+    assert!(
+        app.state
+            .ai
+            .conversation
+            .iter()
+            .any(|message| message["content"] == "Tool call cancelled.")
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn native_ai_tools_read_and_edit_the_open_document() {
+    use crate::state::AiToolCall;
+
+    let (mut app, dir) = fixture("x\n");
+    app.state.config.ai.base_url.clear();
+    app.dispatch(Command::AiChat).expect("ai panel");
+    app.state.ai.pending.push_back(AiToolCall {
+        id: "native-read".to_string(),
+        server: "native".to_string(),
+        tool: "read_file".to_string(),
+        capability: "read-only".to_string(),
+        arguments: serde_json::json!({"path": "note.txt"}),
+    });
+    app.handle_key(ratatui::crossterm::event::KeyEvent::new(
+        ratatui::crossterm::event::KeyCode::Char('y'),
+        ratatui::crossterm::event::KeyModifiers::NONE,
+    ));
+    let tool_message = app
+        .state
+        .ai
+        .conversation
+        .last()
+        .and_then(|message| message["content"].as_str())
+        .expect("native read result");
+    assert!(tool_message.contains("snapshot:"), "{tool_message}");
+    assert!(tool_message.contains("1:"), "{tool_message}");
+    app.pump_ai();
+
+    let read = crate::native::read_file(
+        &app.state.explorer.root,
+        &serde_json::json!({"path": "note.txt"}),
+    )
+    .expect("read");
+    let snapshot = read
+        .lines()
+        .find_map(|line| line.strip_prefix("snapshot: "))
+        .expect("snapshot");
+    let line = read.lines().find(|line| line.contains("|x")).expect("line");
+    let (head, _) = line.split_once('|').expect("separator");
+    let (number, hash) = head.split_once(':').expect("hash");
+    app.state.ai.pending.push_back(AiToolCall {
+        id: "native-edit".to_string(),
+        server: "native".to_string(),
+        tool: "edit_file".to_string(),
+        capability: "destructive".to_string(),
+        arguments: serde_json::json!({
+            "path": "note.txt",
+            "snapshot": snapshot,
+            "edits": [{"line": number.parse::<usize>().unwrap(), "hash": hash, "text": "y"}]
+        }),
+    });
+    app.handle_key(ratatui::crossterm::event::KeyEvent::new(
+        ratatui::crossterm::event::KeyCode::Char('y'),
+        ratatui::crossterm::event::KeyModifiers::NONE,
+    ));
+    assert_eq!(
+        std::fs::read_to_string(dir.join("note.txt")).expect("edited file"),
+        "y\n"
+    );
+    assert!(app.state.documents.values().any(|document| {
+        document.rope().len_chars() == 2
+            && document.rope().char(0) == 'y'
+            && document.rope().char(1) == '\n'
+    }));
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn native_ai_write_file_creates_and_undoes_a_file() {
+    use crate::state::AiToolCall;
+
+    let (mut app, dir) = fixture("x\n");
+    app.state.config.ai.base_url.clear();
+    app.state.config.ai.stream = false;
+    app.dispatch(Command::AiChat).expect("ai panel");
+    app.state.ai.pending.push_back(AiToolCall {
+        id: "native-write".to_string(),
+        server: "native".to_string(),
+        tool: "write_file".to_string(),
+        capability: "destructive".to_string(),
+        arguments: serde_json::json!({"path": "new.txt", "content": "new\n"}),
+    });
+    app.handle_key(ratatui::crossterm::event::KeyEvent::new(
+        ratatui::crossterm::event::KeyCode::Char('y'),
+        ratatui::crossterm::event::KeyModifiers::NONE,
+    ));
+    assert_eq!(
+        std::fs::read_to_string(dir.join("new.txt")).expect("created file"),
+        "new\n"
+    );
+    app.dispatch(Command::AiUndoEdit).expect("undo write");
+    assert!(!dir.join("new.txt").exists());
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn native_edit_refuses_a_dirty_buffer() {
+    use crate::state::AiToolCall;
+
+    let (mut app, dir) = fixture("x\n");
+    app.state.config.ai.base_url.clear();
+    app.dispatch(Command::AiChat).expect("ai panel");
+    let read = crate::native::read_file(
+        &app.state.explorer.root,
+        &serde_json::json!({"path": "note.txt"}),
+    )
+    .expect("read");
+    let snapshot = read
+        .lines()
+        .find_map(|line| line.strip_prefix("snapshot: "))
+        .expect("snapshot");
+    let line = read.lines().find(|line| line.contains("|x")).expect("line");
+    let (head, _) = line.split_once('|').expect("separator");
+    let (number, hash) = head.split_once(':').expect("hash");
+    let document_id = *app.state.documents.keys().next().expect("document");
+    app.state
+        .documents
+        .get_mut(&document_id)
+        .expect("document")
+        .dirty = true;
+    app.state.ai.pending.push_back(AiToolCall {
+        id: "native-dirty".to_string(),
+        server: "native".to_string(),
+        tool: "edit_file".to_string(),
+        capability: "destructive".to_string(),
+        arguments: serde_json::json!({
+            "path": "note.txt",
+            "snapshot": snapshot,
+            "edits": [{"line": number.parse::<usize>().unwrap(), "hash": hash, "text": "y"}]
+        }),
+    });
+    app.handle_key(ratatui::crossterm::event::KeyEvent::new(
+        ratatui::crossterm::event::KeyCode::Char('y'),
+        ratatui::crossterm::event::KeyModifiers::NONE,
+    ));
+    assert_eq!(
+        std::fs::read_to_string(dir.join("note.txt")).expect("original file"),
+        "x\n"
+    );
+    assert!(
+        app.state
+            .ai
+            .entries
+            .iter()
+            .any(|line| line.contains("unsaved"))
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn ai_file_and_selection_context_are_injected_once() {
+    let (mut app, dir) = fixture("x\n");
+    app.state.config.ai.base_url.clear();
+    app.state.config.ai.stream = false;
+    app.dispatch(Command::AiAttachFile).expect("attach file");
+    assert_eq!(app.state.ai.attachments.len(), 1);
+    let pane = app.state.focused_pane_mut().expect("pane");
+    pane.anchor = Some(0);
+    pane.cursor = 1;
+    app.dispatch(Command::AiAttachSelection)
+        .expect("attach selection");
+    assert_eq!(app.state.ai.attachments.len(), 2);
+    app.dispatch(Command::AiChat).expect("ai panel");
+    app.state.ai.input = "what is this".to_string();
+    app.state.ai.cursor = app.state.ai.input.chars().count();
+    app.handle_key(ratatui::crossterm::event::KeyEvent::new(
+        ratatui::crossterm::event::KeyCode::Enter,
+        ratatui::crossterm::event::KeyModifiers::NONE,
+    ));
+    let message = app
+        .state
+        .ai
+        .conversation
+        .iter()
+        .find(|message| message["role"] == "user")
+        .expect("user message");
+    let content = message["content"].as_str().expect("content");
+    assert!(content.contains("<context path="), "{content}");
+    assert!(content.contains("what is this"), "{content}");
+    assert!(app.state.ai.attachments.is_empty());
+    if let Some(task) = app.ai_task.as_ref() {
+        task.cancel();
+    }
+    app.ai_task = None;
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn ai_panel_renders_streamed_deltas_before_done() {
+    use std::time::{Duration, Instant};
+
+    let (base_url, server) = crate::ai::sse_hello_server();
+    let (mut app, dir) = fixture("x\n");
+    let mut config = crate::ai::test_config(base_url);
+    config.stream = true;
+    app.state.config.ai = config;
+    app.dispatch(Command::AiChat).expect("ai panel");
+    app.state.ai.input = "hello".to_string();
+    app.state.ai.cursor = 5;
+    app.handle_key(ratatui::crossterm::event::KeyEvent::new(
+        ratatui::crossterm::event::KeyCode::Enter,
+        ratatui::crossterm::event::KeyModifiers::NONE,
+    ));
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while Instant::now() < deadline && app.ai_stream.is_some() {
+        app.pump_ai();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(app.ai_stream.is_none());
+    assert!(
+        app.state
+            .ai
+            .entries
+            .iter()
+            .any(|line| line.contains("hello"))
+    );
+    assert!(
+        app.state
+            .ai
+            .conversation
+            .iter()
+            .any(|message| { message["role"] == "assistant" && message["content"] == "hello" })
+    );
+    server.join().expect("server");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn ai_input_accepts_shift_enter_newlines_and_enter_submits() {
+    use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    let (mut app, dir) = fixture("x\n");
+    app.state.config.ai.base_url.clear();
+    app.dispatch(Command::AiChat).expect("ai panel");
+    for ch in "first".chars() {
+        app.handle_key(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
+    }
+    app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT));
+    for ch in "second".chars() {
+        app.handle_key(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
+    }
+    assert_eq!(app.state.ai.input, "first\nsecond");
+    assert!(app.ai_task.is_none());
+    app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert!(app.state.ai.input.is_empty());
+    assert!(
+        app.state
+            .ai
+            .conversation
+            .iter()
+            .any(|message| { message["role"] == "user" && message["content"] == "first\nsecond" })
+    );
+    if let Some(task) = app.ai_task.as_ref() {
+        task.cancel();
+    }
+    app.ai_task = None;
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn background_agent_auto_runs_read_only_tools_and_finishes() {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::time::{Duration, Instant};
+
+    let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
+    let address = listener.local_addr().expect("address");
+    let server = std::thread::spawn(move || {
+        let bodies = [
+            r#"{"choices":[{"message":{"role":"assistant","content":null,"tool_calls":[{"id":"read-1","type":"function","function":{"name":"native__read_file","arguments":"{\"path\":\"note.txt\"}"}}]}}]}"#,
+            r#"{"choices":[{"message":{"content":"background done"}}]}"#,
+        ];
+        for body in bodies {
+            let (mut stream, _) = listener.accept().expect("accept");
+            let mut request = [0u8; 8192];
+            let _ = stream.read(&mut request).expect("read");
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            stream.write_all(response.as_bytes()).expect("write");
+        }
+    });
+    let (mut app, dir) = fixture("x\n");
+    let mut config = crate::ai::test_config(format!("http://{address}/v1"));
+    config.stream = false;
+    config.background_agents = true;
+    app.state.config.ai = config;
+    app.dispatch(Command::AiBackground)
+        .expect("background prompt");
+    let InputMode::Prompt(prompt) = &mut app.state.mode else {
+        panic!("background prompt missing")
+    };
+    prompt.fields[0] = "inspect the file".to_string();
+    app.submit_prompt().expect("start background");
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while Instant::now() < deadline && app.background_agent {
+        app.pump_ai();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(!app.background_agent, "{:?}", app.state.ai.entries);
+    assert!(app.state.ai.conversation.iter().any(|message| {
+        message["role"] == "tool"
+            && message["content"]
+                .as_str()
+                .is_some_and(|text| text.contains("snapshot:"))
+    }));
+    assert!(
+        app.state
+            .ai
+            .entries
+            .iter()
+            .any(|line| line.contains("background done"))
+    );
+    server.join().expect("server");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn background_agent_pauses_for_a_write_and_resumes_on_approval() {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::time::{Duration, Instant};
+
+    let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
+    let address = listener.local_addr().expect("address");
+    let server = std::thread::spawn(move || {
+        let bodies = [
+            r#"{"choices":[{"message":{"role":"assistant","content":null,"tool_calls":[{"id":"write-1","type":"function","function":{"name":"native__write_file","arguments":"{\"path\":\"new.txt\",\"content\":\"created\\n\"}"}}]}}]}"#,
+            r#"{"choices":[{"message":{"content":"write done"}}]}"#,
+        ];
+        for body in bodies {
+            let (mut stream, _) = listener.accept().expect("accept");
+            let mut request = [0u8; 8192];
+            let _ = stream.read(&mut request).expect("read");
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            stream.write_all(response.as_bytes()).expect("write");
+        }
+    });
+    let (mut app, dir) = fixture("x\n");
+    let mut config = crate::ai::test_config(format!("http://{address}/v1"));
+    config.stream = false;
+    config.background_agents = true;
+    app.state.config.ai = config;
+    app.dispatch(Command::AiBackground)
+        .expect("background prompt");
+    let InputMode::Prompt(prompt) = &mut app.state.mode else {
+        panic!("background prompt missing")
+    };
+    prompt.fields[0] = "create a file".to_string();
+    app.submit_prompt().expect("start background");
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while Instant::now() < deadline && app.state.ai.pending.is_empty() {
+        app.pump_ai();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(app.background_agent);
+    assert!(app.state.ai.pending.front().is_some());
+    assert!(!dir.join("new.txt").exists());
+    app.dispatch(Command::AiPanel).expect("open panel");
+    app.handle_key(ratatui::crossterm::event::KeyEvent::new(
+        ratatui::crossterm::event::KeyCode::Char('y'),
+        ratatui::crossterm::event::KeyModifiers::NONE,
+    ));
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while Instant::now() < deadline && app.background_agent {
+        app.pump_ai();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(
+        std::fs::read_to_string(dir.join("new.txt")).expect("written file"),
+        "created\n"
+    );
+    server.join().expect("server");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn ai_panel_commands_copy_clear_resize_and_scroll() {
+    let (mut app, dir) = fixture("x\n");
+    app.dispatch(Command::AiChat).expect("ai panel");
+    app.state.ai.entries.push("hello".to_string());
+    app.dispatch(Command::AiCopy).expect("copy");
+    assert!(app.state.clipboard.contains("hello"));
+    app.dispatch(Command::AiWider).expect("wider");
+    assert!(app.state.config.ai.panel_width > 20);
+    app.dispatch(Command::AiScrollRight).expect("scroll");
+    assert_eq!(app.state.ai.scroll_x, 4);
+    app.dispatch(Command::AiClear).expect("clear");
+    assert_eq!(app.state.ai.entries.len(), 1);
+    assert!(app.state.ai.conversation.is_empty());
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn ai_tool_policy_filters_the_tool_definitions() {
+    use std::collections::BTreeMap;
+    use std::time::{Duration, Instant};
+
+    if std::process::Command::new("python3")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        eprintln!("skipping AI tool policy: python3 unavailable");
+        return;
+    }
+    let (mut app, dir) = fixture("x\n");
+    let script = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+        .join("mock_mcp.py");
+    let mcp = crate::mcp::McpServerConfig {
+        command: "python3".to_string(),
+        args: vec![script.to_string_lossy().into_owned()],
+        cwd: None,
+        env: BTreeMap::from([("MOCK_MCP_MODE".to_string(), "normal".to_string())]),
+        url: None,
+        allow_sampling: false,
+        auth_token_env: None,
+        headers: BTreeMap::new(),
+    };
+    app.state
+        .config
+        .mcp
+        .servers
+        .insert("mock".to_string(), mcp.clone());
+    app.mcp = Some(crate::mcp::McpManager::new(
+        BTreeMap::from([("mock".to_string(), mcp)]),
+        dir.clone(),
+    ));
+    app.mcp
+        .as_mut()
+        .expect("mcp")
+        .list_tools("mock")
+        .expect("load tools");
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while Instant::now() < deadline {
+        app.pump_mcp();
+        if app
+            .mcp
+            .as_ref()
+            .and_then(|mcp| mcp.tools("mock"))
+            .is_some_and(|tools| !tools.is_empty())
+        {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    app.state.config.ai.allowed_tools = vec!["mock/echo".to_string()];
+    app.state.config.ai.denied_tools = vec!["mock/add".to_string()];
+    app.dispatch(Command::AiChat).expect("ai panel");
+    app.start_ai_request();
+    assert!(app.state.ai.tool_map.contains_key("mock__echo"));
+    assert!(!app.state.ai.tool_map.contains_key("mock__add"));
+    assert!(!app.state.ai.tool_map.contains_key("mock__read_text_file"));
+    if let Some(task) = app.ai_task.as_ref() {
+        task.cancel();
+    }
+    app.ai_task = None;
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn ai_tool_audit_redacts_arguments_and_records_denial() {
+    use crate::state::AiToolCall;
+
+    let (mut app, dir) = fixture("x\n");
+    let config_path = dir.join("config.toml");
+    app.state.config_path = Some(config_path.clone());
+    app.dispatch(Command::AiChat).expect("ai panel");
+    app.state.ai.pending.push_back(AiToolCall {
+        id: "call-audit".to_string(),
+        server: "mock".to_string(),
+        tool: "echo".to_string(),
+        capability: "destructive".to_string(),
+        arguments: serde_json::json!({"api_token": "secret-value", "text": "hello"}),
+    });
+    app.handle_key(ratatui::crossterm::event::KeyEvent::new(
+        ratatui::crossterm::event::KeyCode::Char('n'),
+        ratatui::crossterm::event::KeyModifiers::NONE,
+    ));
+    let audit =
+        std::fs::read_to_string(config_path.with_file_name("audit.jsonl")).expect("audit log");
+    let record: serde_json::Value =
+        serde_json::from_str(audit.lines().next().expect("record")).expect("json record");
+    assert_eq!(record["event"], "decision");
+    assert_eq!(record["decision"], "denied");
+    assert_eq!(record["capability"], "destructive");
+    assert_eq!(record["arguments"]["api_token"], "[redacted]");
+    assert_eq!(record["arguments"]["text"], "hello");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn overflowing_history_is_summarized_before_the_request() {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::time::{Duration, Instant};
+
+    let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
+    let address = listener.local_addr().expect("address");
+    std::thread::spawn(move || {
+        let bodies = [
+            r#"{"choices":[{"message":{"role":"assistant","content":"earlier summary"}}]}"#,
+            r#"{"choices":[{"message":{"role":"assistant","content":"final answer"}}]}"#,
+        ];
+        for body in bodies {
+            let Ok((mut stream, _)) = listener.accept() else {
+                return;
+            };
+            let mut request = [0u8; 16384];
+            let _ = stream.read(&mut request);
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            let _ = stream.write_all(response.as_bytes());
+        }
+    });
+    let (mut app, dir) = fixture("x\n");
+    let config_path = dir.join("config.toml");
+    app.state.config_path = Some(config_path.clone());
+    let mut config = crate::ai::test_config(format!("http://{address}/v1"));
+    config.stream = false;
+    config.compact_history = true;
+    config.max_history_turns = 1;
+    app.state.config.ai = config;
+    app.state.ai.conversation.push(serde_json::json!({
+        "role": "user",
+        "content": "old question",
+    }));
+    app.state.ai.conversation.push(serde_json::json!({
+        "role": "assistant",
+        "content": "old answer",
+    }));
+    app.state.ai.conversation.push(serde_json::json!({
+        "role": "user",
+        "content": "new question",
+    }));
+    app.start_ai_request();
+
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while Instant::now() < deadline
+        && !app
+            .state
+            .ai
+            .conversation
+            .iter()
+            .any(|message| message["content"] == "final answer")
+    {
+        app.pump_ai();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(
+        app.state
+            .ai
+            .conversation
+            .iter()
+            .any(|message| message["content"] == "final answer"),
+        "{:?}",
+        app.state.ai.conversation
+    );
+    let summary = app
+        .state
+        .ai
+        .conversation
+        .iter()
+        .find(|message| message["role"] == "system")
+        .expect("summary");
+    assert!(
+        summary["content"]
+            .as_str()
+            .is_some_and(|text| text.contains("earlier summary")),
+        "{summary}"
+    );
+    assert!(
+        !app.state
+            .ai
+            .conversation
+            .iter()
+            .any(|message| message["content"] == "old question")
+    );
+    assert!(
+        !app.state
+            .ai
+            .conversation
+            .iter()
+            .any(|message| message["content"] == "old answer")
+    );
+
+    let audit =
+        std::fs::read_to_string(config_path.with_file_name("audit.jsonl")).expect("audit log");
+    let stops: Vec<String> = audit
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .filter(|record| record["event"] == "model_request")
+        .filter_map(|record| record["stop"].as_str().map(str::to_string))
+        .collect();
+    assert!(stops.contains(&"compact".to_string()), "{stops:?}");
+    assert!(stops.contains(&"reply".to_string()), "{stops:?}");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn model_trace_records_latency_usage_and_lists_in_overlay() {
+    use std::time::Duration;
+
+    let (mut app, dir) = fixture("x\n");
+    let config_path = dir.join("config.toml");
+    app.state.config_path = Some(config_path.clone());
+    let call = crate::app::audit::ModelRequest {
+        round: 2,
+        model: "mock-model",
+        original_messages: 10,
+        sent_messages: 6,
+        estimated_tokens: 1234,
+        latency: Duration::from_millis(456),
+        stop: "reply",
+        prompt_tokens: Some(100),
+        completion_tokens: Some(20),
+        tool_calls: 1,
+    };
+    crate::app::audit::model_request(&app.state, &call);
+
+    let audit =
+        std::fs::read_to_string(config_path.with_file_name("audit.jsonl")).expect("audit log");
+    let record: serde_json::Value =
+        serde_json::from_str(audit.lines().next().expect("record")).expect("json record");
+    assert_eq!(record["event"], "model_request");
+    assert_eq!(record["round"], 2);
+    assert_eq!(record["model"], "mock-model");
+    assert_eq!(record["messages"]["sent"], 6);
+    assert_eq!(record["estimated_tokens"], 1234);
+    assert_eq!(record["latency_ms"], 456);
+    assert_eq!(record["stop"], "reply");
+    assert_eq!(record["prompt_tokens"], 100);
+    assert_eq!(record["completion_tokens"], 20);
+    assert_eq!(record["tool_calls"], 1);
+    assert!(record.get("content").is_none());
+
+    app.dispatch(Command::AiTrace).expect("trace overlay");
+    let view = app.state.trace_view.as_ref().expect("trace view");
+    let line = &view.lines[0];
+    assert!(line.contains("r2"), "{line}");
+    assert!(line.contains("mock-model"), "{line}");
+    assert!(line.contains("6/10 msg"), "{line}");
+    assert!(line.contains("456ms"), "{line}");
+    assert!(line.contains("reply"), "{line}");
+    assert!(line.contains("100+20 tok"), "{line}");
+    assert!(line.contains("1 tool(s)"), "{line}");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn ai_tool_output_is_capped_before_history() {
+    use crate::mcp::ToolContent;
+    use crate::state::AiWaiting;
+
+    let (mut app, dir) = fixture("x\n");
+    app.state.config.ai.max_tool_output_chars = 500;
+    app.dispatch(Command::AiChat).expect("ai panel");
+    app.state.ai.waiting = Some(AiWaiting {
+        id: "call-cap".to_string(),
+        server: "mock".to_string(),
+        tool: "echo".to_string(),
+        capability: "destructive".to_string(),
+    });
+    app.finish_ai_tool(
+        "mock",
+        "echo",
+        &[ToolContent::Text("x".repeat(5_000))],
+        false,
+    );
+    let text = app
+        .state
+        .ai
+        .conversation
+        .last()
+        .and_then(|message| message["content"].as_str())
+        .expect("tool message");
+    assert!(text.ends_with("[truncated]"), "{text}");
+    assert!(text.chars().count() < 1_000);
+    if let Some(task) = app.ai_task.as_ref() {
+        task.cancel();
+    }
+    app.ai_task = None;
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn denying_an_ai_tool_call_does_not_invoke_mcp() {
+    use crate::state::AiToolCall;
+
+    let (mut app, dir) = fixture("x\n");
+    app.dispatch(Command::AiChat).expect("ai panel");
+    app.state.ai.pending.push_back(AiToolCall {
+        id: "call-deny".to_string(),
+        server: "mock".to_string(),
+        tool: "echo".to_string(),
+        capability: "destructive".to_string(),
+        arguments: serde_json::json!({"text": "hello"}),
+    });
+    app.handle_key(ratatui::crossterm::event::KeyEvent::new(
+        ratatui::crossterm::event::KeyCode::Char('n'),
+        ratatui::crossterm::event::KeyModifiers::NONE,
+    ));
+    assert!(app.state.ai.pending.is_empty());
+    assert!(
+        app.state
+            .ai
+            .entries
+            .iter()
+            .any(|line| line.contains("denied by user"))
+    );
+    assert_eq!(app.state.ai.conversation.last().unwrap()["role"], "tool");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn ai_turn_stops_at_the_round_cap() {
+    let (mut app, dir) = fixture("x\n");
+    app.dispatch(Command::AiChat).expect("ai panel");
+    app.state.ai.rounds = 8;
+    app.start_ai_request();
+    assert!(app.ai_task.is_none());
+    assert!(
+        app.state
+            .ai
+            .entries
+            .iter()
+            .any(|line| line.contains("stopped after 8 model rounds"))
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn mcp_command_opens_a_server_menu() {
+    let (mut app, dir) = fixture("x\n");
+    app.state.config.mcp.servers.insert(
+        "filesystem".to_string(),
+        crate::mcp::McpServerConfig {
+            command: "npx".to_string(),
+            args: vec!["server".to_string()],
+            ..Default::default()
+        },
+    );
+    app.dispatch(Command::Mcp).expect("mcp");
+    let InputMode::Prompt(prompt) = &app.state.mode else {
+        panic!("MCP menu missing")
+    };
+    assert_eq!(prompt.kind, crate::input::PromptKind::Mcp);
+    assert!(
+        prompt
+            .candidates
+            .iter()
+            .any(|line| line.contains("filesystem") && line.contains("trust required")),
+        "{:?}",
+        prompt.candidates
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn mcp_add_wizard_prefills_the_workspace_directory() {
+    use crate::input::PromptKind;
+
+    let (mut app, dir) = fixture("x\n");
+    app.mcp = Some(crate::mcp::McpManager::new(
+        std::collections::BTreeMap::new(),
+        dir.clone(),
+    ));
+    app.dispatch(Command::McpAdd).expect("mcp_add");
+    let InputMode::Prompt(prompt) = &mut app.state.mode else {
+        panic!("template prompt missing")
+    };
+    assert_eq!(prompt.kind, PromptKind::McpAdd);
+    let filesystem = prompt
+        .candidates
+        .iter()
+        .find(|candidate| candidate.starts_with("filesystem — "))
+        .cloned()
+        .expect("filesystem template");
+    prompt.select_candidate(&filesystem);
+    app.submit_prompt().expect("template");
+    let InputMode::Prompt(prompt) = &mut app.state.mode else {
+        panic!("path prompt missing")
+    };
+    assert_eq!(prompt.kind, PromptKind::McpAddPath);
+    assert_eq!(
+        std::fs::canonicalize(&prompt.fields[0]).expect("prefilled dir"),
+        std::fs::canonicalize(&dir).expect("canonical root")
+    );
+    app.submit_prompt().expect("add server");
+    assert!(app.state.config.mcp.servers.contains_key("filesystem"));
+    let InputMode::Prompt(prompt) = &mut app.state.mode else {
+        panic!("trust prompt missing after add")
+    };
+    assert_eq!(prompt.kind, PromptKind::McpTrust);
+    app.handle_key(ratatui::crossterm::event::KeyEvent::new(
+        ratatui::crossterm::event::KeyCode::Esc,
+        ratatui::crossterm::event::KeyModifiers::NONE,
+    ));
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn mcp_path_prefill_uses_active_file_for_reads_and_root_for_listing() {
+    use crate::mcp::{ArgKind, ToolArg};
+
+    let (app, dir) = fixture("x\n");
+    let path = ToolArg {
+        name: "path".to_string(),
+        description: String::new(),
+        kind: ArgKind::String,
+        required: true,
+    };
+    assert_eq!(
+        std::fs::canonicalize(app.prefill_mcp_arg("read_text_file", &path)).expect("read path"),
+        std::fs::canonicalize(dir.join("note.txt")).expect("canonical file")
+    );
+    assert_eq!(
+        std::fs::canonicalize(app.prefill_mcp_arg("list_directory", &path)).expect("dir path"),
+        std::fs::canonicalize(&dir).expect("canonical dir")
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn mcp_denying_trust_does_not_spawn_the_server() {
+    use std::collections::BTreeMap;
+
+    let (mut app, dir) = fixture("x\n");
+    let config = crate::mcp::McpServerConfig {
+        command: "definitely-not-a-real-mcp-server".to_string(),
+        ..Default::default()
+    };
+    app.state
+        .config
+        .mcp
+        .servers
+        .insert("blocked".to_string(), config.clone());
+    app.mcp = Some(crate::mcp::McpManager::new(
+        BTreeMap::from([("blocked".to_string(), config)]),
+        dir.clone(),
+    ));
+    app.dispatch(Command::Mcp).expect("mcp");
+    let InputMode::Prompt(prompt) = &mut app.state.mode else {
+        panic!("MCP menu missing")
+    };
+    prompt.select_candidate("blocked — trust required");
+    app.submit_prompt().expect("select");
+    let InputMode::Prompt(prompt) = &mut app.state.mode else {
+        panic!("trust prompt missing")
+    };
+    prompt.select_candidate("Cancel");
+    app.submit_prompt().expect("cancel trust");
+    assert!(!app.mcp.as_ref().expect("mcp").is_running("blocked"));
+    assert!(app.state.ui.message.contains("cancelled"));
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn mcp_trust_tools_call_and_result_flow() {
+    use crate::input::PromptKind;
+    use std::collections::BTreeMap;
+    use std::time::{Duration, Instant};
+
+    if std::process::Command::new("python3")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        eprintln!("skipping MCP flow: python3 unavailable");
+        return;
+    }
+    let (mut app, dir) = fixture("x\n");
+    let script = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+        .join("mock_mcp.py");
+    let config = crate::mcp::McpServerConfig {
+        command: "python3".to_string(),
+        args: vec![script.to_string_lossy().into_owned()],
+        cwd: None,
+        env: BTreeMap::from([("MOCK_MCP_MODE".to_string(), "normal".to_string())]),
+        url: None,
+        allow_sampling: false,
+        auth_token_env: None,
+        headers: BTreeMap::new(),
+    };
+    app.state
+        .config
+        .mcp
+        .servers
+        .insert("mock".to_string(), config.clone());
+    app.mcp = Some(crate::mcp::McpManager::new(
+        BTreeMap::from([("mock".to_string(), config)]),
+        dir.clone(),
+    ));
+
+    app.dispatch(Command::Mcp).expect("mcp");
+    let InputMode::Prompt(prompt) = &mut app.state.mode else {
+        panic!("MCP menu missing")
+    };
+    prompt.select_candidate("mock — trust required");
+    app.submit_prompt().expect("select server");
+    let InputMode::Prompt(prompt) = &mut app.state.mode else {
+        panic!("trust prompt missing")
+    };
+    assert_eq!(prompt.kind, PromptKind::McpTrust);
+    assert!(
+        !app.mcp.as_ref().expect("mcp").is_running("mock"),
+        "server must not start before trust"
+    );
+    let trust = prompt
+        .candidates
+        .iter()
+        .find(|candidate| candidate.starts_with("Trust and start"))
+        .cloned()
+        .expect("trust row");
+    prompt.select_candidate(&trust);
+    app.submit_prompt().expect("trust");
+
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while Instant::now() < deadline {
+        app.pump_mcp();
+        if let InputMode::Prompt(prompt) = &app.state.mode
+            && prompt.kind == PromptKind::McpTools
+            && !prompt.candidates.is_empty()
+        {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let InputMode::Prompt(prompt) = &mut app.state.mode else {
+        panic!("tools prompt missing")
+    };
+    assert_eq!(prompt.kind, PromptKind::McpTools);
+    let echo = prompt
+        .candidates
+        .iter()
+        .find(|candidate| candidate.starts_with("echo — "))
+        .cloned()
+        .expect("echo tool");
+    prompt.select_candidate(&echo);
+    app.submit_prompt().expect("select tool");
+    let InputMode::Prompt(prompt) = &mut app.state.mode else {
+        panic!("arguments prompt missing")
+    };
+    prompt.fields[0] = "hello".to_string();
+    prompt.cursor = prompt.fields[0].chars().count();
+    app.submit_prompt().expect("arguments");
+    let InputMode::Prompt(prompt) = &mut app.state.mode else {
+        panic!("confirm prompt missing")
+    };
+    assert_eq!(prompt.kind, PromptKind::McpConfirm);
+    prompt.select_candidate("Cancel");
+    app.submit_prompt().expect("cancel call");
+    assert!(app.state.ui.message.contains("cancelled"));
+    for _ in 0..10 {
+        app.pump_mcp();
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(
+        !app.mcp
+            .as_ref()
+            .expect("mcp")
+            .logs("mock")
+            .is_some_and(|logs| logs.iter().any(|line| line.contains("mock call echo"))),
+        "cancelled call must not reach the server"
+    );
+
+    app.dispatch(Command::Mcp).expect("mcp again");
+    let InputMode::Prompt(prompt) = &mut app.state.mode else {
+        panic!("MCP menu missing")
+    };
+    prompt.select_candidate("mock — trusted");
+    app.submit_prompt().expect("select trusted server");
+    let InputMode::Prompt(prompt) = &mut app.state.mode else {
+        panic!("tools prompt missing")
+    };
+    let echo = prompt
+        .candidates
+        .iter()
+        .find(|candidate| candidate.starts_with("echo — "))
+        .cloned()
+        .expect("echo tool");
+    prompt.select_candidate(&echo);
+    app.submit_prompt().expect("select tool again");
+    let InputMode::Prompt(prompt) = &mut app.state.mode else {
+        panic!("arguments prompt missing")
+    };
+    prompt.fields[0] = "hello".to_string();
+    prompt.cursor = prompt.fields[0].chars().count();
+    app.submit_prompt().expect("arguments again");
+    let InputMode::Prompt(prompt) = &mut app.state.mode else {
+        panic!("confirm prompt missing")
+    };
+    prompt.select_candidate("Call tool");
+    app.submit_prompt().expect("call");
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while Instant::now() < deadline && app.state.mcp_view.is_none() {
+        app.pump_mcp();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let view = app.state.mcp_view.as_ref().expect("result overlay");
+    assert!(
+        view.lines.iter().any(|line| line.contains("hello")),
+        "{:?}",
+        view.lines
+    );
+    assert_eq!(text(&app), "x\n", "MCP result must not edit the buffer");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn ctrl_c_cancels_an_active_prompt() {
+    use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    let (mut app, dir) = fixture("x\n");
+    app.dispatch(Command::FindPrompt).expect("find");
+    assert!(app.state.mode.is_prompt());
+    app.handle_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
+    assert!(!app.state.mode.is_prompt(), "ctrl+c must close the prompt");
+    assert_eq!(text(&app), "x\n", "ctrl+c must not edit the document");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn debug_log_writes_the_resolved_keymap() {
+    let dir = std::env::temp_dir().join(format!("i3-keymap-log-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("dir");
+    let config = dir.join("config.toml");
+    crate::app::log_keymap(Some(&config), &crate::input::KeyMap::preset(false), false);
+    let log = std::fs::read_to_string(dir.join("keymap.log")).expect("log");
+    assert!(log.contains("keyboard_enhancement: false"), "{log}");
+    assert!(log.contains("Ctrl+Q -> quit"), "{log}");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn saving_after_an_external_change_asks_and_can_reload() {
+    let (mut app, dir) = fixture("one\n");
+    let path = app
+        .state
+        .active_document()
+        .and_then(|document| document.path.clone())
+        .expect("path");
+    app.dispatch(Command::InsertText("two".to_string()))
+        .expect("type");
+    std::fs::write(&path, "outside change\n").expect("external write");
+
+    app.dispatch(Command::Save).expect("save");
+    let InputMode::Prompt(prompt) = &app.state.mode else {
+        panic!("external-change prompt missing")
+    };
+    assert_eq!(prompt.kind, crate::input::PromptKind::ExternalChange);
+    assert_eq!(
+        std::fs::read_to_string(&path).expect("read"),
+        "outside change\n",
+        "save must not run before the choice"
+    );
+
+    if let InputMode::Prompt(prompt) = &mut app.state.mode {
+        prompt.move_selection(1);
+    }
+    app.submit_prompt().expect("reload");
+    assert!(!app.state.mode.is_prompt());
+    assert_eq!(text(&app), "outside change\n");
+    assert!(!app.state.active_document().expect("doc").dirty);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn overwrite_after_an_external_change_writes_the_buffer() {
+    let (mut app, dir) = fixture("one\n");
+    let path = app
+        .state
+        .active_document()
+        .and_then(|document| document.path.clone())
+        .expect("path");
+    app.dispatch(Command::InsertText("two".to_string()))
+        .expect("type");
+    std::fs::write(&path, "outside\n").expect("external write");
+
+    app.dispatch(Command::Save).expect("save");
+    assert!(app.state.mode.is_prompt(), "prompt expected");
+    app.submit_prompt().expect("overwrite");
+    assert_eq!(std::fs::read_to_string(&path).expect("read"), "twoone\n");
+    assert!(!app.state.active_document().expect("doc").dirty);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn quick_open_index_tracks_watcher_paths_without_a_rescan() {
+    use crate::app::QuickOpenIndex;
+
+    let (mut app, dir) = fixture("x\n");
+    let workspace = app.state.workspaces.active().id;
+    app.watchers = vec![(
+        workspace,
+        crate::watch::Watcher::new(&dir, None).expect("watch"),
+    )];
+    app.quick_open_candidates();
+
+    let root = dir.canonicalize().expect("canonical root");
+    let nested = root.join("nested");
+    std::fs::create_dir_all(&nested).expect("nested");
+    let deep = nested.join("deep.txt");
+    std::fs::write(&deep, "x\n").expect("deep");
+    app.update_quick_open(std::slice::from_ref(&deep));
+    let files = app.quick_open_candidates();
+    assert!(files.contains(&"nested/deep.txt".to_string()), "{files:?}");
+
+    std::fs::remove_file(&deep).expect("remove");
+    app.update_quick_open(std::slice::from_ref(&deep));
+    let files = app.quick_open_candidates();
+    assert!(!files.contains(&"nested/deep.txt".to_string()), "{files:?}");
+
+    // Backends that report only the changed directory still reconcile it.
+    let root_file = root.join("root.txt");
+    std::fs::write(&root_file, "x\n").expect("root file");
+    app.update_quick_open(std::slice::from_ref(&root));
+    let files = app.quick_open_candidates();
+    assert!(files.contains(&"root.txt".to_string()), "{files:?}");
+    std::fs::remove_file(&root_file).expect("remove root file");
+    app.update_quick_open(std::slice::from_ref(&root));
+    let files = app.quick_open_candidates();
+    assert!(!files.contains(&"root.txt".to_string()), "{files:?}");
+
+    // Ignored directories never enter the list.
+    std::fs::write(root.join(".gitignore"), "target/\n").expect("ignore");
+    std::fs::create_dir_all(root.join("target")).expect("target");
+    let built = root.join("target/out.bin");
+    std::fs::write(&built, "x").expect("built");
+    app.state.explorer.refresh();
+    app.update_quick_open(std::slice::from_ref(&built));
+    let files = app.quick_open_candidates();
+    assert!(!files.contains(&"target/out.bin".to_string()), "{files:?}");
+
+    // The cache survives an explorer revision change; only events edit it.
+    app.quick_open_files = Some(QuickOpenIndex {
+        files: vec!["kept.txt".to_string()],
+        truncated: false,
+    });
+    app.state.explorer.rebuild();
+    assert_eq!(app.quick_open_candidates(), vec!["kept.txt".to_string()]);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn quick_open_scan_reports_truncation() {
+    let (app, dir) = fixture("x\n");
+    std::fs::write(dir.join("a.txt"), "a\n").expect("a");
+    std::fs::write(dir.join("b.txt"), "b\n").expect("b");
+    let (files, truncated) = app.scan_quick_open_limit(2);
+    assert_eq!(files.len(), 2);
+    assert!(truncated);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn recursive_watcher_lists_files_in_unexpanded_directories() {
+    use std::time::{Duration, Instant};
+
+    let (mut app, dir) = fixture("x\n");
+    let workspace = app.state.workspaces.active().id;
+    app.watchers = vec![(
+        workspace,
+        crate::watch::Watcher::new(&dir, None).expect("watch"),
+    )];
+    app.quick_open_candidates();
+
+    let nested = dir.canonicalize().expect("canonical").join("nested");
+    std::fs::create_dir_all(&nested).expect("nested");
+    std::fs::write(nested.join("deep.txt"), "x\n").expect("deep");
+
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let mut listed = false;
+    while Instant::now() < deadline && !listed {
+        app.pump_watcher();
+        listed = app
+            .quick_open_candidates()
+            .iter()
+            .any(|file| file == "nested/deep.txt");
+        if !listed {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+    assert!(listed, "nested file never reached quick open");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn verify_tool_is_registered_only_when_configured_and_allowed() {
+    let (mut app, dir) = fixture("x\n");
+    let verify = crate::config::VerifyConfig {
+        command: "cargo".to_string(),
+        args: vec!["test".to_string()],
+        timeout_secs: 120,
+        sandbox: false,
+    };
+    app.state
+        .config
+        .ai
+        .verify
+        .insert("test".to_string(), verify);
+
+    let tools = app.ai_tool_definitions();
+    let definition = tools
+        .iter()
+        .find(|tool| tool["function"]["name"] == "native__verify")
+        .expect("verify tool");
+    assert_eq!(
+        definition["function"]["parameters"]["properties"]["name"]["enum"][0],
+        "test"
+    );
+
+    app.state
+        .config
+        .ai
+        .denied_tools
+        .push("native/verify".to_string());
+    assert!(
+        !app.ai_tool_definitions()
+            .iter()
+            .any(|tool| tool["function"]["name"] == "native__verify")
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn workspace_rules_are_injected_into_the_system_prompt_and_overlay() {
+    let (mut app, dir) = fixture("x\n");
+    std::fs::write(dir.join("AGENTS.md"), "Use tabs.\nPrefer small diffs.\n").expect("rules");
+    std::fs::write(dir.join("MEMORY.md"), "Remember the flaky test.\n").expect("memory");
+
+    let prompt = app.ai_system_prompt();
+    assert!(
+        prompt.contains("<workspace_rules source=\"AGENTS.md\">"),
+        "{prompt}"
+    );
+    assert!(prompt.contains("Prefer small diffs."), "{prompt}");
+    assert!(
+        prompt.contains("<workspace_memory source=\"MEMORY.md\">"),
+        "{prompt}"
+    );
+    assert!(prompt.contains("Remember the flaky test."), "{prompt}");
+
+    app.state.ai.conversation.push(serde_json::json!({
+        "role": "user",
+        "content": "hi",
+    }));
+    let messages = app.ai_request_messages();
+    assert_eq!(messages[0]["role"], "system");
+    assert!(
+        messages[0]["content"]
+            .as_str()
+            .is_some_and(|text| text.contains("Use tabs."))
+    );
+
+    app.dispatch(Command::AiRules).expect("rules overlay");
+    let view = app.state.rules_view.as_ref().expect("rules view");
+    assert!(view.lines.iter().any(|line| line.contains("AGENTS.md")));
+    assert!(view.lines.iter().any(|line| line == "Use tabs."));
+    assert!(view.lines.iter().any(|line| line.contains("MEMORY.md")));
+    assert!(
+        view.lines
+            .iter()
+            .any(|line| line == "Remember the flaky test.")
+    );
+
+    app.state.config.ai.workspace_rules = false;
+    app.state.config.ai.workspace_memory = false;
+    let prompt = app.ai_system_prompt();
+    assert!(!prompt.contains("Use tabs."), "{prompt}");
+    assert!(!prompt.contains("Remember the flaky test."), "{prompt}");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn large_files_open_read_only_and_refuse_edits_and_saves() {
+    let (mut app, dir) = fixture("x\n");
+    let path = dir.join("huge.log");
+    let file = std::fs::File::create(&path).expect("create");
+    file.set_len(17 << 20).expect("size");
+    drop(file);
+
+    app.open_document(path.clone()).expect("prompt");
+    {
+        let InputMode::Prompt(prompt) = &app.state.mode else {
+            panic!("large-file prompt missing");
+        };
+        assert_eq!(prompt.kind, crate::input::PromptKind::LargeFile);
+        assert!(prompt.candidates[0].starts_with("Open read-only"));
+    }
+    app.submit_prompt().expect("open");
+
+    let id = app.state.active_document_id().expect("doc");
+    assert!(app.state.documents[&id].read_only);
+    assert_eq!(app.state.documents[&id].len_chars(), 17 << 20);
+    let before = app.state.documents[&id].len_chars();
+    app.dispatch(Command::InsertText("x".to_string()))
+        .expect("refused insertion");
+    assert_eq!(app.state.documents[&id].len_chars(), before);
+    assert!(
+        app.state.ui.message.contains("read-only"),
+        "{}",
+        app.state.ui.message
+    );
+    let error = app.dispatch(Command::Save).expect_err("save refused");
+    assert!(error.to_string().contains("read-only"), "{error}");
+    app.dispatch(Command::GoToSymbol).expect("symbols refused");
+    assert!(!app.state.mode.is_prompt());
+    std::fs::remove_dir_all(&dir).ok();
+}
