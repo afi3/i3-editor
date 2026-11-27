@@ -16,8 +16,12 @@ impl App {
             return Ok(());
         };
         let max_chars = self.state.config.ai.semantic_max_chars.max(500);
-        let mut chunks = Vec::new();
+        let previous = crate::semantic::Index::load(&path).filter(|index| index.model == model);
+        let mut entries = Vec::new();
+        let mut hashes = std::collections::BTreeMap::new();
         let mut files = 0usize;
+        let mut reused = 0usize;
+        let mut embedded = 0usize;
         for document in self.state.documents.values() {
             if document.read_only {
                 continue;
@@ -26,46 +30,59 @@ impl App {
                 continue;
             };
             let text = document.rope().to_string();
-            let mut added = 0usize;
-            for chunk in crate::semantic::chunk(file, &text, 40) {
-                if chunk.text.chars().count() > max_chars {
-                    continue;
-                }
-                chunks.push(chunk);
-                added += 1;
-            }
-            if added > 0 {
+            let hash = hash_text(&text);
+            hashes.insert(file.clone(), hash.clone());
+            if let Some(previous) = &previous
+                && previous.files.get(file) == Some(&hash)
+            {
+                entries.extend(
+                    previous
+                        .entries
+                        .iter()
+                        .filter(|entry| &entry.chunk.path == file)
+                        .cloned(),
+                );
                 files += 1;
+                reused += 1;
+                continue;
             }
+            let chunks: Vec<crate::semantic::Chunk> = crate::semantic::chunk(file, &text, 40)
+                .into_iter()
+                .filter(|chunk| chunk.text.chars().count() <= max_chars)
+                .collect();
+            if chunks.is_empty() {
+                continue;
+            }
+            for batch in chunks.chunks(16) {
+                let inputs: Vec<String> = batch.iter().map(|chunk| chunk.text.clone()).collect();
+                let vectors = match crate::ai::embed(&self.state.config.ai, &model, &inputs) {
+                    Ok(vectors) => vectors,
+                    Err(error) => {
+                        self.notify(format!("semantic index failed: {error}"));
+                        return Ok(());
+                    }
+                };
+                embedded += batch.len();
+                for (chunk, vector) in batch.iter().zip(vectors) {
+                    entries.push(crate::semantic::Entry {
+                        chunk: chunk.clone(),
+                        vector,
+                    });
+                }
+            }
+            files += 1;
         }
-        if chunks.is_empty() {
+        if entries.is_empty() {
             self.notify("open a file to index");
             return Ok(());
         }
 
-        let mut entries = Vec::new();
-        for batch in chunks.chunks(16) {
-            let inputs: Vec<String> = batch.iter().map(|chunk| chunk.text.clone()).collect();
-            let vectors = match crate::ai::embed(&self.state.config.ai, &model, &inputs) {
-                Ok(vectors) => vectors,
-                Err(error) => {
-                    self.notify(format!("semantic index failed: {error}"));
-                    return Ok(());
-                }
-            };
-            for (chunk, vector) in batch.iter().zip(vectors) {
-                entries.push(crate::semantic::Entry {
-                    chunk: chunk.clone(),
-                    vector,
-                });
-            }
-        }
-
         let mut index = crate::semantic::Index::empty(model.clone());
         index.entries = entries;
+        index.files = hashes;
         match index.save(&path) {
             Ok(()) => self.notify(format!(
-                "semantic index: {} chunks from {files} file(s) with {model}",
+                "semantic index: {} chunks from {files} file(s), {embedded} embedded, {reused} reused",
                 index.entries.len()
             )),
             Err(error) => self.notify(format!("semantic index not saved: {error}")),
@@ -155,4 +172,10 @@ impl App {
         }
         attached
     }
+}
+
+fn hash_text(text: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(text.as_bytes());
+    digest.iter().map(|byte| format!("{byte:02x}")).collect()
 }

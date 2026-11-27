@@ -12,7 +12,22 @@ pub const VERSION: u32 = 1;
 
 /// `<config>/i3-editor/semantic_index.json`.
 pub fn default_path() -> Option<PathBuf> {
+    #[cfg(test)]
+    if let Ok(override_path) = TEST_PATH.lock()
+        && let Some(path) = override_path.as_ref()
+    {
+        return Some(path.clone());
+    }
     crate::config::config_dir().map(|dir| dir.join("semantic_index.json"))
+}
+
+#[cfg(test)]
+static TEST_PATH: std::sync::Mutex<Option<PathBuf>> = std::sync::Mutex::new(None);
+
+/// Point the index at `path` for one test, or back at the real location.
+#[cfg(test)]
+pub(crate) fn use_path_for_test(path: Option<PathBuf>) {
+    *TEST_PATH.lock().expect("semantic path override") = path;
 }
 
 /// One line-aligned slice of a file, `start_line` 0-based and inclusive.
@@ -38,6 +53,9 @@ pub struct Index {
     /// Embedding model the vectors came from; mixing models is meaningless.
     pub model: String,
     pub entries: Vec<Entry>,
+    /// sha256 of each file's text, so a rebuild skips unchanged files.
+    #[serde(default)]
+    pub files: std::collections::BTreeMap<PathBuf, String>,
 }
 
 impl Index {
@@ -46,6 +64,7 @@ impl Index {
             version: VERSION,
             model: model.into(),
             entries: Vec::new(),
+            files: std::collections::BTreeMap::new(),
         }
     }
 

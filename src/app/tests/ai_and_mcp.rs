@@ -450,6 +450,7 @@ Connection: close
     app.state.config.ai = crate::ai::test_config(format!("http://{address}/v1"));
     app.state.config.ai.api_key = "test-key".to_string();
     app.state.config.ai.embedding_model = "mock-embed".to_string();
+    crate::semantic::use_path_for_test(Some(dir.join("semantic_index.json")));
     crate::logging::use_path_for_test(Some(dir.join("log.jsonl")));
     app.dispatch(Command::AiSemanticIndex).expect("index");
     app.dispatch(Command::AiSemanticStatus).expect("status");
@@ -459,6 +460,144 @@ Connection: close
         app.state.ui.message
     );
     crate::logging::use_path_for_test(None);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn an_unchanged_file_is_embedded_only_once() {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
+    let address = listener.local_addr().expect("address");
+    // Exactly one embedding request is served; a second one would be refused,
+    // which is how the test proves the rebuild skipped the file.
+    std::thread::spawn(move || {
+        let Ok((mut stream, _)) = listener.accept() else {
+            return;
+        };
+        let mut request = [0u8; 16384];
+        let _ = stream.read(&mut request);
+        let body = r#"{"data":[{"index":0,"embedding":[1,0]}]}"#;
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        let _ = stream.write_all(response.as_bytes());
+    });
+
+    let (mut app, dir) = fixture("x\n");
+    app.state.config.ai = crate::ai::test_config(format!("http://{address}/v1"));
+    app.state.config.ai.api_key = "test-key".to_string();
+    app.state.config.ai.embedding_model = "mock-embed".to_string();
+    let index_path = dir.join("semantic_index.json");
+    crate::semantic::use_path_for_test(Some(index_path.clone()));
+
+    app.dispatch(Command::AiSemanticIndex).expect("first build");
+    assert!(
+        app.state.ui.message.contains("1 embedded"),
+        "{}",
+        app.state.ui.message
+    );
+
+    app.dispatch(Command::AiSemanticIndex)
+        .expect("second build");
+    assert!(
+        app.state.ui.message.contains("1 reused"),
+        "{}",
+        app.state.ui.message
+    );
+    assert!(
+        !app.state.ui.message.contains("failed"),
+        "the rebuild must not embed again: {}",
+        app.state.ui.message
+    );
+    let index = crate::semantic::Index::load(&index_path).expect("index");
+    assert_eq!(index.entries.len(), 1);
+    assert_eq!(index.files.len(), 1);
+
+    crate::semantic::use_path_for_test(None);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn semantic_memory_attaches_the_closest_chunk() {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::time::{Duration, Instant};
+
+    let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
+    let address = listener.local_addr().expect("address");
+    std::thread::spawn(move || {
+        for body in [
+            r#"{"data":[{"index":0,"embedding":[1,0]}]}"#,
+            r#"{"choices":[{"message":{"role":"assistant","content":"ok"}}]}"#,
+        ] {
+            let Ok((mut stream, _)) = listener.accept() else {
+                return;
+            };
+            let mut request = [0u8; 16384];
+            let _ = stream.read(&mut request);
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            let _ = stream.write_all(response.as_bytes());
+        }
+    });
+
+    let (mut app, dir) = fixture("x\n");
+    app.state.config.ai = crate::ai::test_config(format!("http://{address}/v1"));
+    app.state.config.ai.api_key = "test-key".to_string();
+    app.state.config.ai.embedding_model = "mock-embed".to_string();
+    app.state.config.ai.semantic_memory = true;
+    app.state.config.ai.semantic_top_k = 1;
+    let index_path = dir.join("semantic_index.json");
+    crate::semantic::use_path_for_test(Some(index_path.clone()));
+    let mut index = crate::semantic::Index::empty("mock-embed");
+    index.entries.push(crate::semantic::Entry {
+        chunk: crate::semantic::Chunk {
+            path: dir.join("note.txt"),
+            start_line: 0,
+            end_line: 1,
+            text: "the needle".to_string(),
+        },
+        vector: vec![1.0, 0.0],
+    });
+    index.save(&index_path).expect("seed");
+
+    app.dispatch(Command::AiChat).expect("panel");
+    app.state.ai.input = "where is the needle".to_string();
+    app.state.ai.cursor = app.state.ai.input.chars().count();
+    app.handle_key(ratatui::crossterm::event::KeyEvent::new(
+        ratatui::crossterm::event::KeyCode::Enter,
+        ratatui::crossterm::event::KeyModifiers::NONE,
+    ));
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while Instant::now() < deadline {
+        app.pump_ai();
+        if app
+            .state
+            .ai
+            .entries
+            .iter()
+            .any(|line| line.contains("(semantic)"))
+        {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(
+        app.state
+            .ai
+            .entries
+            .iter()
+            .any(|line| line.contains("(semantic)")),
+        "{:?}",
+        app.state.ai.entries
+    );
+
+    crate::semantic::use_path_for_test(None);
     std::fs::remove_dir_all(&dir).ok();
 }
 

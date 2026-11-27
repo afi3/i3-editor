@@ -864,14 +864,12 @@ impl App {
     }
 
     fn auto_ai_context(&mut self, query: &str) -> Vec<crate::state::AiAttachment> {
-        let Some(index) = crate::context_index::load() else {
-            return Vec::new();
-        };
-        let selected =
-            crate::context_index::select(&index, query, self.state.config.ai.auto_context_files);
         let mut attached = Vec::new();
         let mut used = 0usize;
-        for entry in selected {
+        let selected = crate::context_index::load().map(|index| {
+            crate::context_index::select(&index, query, self.state.config.ai.auto_context_files)
+        });
+        for entry in selected.into_iter().flatten() {
             let remaining = self.state.config.ai.auto_context_chars.saturating_sub(used);
             if remaining == 0 {
                 break;
@@ -922,7 +920,9 @@ impl App {
         if question.is_empty() && attachments.is_empty() {
             return;
         }
-        let auto = if attachments.is_empty() && self.state.config.ai.auto_context {
+        let auto = if attachments.is_empty()
+            && (self.state.config.ai.auto_context || self.state.config.ai.semantic_memory)
+        {
             self.auto_ai_context(&question)
         } else {
             Vec::new()
