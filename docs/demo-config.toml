@@ -1,0 +1,6 @@
+# Demo recording (see docs/demo.tape in the repository).
+# Ctrl bindings stand in for the function keys this VHS release cannot send:
+# F1 palette -> Ctrl+E, F3 split -> Ctrl+B.
+[keys.global]
+command_palette = "ctrl+e"
+split_left_right = "ctrl+b"
