@@ -97,12 +97,15 @@ pub fn log(binary: &str, repo: &Path, limit: usize) -> Result<Vec<String>, Strin
 }
 
 /// Cheap check for a `.git` entry above `root`, so a non-repository workspace
-/// does not spawn a marker worker every second. `GIT_DIR` counts because the
-/// worker discovers the real repository itself.
+/// does not spawn a marker worker every second.
 pub fn has_repo(root: &Path) -> bool {
-    if std::env::var_os("GIT_DIR").is_some() {
+    if ancestor_has_git(root) {
         return true;
     }
+    env_repo(root, std::env::var_os("GIT_DIR").as_deref())
+}
+
+fn ancestor_has_git(root: &Path) -> bool {
     let mut current = Some(root);
     while let Some(dir) = current {
         if dir.join(".git").exists() {
@@ -111,6 +114,22 @@ pub fn has_repo(root: &Path) -> bool {
         current = dir.parent();
     }
     false
+}
+
+/// A repository reached only through `GIT_DIR` still counts, but only when the
+/// path it names holds `HEAD`. Trusting the variable alone made every workspace
+/// spawn a marker worker for the whole session.
+fn env_repo(root: &Path, value: Option<&std::ffi::OsStr>) -> bool {
+    let Some(value) = value else {
+        return false;
+    };
+    let dir = PathBuf::from(value);
+    let dir = if dir.is_absolute() {
+        dir
+    } else {
+        root.join(dir)
+    };
+    dir.join("HEAD").is_file()
 }
 
 /// Per-line markers for every requested path in two `git` invocations: one
@@ -809,6 +828,31 @@ mod tests {
             error.contains("nothing") || error.contains("Changes"),
             "{error}"
         );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_git_dir_env_only_counts_when_it_holds_head() {
+        use std::ffi::OsStr;
+
+        let dir = repo("env-git");
+        assert!(env_repo(&dir, Some(OsStr::new(".git"))), "relative GIT_DIR");
+        assert!(
+            env_repo(&dir, Some(dir.join(".git").as_os_str())),
+            "absolute GIT_DIR"
+        );
+        assert!(!env_repo(&dir, Some(OsStr::new("missing"))));
+        assert!(!env_repo(&dir, None));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn an_empty_directory_is_not_a_repository() {
+        let dir = std::env::temp_dir().join(format!("i3-git-empty-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("dir");
+        assert!(!has_repo(&dir));
+        assert!(has_repo(&repo("marked")));
         std::fs::remove_dir_all(&dir).ok();
     }
 }
