@@ -294,6 +294,8 @@ impl App {
         }
         lines.push(String::new());
         lines.push("Esc or q closes this overlay".to_string());
+        self.state.rules_view = None;
+        self.state.trace_view = None;
         self.state.mcp_view = Some(HelpView { lines, scroll: 0 });
     }
 
@@ -490,6 +492,8 @@ impl App {
             String::new(),
             "Esc or q closes this overlay".to_string(),
         ];
+        self.state.rules_view = None;
+        self.state.trace_view = None;
         self.state.mcp_view = Some(HelpView { lines, scroll: 0 });
     }
 
@@ -502,6 +506,8 @@ impl App {
             String::new(),
             "Esc or q closes this overlay".to_string(),
         ];
+        self.state.rules_view = None;
+        self.state.trace_view = None;
         self.state.mcp_view = Some(HelpView { lines, scroll: 0 });
     }
 
@@ -984,6 +990,8 @@ impl App {
                 lines
             })
             .unwrap_or_else(|| vec![format!("MCP logs: {server}"), "no logs".to_string()]);
+        self.state.rules_view = None;
+        self.state.trace_view = None;
         self.state.mcp_view = Some(HelpView { lines, scroll: 0 });
         self.state.completions = None;
         self.state.hover = None;
@@ -1014,6 +1022,8 @@ impl App {
                 }
             }
         }
+        self.state.rules_view = None;
+        self.state.trace_view = None;
         self.state.mcp_view = Some(HelpView { lines, scroll: 0 });
         self.state.completions = None;
         self.state.hover = None;

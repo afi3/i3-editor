@@ -699,11 +699,13 @@ impl App {
     }
 
     fn handle_read_only_overlay_key(&mut self, combo: KeyCombo) -> bool {
-        self.handle_mcp_key(combo)
+        // Reverse draw order: the overlay on top must get the key first, or a
+        // hidden panel behind it swallows Escape and typed characters.
+        self.handle_trace_key(combo)
+            || self.handle_rules_key(combo)
+            || self.handle_mcp_key(combo)
             || self.handle_ai_key(combo)
             || self.handle_help_key(combo)
-            || self.handle_rules_key(combo)
-            || self.handle_trace_key(combo)
             || self.handle_hunk_key(combo)
             || self.handle_diff_key(combo)
     }

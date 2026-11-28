@@ -962,6 +962,28 @@ fn renaming_an_open_file_moves_the_buffer_with_it() {
 }
 
 #[test]
+fn cancelling_a_recovery_conflict_prompt_moves_to_the_next_buffer() {
+    let (mut app, dir) = fixture("one\n");
+    let first = app.state.active_document().expect("doc").id;
+    app.dispatch(Command::NewScratch).expect("second buffer");
+    let second = app.state.active_document().expect("doc").id;
+    app.recoveries = vec![first, second];
+
+    let mut prompt =
+        crate::input::prompt::PromptState::new(crate::input::PromptKind::ExternalChange);
+    prompt.document = Some(first);
+    app.state.mode = InputMode::Prompt(prompt);
+
+    app.cancel_prompt();
+    let InputMode::Prompt(prompt) = &app.state.mode else {
+        panic!("the recovery queue must continue")
+    };
+    assert_eq!(prompt.kind, crate::input::PromptKind::Recovery);
+    assert_eq!(prompt.document, Some(second));
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn renaming_a_buffer_keeps_its_external_change_flag() {
     let (mut app, dir) = fixture("one\n");
     std::fs::write(dir.join("note.txt"), "changed by another program\n").expect("external edit");

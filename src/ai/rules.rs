@@ -70,8 +70,9 @@ fn read(path: &Path) -> WorkspaceRules {
     }
     let text = match std::str::from_utf8(&bytes) {
         Ok(text) => text,
-        Err(error) if truncated => {
-            // A truncated multibyte character is expected at the cap.
+        Err(error) if truncated && error.error_len().is_none() => {
+            // Only a multibyte character split by the cap is expected; a bad
+            // byte in the middle of the file still deserves the warning.
             std::str::from_utf8(&bytes[..error.valid_up_to()]).unwrap_or("")
         }
         Err(_) => {
@@ -100,6 +101,25 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
         std::fs::create_dir_all(&dir).expect("dir");
         dir
+    }
+
+    #[test]
+    fn a_bad_byte_inside_a_large_file_still_warns() {
+        let dir = temp_dir("bad-byte");
+        let mut bytes = vec![b'a'; 32 * 1024];
+        bytes[100] = 0xff;
+        std::fs::write(dir.join("AGENTS.md"), bytes).expect("write");
+        let rules = load(&dir);
+        assert!(
+            rules
+                .warning
+                .as_deref()
+                .is_some_and(|warning| warning.contains("UTF-8")),
+            "{:?}",
+            rules.warning
+        );
+        assert!(rules.text.is_empty());
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

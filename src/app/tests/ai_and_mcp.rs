@@ -335,6 +335,23 @@ fn embeddings_come_back_in_input_order() {
 }
 
 #[test]
+fn the_rules_overlay_takes_keys_before_the_ai_panel_under_it() {
+    use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    let (mut app, dir) = fixture("x\n");
+    app.dispatch(Command::AiChat).expect("ai panel");
+    app.state.ai.focused = true;
+    app.dispatch(Command::AiRules).expect("rules");
+    assert!(app.state.rules_view.is_some(), "overlay is open");
+    app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    assert!(
+        app.state.rules_view.is_none(),
+        "Escape must close the overlay on screen, not the panel behind it"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn blocked_calls_and_model_requests_reach_the_log_file() {
     let (app, dir) = fixture("x\n");
     let log = dir.join("log.jsonl");

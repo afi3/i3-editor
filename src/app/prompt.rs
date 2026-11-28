@@ -223,6 +223,21 @@ impl App {
             return;
         }
         if let InputMode::Prompt(prompt) = &self.state.mode
+            && prompt.kind == PromptKind::ExternalChange
+        {
+            // The recovery prompt handed over to this one; cancelling must move
+            // on to the next recovered buffer instead of stranding the queue.
+            let id = prompt.document;
+            self.state.mode = InputMode::Normal;
+            if let Some(id) = id
+                && self.recoveries.contains(&id)
+            {
+                self.recoveries.retain(|recovered| *recovered != id);
+                self.begin_recovery_prompt();
+            }
+            return;
+        }
+        if let InputMode::Prompt(prompt) = &self.state.mode
             && prompt.kind == PromptKind::Recovery
         {
             let id = prompt.document;
