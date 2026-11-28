@@ -7,7 +7,7 @@ use crate::explorer::ExplorerState;
 use crate::input::KeyMap;
 use crate::state::{AppState, Focus, Ids, InputMode, Pane};
 use crate::ui;
-use crate::workspace::{SplitAxis, Workspace, WorkspaceManager};
+use crate::workspace::{Workspace, WorkspaceManager};
 
 use super::App;
 

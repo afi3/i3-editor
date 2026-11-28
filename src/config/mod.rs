@@ -1248,7 +1248,7 @@ mod tests {
 }
 
 pub fn persist_theme_at(path: &Path, name: &str) -> std::io::Result<()> {
-    let existing = std::fs::read_to_string(path).unwrap_or_default();
+    let existing = read_for_update(path)?;
     let updated = set_theme_value(&existing, name);
     write_private(path, &updated)
 }
@@ -1256,9 +1256,20 @@ pub fn persist_theme_at(path: &Path, name: &str) -> std::io::Result<()> {
 /// Record the selected AI provider in the `[ai]` table, leaving the rest of the
 /// file (comments, ordering) intact. Owner-only, because the file may hold a key.
 pub fn persist_active_provider_at(path: &Path, name: &str) -> std::io::Result<()> {
-    let existing = std::fs::read_to_string(path).unwrap_or_default();
+    let existing = read_for_update(path)?;
     let updated = set_active_provider(&existing, name);
     write_private(path, &updated)
+}
+
+/// Read a config file for an in-place edit. Only a missing file is empty: any
+/// other read error must abort the write, or the rename would replace a file
+/// the editor could not read with a two-line stub.
+fn read_for_update(path: &Path) -> std::io::Result<String> {
+    match std::fs::read_to_string(path) {
+        Ok(text) => Ok(text),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+        Err(error) => Err(error),
+    }
 }
 
 fn set_active_provider(text: &str, name: &str) -> String {

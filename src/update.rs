@@ -542,10 +542,12 @@ mod tests {
         std::fs::create_dir_all(&dir).expect("dir");
         let path = dir.join("asset.sha256");
         let hex = "a".repeat(64);
-        std::fs::write(&path, format!("{hex}  asset.tar.gz\\n")).expect("write");
+        std::fs::write(&path, format!("{hex}  asset.tar.gz\n")).expect("write");
         assert_eq!(read_checksum(&path).expect("checksum"), hex);
+        std::fs::write(&path, format!("{hex} *asset.tar.gz\r\n")).expect("write");
+        assert_eq!(read_checksum(&path).expect("binary-mode checksum"), hex);
 
-        std::fs::write(&path, "not-a-checksum  asset.tar.gz\\n").expect("write");
+        std::fs::write(&path, "not-a-checksum  asset.tar.gz\n").expect("write");
         assert!(read_checksum(&path).is_err());
         std::fs::remove_dir_all(&dir).ok();
     }

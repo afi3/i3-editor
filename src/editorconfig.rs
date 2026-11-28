@@ -162,15 +162,24 @@ mod tests {
 
     #[test]
     fn a_section_with_a_broken_glob_applies_to_nothing() {
-        let settings = parse("[*.{rs,ts]\nindent_size = 8\n\n[*.md]\nindent_size = 2\n");
-        let caps = settings
-            .iter()
-            .find(|section| section.props.indent_size.is_some())
-            .expect("section");
-        assert!(
-            caps.matcher.is_none() || !caps.matcher.as_ref().expect("matcher").is_match("a.rs"),
-            "the unbuildable section must not match"
+        let dir = temp_dir("broken-glob");
+        std::fs::write(
+            dir.join(".editorconfig"),
+            "[*.{rs,ts]\nindent_size = 8\n\n[*.md]\nindent_size = 2\n",
+        )
+        .expect("write");
+        let base = IndentSettings::default();
+        assert_eq!(
+            resolve(&dir, &dir.join("a.rs"), base),
+            base,
+            "a malformed glob must not apply to every file"
         );
+        assert_eq!(
+            resolve(&dir, &dir.join("a.md"), base).tab_width,
+            2,
+            "a valid section after the broken one still applies"
+        );
+        std::fs::remove_dir_all(&dir).ok();
     }
     use std::path::PathBuf;
 

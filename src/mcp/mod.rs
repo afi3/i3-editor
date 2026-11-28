@@ -903,8 +903,23 @@ impl McpManager {
                 next.is_none() || server.resource_pages >= 100
             };
             if !complete {
-                if let Some(cursor) = next {
-                    let _ = self.list_resources_page(name, &cursor);
+                if let Some(cursor) = next
+                    && let Err(error) = self.list_resources_page(name, &cursor)
+                {
+                    // The pages already fetched are still worth showing.
+                    let resources = self
+                        .servers
+                        .get(name)
+                        .map(|server| server.resources.clone())
+                        .unwrap_or_default();
+                    events.push(Event::Failure {
+                        server: name.to_string(),
+                        message: format!("resource list truncated: {error}"),
+                    });
+                    events.push(Event::Resources {
+                        server: name.to_string(),
+                        resources,
+                    });
                 }
                 return;
             }
@@ -945,8 +960,22 @@ impl McpManager {
                 next.is_none() || server.prompt_pages >= 100
             };
             if !complete {
-                if let Some(cursor) = next {
-                    let _ = self.list_prompts_page(name, &cursor);
+                if let Some(cursor) = next
+                    && let Err(error) = self.list_prompts_page(name, &cursor)
+                {
+                    let prompts = self
+                        .servers
+                        .get(name)
+                        .map(|server| server.prompts.clone())
+                        .unwrap_or_default();
+                    events.push(Event::Failure {
+                        server: name.to_string(),
+                        message: format!("prompt list truncated: {error}"),
+                    });
+                    events.push(Event::Prompts {
+                        server: name.to_string(),
+                        prompts,
+                    });
                 }
                 return;
             }

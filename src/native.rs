@@ -271,17 +271,32 @@ impl CheckTask {
         let (sender, receiver) = mpsc::channel();
         let cancel = Arc::new(AtomicBool::new(false));
         let flag = Arc::clone(&cancel);
-        let _ = std::thread::Builder::new()
+        let fallback = sender.clone();
+        if let Err(error) = std::thread::Builder::new()
             .name("i3-cargo-check".to_string())
             .spawn(move || {
                 let result = run_cargo_check(&root, timeout, &flag);
                 let _ = sender.send(result);
+            })
+        {
+            let _ = fallback.send(CheckResult {
+                success: false,
+                output: format!("cargo check worker could not start: {error}"),
             });
+        }
         Self { receiver, cancel }
     }
 
     pub fn try_recv(&self) -> Option<CheckResult> {
-        self.receiver.try_recv().ok()
+        match self.receiver.try_recv() {
+            Ok(result) => Some(result),
+            Err(mpsc::TryRecvError::Empty) => None,
+            // A panicking worker must end the tool call, not leave it pending.
+            Err(mpsc::TryRecvError::Disconnected) => Some(CheckResult {
+                success: false,
+                output: "cargo check worker stopped".to_string(),
+            }),
+        }
     }
 
     pub fn cancel(&self) {
@@ -311,17 +326,32 @@ impl VerifyTask {
         let (sender, receiver) = mpsc::channel();
         let cancel = Arc::new(AtomicBool::new(false));
         let flag = Arc::clone(&cancel);
-        let _ = std::thread::Builder::new()
+        let fallback = sender.clone();
+        if let Err(error) = std::thread::Builder::new()
             .name("i3-ai-verify".to_string())
             .spawn(move || {
                 let result = run_verify(&root, &name, &spec, max_chars, &flag);
                 let _ = sender.send(result);
+            })
+        {
+            let _ = fallback.send(VerifyResult {
+                success: false,
+                output: format!("verify worker could not start: {error}"),
             });
+        }
         Self { receiver, cancel }
     }
 
     pub fn try_recv(&self) -> Option<VerifyResult> {
-        self.receiver.try_recv().ok()
+        match self.receiver.try_recv() {
+            Ok(result) => Some(result),
+            Err(mpsc::TryRecvError::Empty) => None,
+            // Mirrors the AI one-shot task: a dead worker is a finished call.
+            Err(mpsc::TryRecvError::Disconnected) => Some(VerifyResult {
+                success: false,
+                output: "verify worker stopped".to_string(),
+            }),
+        }
     }
 
     pub fn cancel(&self) {

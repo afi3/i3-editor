@@ -697,11 +697,14 @@ mod tests {
     #[test]
     fn stays_inside_a_tiny_terminal() {
         let (mut state, dir) = state("x\n");
-        let _screen = draw(&mut state, 20, 6);
+        let screen = draw(&mut state, 20, 6);
+        assert_eq!(state.ui.pane_rects.len(), 1, "the pane must survive");
         for rect in state.ui.pane_rects.values() {
+            assert!(rect.width > 0 && rect.height > 0, "{rect:?}");
             assert!(rect.x + rect.width <= 20);
             assert!(rect.y + rect.height <= 6);
         }
+        assert!(screen.contains('x'), "{screen}");
         std::fs::remove_dir_all(&dir).ok();
     }
 

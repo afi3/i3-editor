@@ -797,12 +797,20 @@ fn replace_all_changes_every_occurrence() {
 #[test]
 fn min_size_rejects_a_split_that_cannot_fit() {
     let (mut app, dir) = fixture("x\n");
-    ui::compute_layout(&mut app.state, ratatui::layout::Rect::new(0, 0, 22, 10));
-    for _ in 0..3 {
-        let _ = app.dispatch(Command::SplitLeftRight);
-    }
+    // 30 columns leave room for two minimum panes beside the explorer.
+    ui::compute_layout(&mut app.state, ratatui::layout::Rect::new(0, 0, 30, 12));
+    app.dispatch(Command::SplitLeftRight)
+        .expect("two minimum panes fit in 30 columns");
+    let refused = app.dispatch(Command::SplitLeftRight);
+    assert!(
+        refused.is_err(),
+        "a third pane cannot fit in 30 columns: {:?}",
+        app.state.panes.len()
+    );
+    ui::compute_layout(&mut app.state, ratatui::layout::Rect::new(0, 0, 30, 12));
     for rect in app.state.ui.pane_rects.values() {
-        assert!(rect.width >= crate::workspace::MIN_PANE_COLS || rect.width == 0);
+        assert!(rect.width >= crate::workspace::MIN_PANE_COLS, "{rect:?}");
+        assert!(rect.height >= crate::workspace::MIN_PANE_ROWS, "{rect:?}");
     }
     std::fs::remove_dir_all(&dir).ok();
 }

@@ -324,7 +324,7 @@ impl App {
         if self.background_agent {
             self.objective_queue = false;
             self.objectives.queue_active = false;
-            let _ = crate::objectives::save(&self.objectives);
+            self.save_objectives();
             self.finish_objective("blocked");
         }
         self.background_agent = false;
@@ -531,7 +531,7 @@ impl App {
             return;
         }
         self.objectives.add(text.trim().to_string());
-        let _ = crate::objectives::save(&self.objectives);
+        self.save_objectives();
         self.state.mode = InputMode::Normal;
         self.notify("agent objective saved");
         self.dirty = true;
@@ -546,7 +546,7 @@ impl App {
         }
         let changed = self.objectives.reset_running();
         if changed {
-            let _ = crate::objectives::save(&self.objectives);
+            self.save_objectives();
         }
         if self
             .objectives
@@ -558,7 +558,7 @@ impl App {
             self.start_objective_queue();
         } else {
             self.objectives.queue_active = false;
-            let _ = crate::objectives::save(&self.objectives);
+            self.save_objectives();
         }
     }
 
@@ -573,7 +573,7 @@ impl App {
         }
         self.objective_queue = true;
         self.objectives.queue_active = true;
-        let _ = crate::objectives::save(&self.objectives);
+        self.save_objectives();
         self.run_next_objective();
     }
 
@@ -594,7 +594,7 @@ impl App {
         let Some(objective) = next else {
             self.objective_queue = false;
             self.objectives.queue_active = false;
-            let _ = crate::objectives::save(&self.objectives);
+            self.save_objectives();
             let waiting = self
                 .objectives
                 .objectives
@@ -609,7 +609,7 @@ impl App {
         };
         self.active_objective = Some(objective.id);
         self.objectives.set_status(objective.id, "running");
-        let _ = crate::objectives::save(&self.objectives);
+        self.save_objectives();
         self.start_background_task(objective.text);
     }
 
@@ -649,7 +649,7 @@ impl App {
             .find(|objective| objective.id == id)
         {
             objective.depends_on = deps;
-            let _ = crate::objectives::save(&self.objectives);
+            self.save_objectives();
             self.state.mode = InputMode::Normal;
             self.notify("objective dependencies saved");
         } else {
@@ -705,14 +705,14 @@ impl App {
         self.state.mode = InputMode::Normal;
         self.active_objective = Some(id);
         self.objectives.set_status(id, "running");
-        let _ = crate::objectives::save(&self.objectives);
+        self.save_objectives();
         self.start_background_task(objective.text);
     }
 
     fn finish_objective(&mut self, status: &str) {
         if let Some(id) = self.active_objective.take() {
             self.objectives.set_status(id, status);
-            let _ = crate::objectives::save(&self.objectives);
+            self.save_objectives();
         }
     }
 
@@ -768,7 +768,7 @@ impl App {
         self.background_agent = false;
         self.objective_queue = false;
         self.objectives.queue_active = false;
-        let _ = crate::objectives::save(&self.objectives);
+        self.save_objectives();
         self.finish_objective("blocked");
         self.state.ai.busy = false;
         self.state
@@ -795,7 +795,7 @@ impl App {
             self.run_next_objective();
         } else {
             self.objectives.queue_active = false;
-            let _ = crate::objectives::save(&self.objectives);
+            self.save_objectives();
         }
     }
 
@@ -2068,7 +2068,7 @@ impl App {
             self.background_agent = false;
             self.objective_queue = false;
             self.objectives.queue_active = false;
-            let _ = crate::objectives::save(&self.objectives);
+            self.save_objectives();
             self.finish_objective("blocked");
             self.state
                 .ai
@@ -2192,7 +2192,14 @@ impl App {
         }
     }
 
-    fn save_ai_history(&self) {
+    /// Persist goals, reporting a failure instead of claiming success.
+    fn save_objectives(&mut self) {
+        if let Err(error) = crate::objectives::save(&self.objectives) {
+            self.notify(format!("objectives not saved: {error}"));
+        }
+    }
+
+    fn save_ai_history(&mut self) {
         if !self.state.config.ai.persist_history {
             return;
         }
@@ -2201,7 +2208,9 @@ impl App {
             entries: self.state.ai.entries.clone(),
             conversation: self.state.ai.conversation.clone(),
         };
-        let _ = crate::ai_history::save(&history);
+        if let Err(error) = crate::ai_history::save(&history) {
+            self.notify(format!("AI history not saved: {error}"));
+        }
     }
 
     fn remove_ai_history(&self) {

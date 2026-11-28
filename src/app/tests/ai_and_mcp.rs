@@ -419,6 +419,10 @@ fn an_mcp_notice_does_not_abort_the_running_call() {
     app.handle_mcp_notice("MCP srv: tool list changed; refresh tools".to_string());
     assert!(app.state.ai.waiting.is_some(), "a notice is not a failure");
     assert!(app.state.ai.queued_question.is_some());
+    assert_eq!(
+        app.state.ui.message, "MCP srv: tool list changed; refresh tools",
+        "the user must be told the tool list changed"
+    );
     std::fs::remove_dir_all(&dir).ok();
 }
 

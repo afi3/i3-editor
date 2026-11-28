@@ -237,6 +237,9 @@ impl MarksTask {
 
 /// The `diff --git` section that belongs to one repository-relative path.
 fn section<'a>(diff: &'a str, relative: &str) -> Option<&'a str> {
+    // The old side differs for a rename, so the header is anchored on its new
+    // path. Matching a suffix keeps paths that themselves contain " b/" intact.
+    let suffix = format!(" b/{relative}");
     let mut start = None;
     let mut end = diff.len();
     let mut offset = 0;
@@ -246,13 +249,7 @@ fn section<'a>(diff: &'a str, relative: &str) -> Option<&'a str> {
                 end = offset;
                 break;
             }
-            // The old side differs for a rename, so only the new path is compared.
-            let new_path = rest
-                .trim_end()
-                .rsplit_once(" b/")
-                .map(|(_, path)| path)
-                .unwrap_or("");
-            if new_path == relative {
+            if rest.trim_end().ends_with(&suffix) {
                 start = Some(offset);
             }
         }

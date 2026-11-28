@@ -361,16 +361,22 @@ fn rename_terminal_updates_the_active_tab_and_requires_a_panel() {
 #[test]
 fn splits_cannot_exceed_the_minimum_area() {
     let (mut app, dir) = fixture("x\n");
-    ui::compute_layout(&mut app.state, ratatui::layout::Rect::new(0, 0, 80, 24));
-    app.dispatch(Command::SplitLeftRight).expect("split");
-    let layout = app.state.workspaces.active().layout.clone();
-    assert!(matches!(
-        layout,
-        crate::workspace::LayoutNode::Split {
-            axis: SplitAxis::LeftRight,
-            ..
-        }
-    ));
+    // Room for two minimum panes (10 + separator + 19), not for three.
+    ui::compute_layout(&mut app.state, ratatui::layout::Rect::new(0, 0, 30, 12));
+    for _ in 0..6 {
+        let _ = app.dispatch(Command::SplitLeftRight);
+    }
+    ui::compute_layout(&mut app.state, ratatui::layout::Rect::new(0, 0, 30, 12));
+    let panes = app.state.panes.len();
+    assert!(panes >= 2, "the first split must succeed");
+    assert!(
+        panes <= 2,
+        "a 30-column terminal cannot hold three minimum panes, got {panes}"
+    );
+    for rect in app.state.ui.pane_rects.values() {
+        assert!(rect.width >= crate::workspace::MIN_PANE_COLS, "{rect:?}");
+        assert!(rect.height >= crate::workspace::MIN_PANE_ROWS, "{rect:?}");
+    }
     std::fs::remove_dir_all(&dir).ok();
 }
 
