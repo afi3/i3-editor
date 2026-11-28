@@ -55,10 +55,10 @@ pub fn discover(binary: &str, start: &Path) -> Option<PathBuf> {
 
 /// Current branch, `detached at <sha>`, or `unborn` before the first commit.
 pub fn branch(binary: &str, repo: &Path) -> Result<String, String> {
-    if let Ok(branch) = run(binary, repo, &["symbolic-ref", "--short", "-q", "HEAD"]) {
+    if let Ok(branch) = run_read_only(binary, repo, &["symbolic-ref", "--short", "-q", "HEAD"]) {
         return Ok(branch.trim().to_string());
     }
-    match run(binary, repo, &["rev-parse", "--short", "HEAD"]) {
+    match run_read_only(binary, repo, &["rev-parse", "--short", "HEAD"]) {
         Ok(sha) => Ok(format!("detached at {}", sha.trim())),
         Err(_) => Ok("unborn".to_string()),
     }
@@ -157,7 +157,7 @@ pub fn tree_marks(
     }
     // `-z` so a name with a space or a non-ASCII byte matches the path the
     // caller passed in; porcelain v1 would quote it.
-    let status = run(binary, repo, &["status", "--porcelain", "-z"]).unwrap_or_default();
+    let status = run_read_only(binary, repo, &["status", "--porcelain", "-z"]).unwrap_or_default();
     let mut untracked: HashSet<&str> = HashSet::new();
     let mut fields = status.split('\0');
     while let Some(field) = fields.next() {
@@ -340,7 +340,7 @@ fn parse_range(text: &str) -> Option<(usize, usize)> {
 }
 
 fn is_untracked(binary: &str, repo: &Path, relative: &str) -> Result<bool, String> {
-    let output = run(binary, repo, &["status", "--porcelain", "--", relative])?;
+    let output = run_read_only(binary, repo, &["status", "--porcelain", "--", relative])?;
     Ok(output.trim_start().starts_with("??"))
 }
 
@@ -349,7 +349,7 @@ pub fn status(binary: &str, repo: &Path) -> Result<Vec<StatusEntry>, String> {
     // `-z` prints paths verbatim. Porcelain v1 otherwise quotes a name with a
     // space and escapes non-ASCII bytes, and every later `git` call on that
     // quoted string fails with "pathspec did not match".
-    let output = run(binary, repo, &["status", "--porcelain", "-z"])?;
+    let output = run_read_only(binary, repo, &["status", "--porcelain", "-z"])?;
     let mut seen = HashSet::new();
     let mut entries = Vec::new();
     let mut fields = output.split('\0');
@@ -390,7 +390,7 @@ pub fn diff(binary: &str, repo: &Path, relative: &str, staged: bool) -> Result<S
     } else {
         vec!["diff", "--no-color", "--", relative]
     };
-    let output = run(binary, repo, &args)?;
+    let output = run_read_only(binary, repo, &args)?;
     if !output.trim().is_empty() {
         return Ok(output);
     }
@@ -533,7 +533,7 @@ fn commit_with(
     message: &str,
     guard: Option<&Guard>,
 ) -> Result<String, String> {
-    run_guarded(binary, repo, &["commit", "-m", message], guard)
+    run_guarded(binary, repo, &["commit", "-m", message], guard, false)
 }
 
 fn relative_path(repo: &Path, path: &Path) -> Option<String> {
@@ -619,7 +619,13 @@ impl Drop for CommandTask {
 fn pull_with(binary: &str, repo: &Path, guard: Option<&Guard>) -> Result<String, String> {
     ensure_clean(binary, repo, guard)?;
     ensure_upstream(binary, repo, guard)?;
-    let output = run_guarded(binary, repo, &["pull", "--ff-only", "--no-rebase"], guard)?;
+    let output = run_guarded(
+        binary,
+        repo,
+        &["pull", "--ff-only", "--no-rebase"],
+        guard,
+        false,
+    )?;
     Ok(summary(&output, "already up to date"))
 }
 
@@ -628,7 +634,7 @@ fn pull_with(binary: &str, repo: &Path, guard: Option<&Guard>) -> Result<String,
 /// Push the current branch. Called by `CommandTask`.
 fn push_with(binary: &str, repo: &Path, guard: Option<&Guard>) -> Result<String, String> {
     ensure_upstream(binary, repo, guard)?;
-    let output = run_guarded(binary, repo, &["push"], guard)?;
+    let output = run_guarded(binary, repo, &["push"], guard, false)?;
     Ok(summary(&output, "pushed"))
 }
 
@@ -641,8 +647,13 @@ fn ensure_clean(binary: &str, repo: &Path, guard: Option<&Guard>) -> Result<(), 
             Err(_) => Ok(true),
         }
     }
-    let unstaged = dirty(run_guarded(binary, repo, &["diff", "--quiet"], guard))?;
-    let staged = dirty(run_guarded(
+    let unstaged = dirty(run_read_only_guarded(
+        binary,
+        repo,
+        &["diff", "--quiet"],
+        guard,
+    ))?;
+    let staged = dirty(run_read_only_guarded(
         binary,
         repo,
         &["diff", "--cached", "--quiet"],
@@ -657,7 +668,7 @@ fn ensure_clean(binary: &str, repo: &Path, guard: Option<&Guard>) -> Result<(), 
 }
 
 fn ensure_upstream(binary: &str, repo: &Path, guard: Option<&Guard>) -> Result<(), String> {
-    run_guarded(
+    run_read_only_guarded(
         binary,
         repo,
         &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
@@ -677,7 +688,23 @@ fn summary(output: &str, fallback: &str) -> String {
 }
 
 fn run(binary: &str, cwd: &Path, args: &[&str]) -> Result<String, String> {
-    run_guarded(binary, cwd, args, None)
+    run_guarded(binary, cwd, args, None, false)
+}
+
+/// Read-only commands run with `GIT_OPTIONAL_LOCKS=0`: `git status` otherwise
+/// rewrites the index opportunistically, and its `index.lock` races the user's
+/// own stage/commit commands (and our background marker pass).
+fn run_read_only(binary: &str, cwd: &Path, args: &[&str]) -> Result<String, String> {
+    run_guarded(binary, cwd, args, None, true)
+}
+
+fn run_read_only_guarded(
+    binary: &str,
+    cwd: &Path,
+    args: &[&str],
+    guard: Option<&Guard>,
+) -> Result<String, String> {
+    run_guarded(binary, cwd, args, guard, true)
 }
 
 /// Run git, optionally under a cancel flag and a deadline. Both pipes are
@@ -688,6 +715,7 @@ fn run_guarded(
     cwd: &Path,
     args: &[&str],
     guard: Option<&Guard>,
+    read_only: bool,
 ) -> Result<String, String> {
     let mut command = Command::new(binary);
     command
@@ -696,6 +724,7 @@ fn run_guarded(
         .env("GIT_PAGER", "cat")
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("LC_ALL", "C")
+        .env("GIT_OPTIONAL_LOCKS", if read_only { "0" } else { "1" })
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -928,7 +957,7 @@ mod tests {
             timeout: Duration::from_millis(150),
         };
         let started = Instant::now();
-        let error = run_guarded("/bin/sh", &dir, &["-c", "sleep 30"], Some(&guard))
+        let error = run_guarded("/bin/sh", &dir, &["-c", "sleep 30"], Some(&guard), false)
             .expect_err("the deadline must kill it");
         assert!(error.contains("timed out"), "{error}");
         assert!(
@@ -947,8 +976,8 @@ mod tests {
             cancel,
             timeout: COMMAND_TIMEOUT,
         };
-        let error =
-            run_guarded("/bin/sh", &dir, &["-c", "sleep 30"], Some(&guard)).expect_err("cancelled");
+        let error = run_guarded("/bin/sh", &dir, &["-c", "sleep 30"], Some(&guard), false)
+            .expect_err("cancelled");
         assert!(error.contains("cancelled"), "{error}");
         std::fs::remove_dir_all(&dir).ok();
     }

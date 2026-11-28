@@ -252,7 +252,9 @@ mod tests {
 
     #[test]
     fn exactly_at_the_cap_is_not_truncated() {
-        let dir = fixture("cap");
+        // Its own directory: sharing "cap" with the truncation test made both
+        // race over the same files.
+        let dir = fixture("cap-exact");
         let text = "needle\n".repeat(MAX_RESULTS);
         std::fs::write(dir.join("exact.txt"), &text).expect("write");
         let files = vec!["exact.txt".to_string()];

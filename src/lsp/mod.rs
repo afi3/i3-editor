@@ -1209,7 +1209,12 @@ impl LspManager {
         self.servers.insert(key.to_string(), server);
         Ok(())
     }
+}
 
+/// Assertions available on every platform, so tests that only inspect
+/// configuration or the root compile where the Unix fake server does not.
+#[cfg(test)]
+impl LspManager {
     pub(crate) fn config_for_test(&self, key: &str) -> bool {
         self.configs.iter().any(|(name, _)| name == key)
     }

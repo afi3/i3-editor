@@ -1005,7 +1005,6 @@ mod tests {
         assert!(document.undo().is_some());
         assert_eq!(document.eol, Eol::Lf);
         assert_eq!(document.rope.to_string(), "a\nb\n");
-        std::fs::remove_dir_all(std::env::temp_dir()).ok();
     }
 
     #[test]

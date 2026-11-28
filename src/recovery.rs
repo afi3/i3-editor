@@ -12,6 +12,7 @@
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::editor::document::Document;
@@ -25,6 +26,43 @@ const LOCK_NAME: &str = "lock";
 
 pub fn default_dir() -> Option<PathBuf> {
     crate::config::config_dir().map(|dir| dir.join("swap"))
+}
+
+/// Directories this process holds open. A dropped instance's directory cannot be
+/// told apart from a live one by its lock alone: both belong to this process, and
+/// the lock probe only distinguishes processes reliably.
+fn live_dirs() -> &'static Mutex<HashSet<PathBuf>> {
+    static LIVE: OnceLock<Mutex<HashSet<PathBuf>>> = OnceLock::new();
+    LIVE.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+fn register_live(dir: &Path) {
+    if let Ok(mut live) = live_dirs().lock() {
+        live.insert(dir.to_path_buf());
+    }
+}
+
+fn unregister_live(dir: &Path) {
+    if let Ok(mut live) = live_dirs().lock() {
+        live.remove(dir);
+    }
+}
+
+fn is_live(dir: &Path) -> bool {
+    live_dirs()
+        .lock()
+        .map(|live| live.contains(dir))
+        .unwrap_or(false)
+}
+
+/// The pid embedded in an instance directory name, if it has one.
+fn dir_pid(dir: &Path) -> Option<u32> {
+    dir.file_name()?
+        .to_string_lossy()
+        .split('-')
+        .next()?
+        .parse()
+        .ok()
 }
 
 /// This process's swap directory, owned for as long as the lock is held.
@@ -42,16 +80,30 @@ impl Instance {
             .map(|elapsed| elapsed.as_nanos())
             .unwrap_or_default();
         let dir = claim_dir(base, stamp)?;
-        let lock = File::options()
+        // Registered before the lock: a concurrent scan must treat a directory
+        // that is mid-claim as alive.
+        register_live(&dir);
+        let lock = match File::options()
             .create_new(true)
             .write(true)
-            .open(dir.join(LOCK_NAME))?;
+            .open(dir.join(LOCK_NAME))
+        {
+            Ok(lock) => lock,
+            Err(error) => {
+                unregister_live(&dir);
+                return Err(error);
+            }
+        };
         match lock.try_lock() {
             Ok(()) => Ok(Self { dir, _lock: lock }),
             Err(std::fs::TryLockError::WouldBlock) => {
+                unregister_live(&dir);
                 Err(std::io::Error::other("swap directory is already locked"))
             }
-            Err(std::fs::TryLockError::Error(error)) => Err(error),
+            Err(std::fs::TryLockError::Error(error)) => {
+                unregister_live(&dir);
+                Err(error)
+            }
         }
     }
 
@@ -59,10 +111,16 @@ impl Instance {
         &self.dir
     }
 
-    /// Remove this instance's swaps after a graceful exit.
+    /// Remove this instance's swaps after a graceful exit. Dropping `self`
+    /// releases the lock and deregisters the directory.
     pub fn release(self) {
-        drop(self._lock);
         let _ = std::fs::remove_dir_all(&self.dir);
+    }
+}
+
+impl Drop for Instance {
+    fn drop(&mut self) {
+        unregister_live(&self.dir);
     }
 }
 
@@ -279,6 +337,15 @@ fn adopt(swap: &Path, own: &Path, name: &str) {
 
 /// Whether the instance that owns `dir` is gone, judged by taking its lock.
 fn owner_gone(dir: &Path) -> bool {
+    if is_live(dir) {
+        return false;
+    }
+    if dir_pid(dir) == Some(std::process::id()) {
+        // The name belongs to this process and no live instance claims it, so
+        // the owner is a dropped instance even if a stray descriptor still holds
+        // the lock.
+        return true;
+    }
     let Ok(lock) = File::options()
         .read(true)
         .write(true)
@@ -291,7 +358,10 @@ fn owner_gone(dir: &Path) -> bool {
     match lock.try_lock() {
         Ok(()) => true,
         Err(std::fs::TryLockError::WouldBlock) => false,
-        Err(std::fs::TryLockError::Error(_)) => false,
+        // Locking unavailable (descriptor pressure, unsupported filesystem):
+        // apply the same rule as a missing lock file rather than leaving crash
+        // data unreachable forever.
+        Err(std::fs::TryLockError::Error(_)) => has_swaps(dir),
     }
 }
 
