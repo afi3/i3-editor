@@ -589,10 +589,6 @@ impl App {
             self.refresh_prompt_preview();
             return Ok(());
         }
-        if self.state.ai.visible && self.state.ai.focused {
-            self.paste_ai(&text);
-            return Ok(());
-        }
         if self.state.help.is_some()
             || self.state.git_diff.is_some()
             || self.state.hunks.is_some()
@@ -601,7 +597,11 @@ impl App {
             || self.state.trace_view.is_some()
         {
             // A modal surface owns the screen; a paste must not reach the
-            // buffer hidden behind it.
+            // surface hidden behind it, including the AI composer.
+            return Ok(());
+        }
+        if self.state.ai.visible && self.state.ai.focused {
+            self.paste_ai(&text);
             return Ok(());
         }
         match self.state.focus {

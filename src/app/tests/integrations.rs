@@ -1061,6 +1061,30 @@ fn switching_to_a_workspace_with_a_missing_root_is_refused() {
 }
 
 #[test]
+fn closing_a_workspace_checks_the_root_that_becomes_active() {
+    let (mut app, dir) = fixture("x\n");
+    app.dispatch(Command::NewWorkspace).expect("second");
+    app.dispatch(Command::NewWorkspace).expect("third");
+    assert_eq!(app.state.workspaces.workspaces.len(), 3);
+    // Close the first: the second becomes active, and its root is gone.
+    app.dispatch(Command::SwitchWorkspace(0)).expect("first");
+    app.state.workspaces.workspaces[1].root = dir.join("gone");
+    let before = app.state.workspaces.workspaces.len();
+    app.dispatch(Command::CloseWorkspace).expect("close");
+    assert_eq!(
+        app.state.workspaces.workspaces.len(),
+        before,
+        "the close must be refused"
+    );
+    assert!(
+        app.state.ui.message.contains("unavailable"),
+        "{}",
+        app.state.ui.message
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn renaming_a_directory_moves_a_nested_workspace_root() {
     let (mut app, dir) = fixture("x\n");
     std::fs::create_dir(dir.join("sub")).expect("sub");

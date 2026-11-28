@@ -547,6 +547,20 @@ fn a_paste_while_an_overlay_is_open_leaves_the_buffer_alone() {
 }
 
 #[test]
+fn a_paste_does_not_reach_the_ai_composer_behind_a_modal() {
+    let (mut app, dir) = fixture("x\n");
+    app.dispatch(Command::AiChat).expect("panel");
+    app.state.ai.focused = true;
+    app.state.ai.input = "keep".to_string();
+    app.dispatch(Command::AiRules).expect("rules");
+    assert!(app.state.rules_view.is_some());
+    app.handle_paste("oops".to_string()).expect("paste");
+    assert_eq!(app.state.ai.input, "keep");
+    assert_eq!(text(&app), "x\n");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn wheeling_the_explorer_does_not_take_keyboard_focus() {
     use ratatui::crossterm::event::{MouseEvent, MouseEventKind};
 

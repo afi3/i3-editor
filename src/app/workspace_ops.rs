@@ -286,8 +286,9 @@ impl App {
         // The workspace that becomes active must still have its root on disk,
         // or the close would leave every service on the old project.
         let count = self.state.workspaces.workspaces.len();
+        // Closing the active workspace leaves the next one at the same index.
         let fallback = if active + 1 < count {
-            active
+            active + 1
         } else {
             active.saturating_sub(1)
         };

@@ -473,13 +473,11 @@ impl App {
             self.state.ai.busy = false;
             self.state.ai.entries.push(format!("[error] {message}"));
         }
-        if (waiting_matches || closed_pending) && self.state.ai.queued_question.is_some() {
-            // Only the server this question was waiting on can invalidate it.
-            self.state.ai.queued_question = None;
-            self.state
-                .ai
-                .entries
-                .push(format!("[error] MCP tools unavailable: {message}"));
+        // The question was queued because a tool list was loading. A failure can
+        // be the last event that server ever sends, so start the question now if
+        // nothing is pending any more; otherwise the next Tools event resumes it.
+        if self.state.ai.queued_question.is_some() {
+            self.try_start_queued_ai_turn();
         }
         self.notify(message);
     }

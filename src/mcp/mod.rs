@@ -25,6 +25,26 @@ const MAX_DIAGNOSTIC_BYTES: usize = 64 << 10;
 /// Messages handled per server per frame; the rest waits for the next pump.
 const DRAIN_BUDGET: usize = 256;
 
+/// Drop the rest of an over-long line, keeping the reader in sync.
+fn discard_line(reader: &mut impl BufRead) -> std::io::Result<()> {
+    loop {
+        let buffer = reader.fill_buf()?;
+        if buffer.is_empty() {
+            return Ok(());
+        }
+        match buffer.iter().position(|byte| *byte == b'\n') {
+            Some(index) => {
+                reader.consume(index + 1);
+                return Ok(());
+            }
+            None => {
+                let len = buffer.len();
+                reader.consume(len);
+            }
+        }
+    }
+}
+
 /// Read one newline-terminated line, refusing to buffer more than `limit`
 /// bytes. `read_line` allocates the whole line before a caller can check it,
 /// so the limit would arrive too late.
@@ -1612,8 +1632,15 @@ fn spawn_server(name: &str, config: &McpServerConfig, root: &Path) -> Result<Ser
                         break;
                     }
                 }
-                // A stderr flood is not a protocol error; stop reading it.
-                Err(_) => break,
+                // A stderr flood is not a protocol error, and closing the pipe
+                // would kill the server on its next write: skip the rest of the
+                // line and keep draining.
+                Err(_) => {
+                    line.clear();
+                    if discard_line(&mut reader).is_err() {
+                        break;
+                    }
+                }
             }
         }
     });
@@ -1911,6 +1938,24 @@ fn parse_tool_result(result: &Value) -> (Vec<ToolContent>, bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_oversized_line_is_skipped_without_losing_the_next_one() {
+        use std::io::Cursor;
+
+        let mut text = vec![b'x'; 40];
+        text.push(b'\n');
+        text.extend_from_slice(b"next\n");
+        let mut reader = std::io::BufReader::new(Cursor::new(text));
+        let mut line = String::new();
+        assert!(
+            read_bounded_line(&mut reader, &mut line, 8).is_err(),
+            "the limit must reject the first line"
+        );
+        discard_line(&mut reader).expect("skip");
+        read_bounded_line(&mut reader, &mut line, 8).expect("second line");
+        assert_eq!(line, "next\n");
+    }
 
     #[test]
     fn the_http_session_header_is_read_case_insensitively() {

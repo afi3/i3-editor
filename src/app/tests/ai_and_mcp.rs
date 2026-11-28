@@ -441,6 +441,27 @@ fn an_mcp_notice_does_not_abort_the_running_call() {
 }
 
 #[test]
+fn a_queued_question_is_resumed_when_a_server_failure_ends_tool_loading() {
+    let (mut app, dir) = fixture("x\n");
+    app.state.ai.queued_question = Some("what now?".to_string());
+    app.handle_mcp_failure("srv", "server stopped".to_string());
+    assert!(
+        app.state.ai.queued_question.is_none(),
+        "the question must not be stranded"
+    );
+    assert!(
+        app.state
+            .ai
+            .conversation
+            .iter()
+            .any(|message| message["role"] == "user" && message["content"] == "what now?"),
+        "{:?}",
+        app.state.ai.conversation
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn a_failure_on_another_server_leaves_the_waiting_call_alone() {
     let (mut app, dir) = fixture("x\n");
     app.state.ai.waiting = Some(crate::state::AiWaiting {
