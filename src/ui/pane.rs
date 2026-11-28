@@ -279,6 +279,15 @@ pub fn render(
         tab_width,
         text_area.height as usize,
     );
+    // The row list is ordered by line, so a line's text, its start offset and
+    // its syntax spans are fetched once and reused by its wrapped rows. Doing
+    // this per row made every frame cost O(line length) per visible row.
+    let mut current_line: Option<usize> = None;
+    let mut line_text = String::new();
+    let mut line_start = 0usize;
+    let mut line_len = 0usize;
+    let mut line_spans: Vec<crate::syntax::Span> = Vec::new();
+    let mut span_cursor = 0usize;
     for (row, visual) in rows.iter().enumerate() {
         let line_index = visual.line;
         let first_row = visual.start == 0;
@@ -310,24 +319,58 @@ pub fn render(
                 severities.get(&line_index).copied(),
             );
         }
-        let full = document.line_text(line_index);
-        let text: String = if visual.start == 0 && visual.end == document.line_len(line_index) {
-            full
+        if current_line != Some(line_index) {
+            line_start = document.char_of_line(line_index);
+            line_len = document.line_len(line_index);
+            line_text = document.line_text(line_index);
+            line_spans = document
+                .syntax_spans_range(line_index, 1)
+                .first()
+                .cloned()
+                .unwrap_or_default();
+            span_cursor = 0;
+            current_line = Some(line_index);
+        }
+        let text: std::borrow::Cow<str> = if visual.start == 0 && visual.end == line_len {
+            std::borrow::Cow::Borrowed(line_text.as_str())
         } else {
-            full.chars()
-                .skip(visual.start)
-                .take(visual.end - visual.start)
-                .collect()
+            let start = line_start + visual.start;
+            std::borrow::Cow::Owned(
+                document
+                    .rope()
+                    .slice(start..start + (visual.end - visual.start))
+                    .to_string(),
+            )
         };
-        let line_start = document.char_of_line(line_index) + visual.start;
-        let spans = row_spans(document, *visual, wrap);
+        let row_start = line_start + visual.start;
+        // Spans are ordered too: advance past the ones already scrolled out
+        // instead of rescanning the whole line for every row.
+        while span_cursor < line_spans.len() && line_spans[span_cursor].end <= visual.start {
+            span_cursor += 1;
+        }
+        let spans: Vec<crate::syntax::Span> = if wrap {
+            line_spans[span_cursor..]
+                .iter()
+                .take_while(|span| span.start < visual.end)
+                .map(|span| crate::syntax::Span {
+                    start: span.start.saturating_sub(visual.start),
+                    end: span
+                        .end
+                        .saturating_sub(visual.start)
+                        .min(visual.end - visual.start),
+                    kind: span.kind,
+                })
+                .collect()
+        } else {
+            line_spans.clone()
+        };
         draw_text_line(
             buffer,
             text_area.x.saturating_add(gutter),
             y,
             text_width,
             &text,
-            line_start,
+            row_start,
             if wrap { 0 } else { pane.scroll_left },
             tab_width,
             &selections,
@@ -592,33 +635,6 @@ fn visual_rows_for(
             line,
             start: 0,
             end: document.line_len(line),
-        })
-        .collect()
-}
-
-fn row_spans(
-    document: &crate::editor::document::Document,
-    visual: textutil::VisualRow,
-    wrap: bool,
-) -> Vec<crate::syntax::Span> {
-    let spans = document
-        .syntax_spans_range(visual.line, 1)
-        .first()
-        .cloned()
-        .unwrap_or_default();
-    if !wrap {
-        return spans;
-    }
-    spans
-        .into_iter()
-        .filter(|span| span.end > visual.start && span.start < visual.end)
-        .map(|span| crate::syntax::Span {
-            start: span.start.saturating_sub(visual.start),
-            end: span
-                .end
-                .saturating_sub(visual.start)
-                .min(visual.end - visual.start),
-            kind: span.kind,
         })
         .collect()
 }

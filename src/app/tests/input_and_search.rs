@@ -595,6 +595,29 @@ fn prompt_typing_keeps_the_case_the_user_typed() {
 }
 
 #[test]
+fn the_find_preview_copies_the_buffer_once_per_revision() {
+    let (mut app, dir) = fixture("needle needle\n");
+    app.preview_search("needle".to_string());
+    let first = app.search_text.as_ref().expect("cache").2.clone();
+    app.preview_search("needles".to_string());
+    let second = app.search_text.as_ref().expect("cache").2.clone();
+    assert!(
+        std::sync::Arc::ptr_eq(&first, &second),
+        "typing must reuse the same copy while the buffer is unchanged"
+    );
+
+    app.dispatch(Command::InsertText("x".to_string()))
+        .expect("edit");
+    app.preview_search("needle".to_string());
+    let third = app.search_text.as_ref().expect("cache").2.clone();
+    assert!(
+        !std::sync::Arc::ptr_eq(&first, &third),
+        "an edited buffer is read again"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn new_prompt_creates_a_file_on_disk() {
     let (mut app, dir) = fixture("x\n");
     app.dispatch(Command::NewPrompt).expect("new file");

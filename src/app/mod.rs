@@ -95,6 +95,7 @@ impl App {
             git_command: None,
             last_git: std::time::Instant::now(),
             search_history: Default::default(),
+            search_text: None,
             history_path: None,
             session_path: None,
             last_session_save: std::time::Instant::now(),
@@ -245,6 +246,10 @@ pub struct App {
     pub(crate) last_git: std::time::Instant,
     /// Persistent search queries and options.
     pub(crate) search_history: crate::search_history::SearchHistory,
+    /// Buffer text kept for the live Find preview, keyed by document revision.
+    /// The document does not change while the user types the query, so one copy
+    /// serves every keystroke instead of a fresh `to_string` each time.
+    pub(crate) search_text: Option<(crate::state::DocumentId, u64, std::sync::Arc<String>)>,
     pub(crate) history_path: Option<PathBuf>,
     /// Session file override; `None` resolves a per-root file at save time.
     pub(crate) session_path: Option<PathBuf>,
@@ -393,6 +398,7 @@ impl App {
             git_command: None,
             last_git: std::time::Instant::now(),
             search_history,
+            search_text: None,
             history_path,
             session_path: None,
             last_session_save: std::time::Instant::now(),

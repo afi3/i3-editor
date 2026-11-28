@@ -155,26 +155,34 @@ pub struct VisualRow {
 /// Split one line into wrapped char ranges. Breaks prefer the last space in
 /// the row; a word longer than the width breaks at the cell limit.
 pub fn wrap_ranges(text: &str, width: u16, tab_width: usize) -> Vec<(usize, usize)> {
-    let chars: Vec<char> = text.chars().collect();
-    WrapRows {
-        chars: &chars,
-        width,
-        tab_width,
-        start: 0,
-        done: false,
-    }
-    .collect()
+    WrapRows::new(text, width, tab_width).collect()
 }
 
 /// Wrapped char ranges for one line, produced one at a time. Rendering needs
-/// `height` rows, not every row of a megabyte-long line, so the ranges are not
-/// collected up front.
+/// `height` rows, not every row of a megabyte-long line, so the ranges are
+/// streamed from the `&str` itself and no `Vec<char>` is built first.
 pub struct WrapRows<'a> {
-    chars: &'a [char],
+    text: &'a str,
     width: u16,
     tab_width: usize,
-    start: usize,
+    /// Byte offset where the next row starts.
+    byte: usize,
+    /// Char offset where the next row starts.
+    chars: usize,
     done: bool,
+}
+
+impl<'a> WrapRows<'a> {
+    pub fn new(text: &'a str, width: u16, tab_width: usize) -> Self {
+        Self {
+            text,
+            width,
+            tab_width,
+            byte: 0,
+            chars: 0,
+            done: false,
+        }
+    }
 }
 
 impl Iterator for WrapRows<'_> {
@@ -184,35 +192,48 @@ impl Iterator for WrapRows<'_> {
         if self.done {
             return None;
         }
-        if self.chars.is_empty() {
+        if self.text.is_empty() {
             self.done = true;
             return Some((0, 0));
         }
-        let (end, last_space) = scan_row(self.chars, self.start, self.width, self.tab_width);
-        if end >= self.chars.len() {
+        if self.byte >= self.text.len() {
             self.done = true;
-            return Some((self.start, self.chars.len()));
+            return None;
         }
-        let cut = last_space.filter(|cut| *cut > self.start).unwrap_or(end);
-        let cut = cut.max(self.start + 1);
-        let row = (self.start, cut);
-        self.start = cut;
-        if cut >= self.chars.len() {
-            // The row ended the line; a further call would add an empty row.
+        let (end, last_space) = scan_row(self.text, self.byte, self.width, self.tab_width);
+        if end >= self.text.len() {
+            self.done = true;
+            return Some((
+                self.chars,
+                self.chars + self.text[self.byte..].chars().count(),
+            ));
+        }
+        let mut cut = last_space.filter(|cut| *cut > self.byte).unwrap_or(end);
+        if cut <= self.byte {
+            // Zero-width characters alone on a row must still make progress.
+            cut = self.byte + self.text[self.byte..].chars().next()?.len_utf8();
+        }
+        let width = self.text[self.byte..cut].chars().count();
+        let row = (self.chars, self.chars + width);
+        self.chars += width;
+        self.byte = cut;
+        if cut >= self.text.len() {
             self.done = true;
         }
         Some(row)
     }
 }
 
-fn scan_row(chars: &[char], start: usize, width: u16, tab_width: usize) -> (usize, Option<usize>) {
+/// Scan one row from `start`, a byte offset inside `text`. Returns the byte
+/// offset just past the last cell that fits and the byte offset after the last
+/// space seen, if any.
+fn scan_row(text: &str, start: usize, width: u16, tab_width: usize) -> (usize, Option<usize>) {
     let width = width.max(1);
     let tab = tab_width.max(1) as u16;
     let mut cell = 0u16;
     let mut end = start;
     let mut last_space = None;
-    while end < chars.len() {
-        let ch = chars[end];
+    for (offset, ch) in text[start..].char_indices() {
         let advance = if ch == '\t' {
             tab - (cell % tab)
         } else {
@@ -222,7 +243,7 @@ fn scan_row(chars: &[char], start: usize, width: u16, tab_width: usize) -> (usiz
             break;
         }
         cell = cell.saturating_add(advance);
-        end += 1;
+        end = start + offset + ch.len_utf8();
         if ch == ' ' {
             last_space = Some(end);
         }
@@ -232,16 +253,9 @@ fn scan_row(chars: &[char], start: usize, width: u16, tab_width: usize) -> (usiz
 
 /// Index of the wrapped row inside `text` that holds `char_idx`.
 pub fn visual_row_of(text: &str, char_idx: usize, width: u16, tab_width: usize) -> usize {
-    let chars: Vec<char> = text.chars().collect();
-    WrapRows {
-        chars: &chars,
-        width,
-        tab_width,
-        start: 0,
-        done: false,
-    }
-    .position(|(start, end)| char_idx >= start && char_idx <= end)
-    .unwrap_or(0)
+    WrapRows::new(text, width, tab_width)
+        .position(|(start, end)| char_idx >= start && char_idx <= end)
+        .unwrap_or(0)
 }
 
 /// Wrapped rows for `rows` display lines starting at `start_line`, skipping
@@ -274,15 +288,7 @@ fn push_visual_rows(
     out: &mut Vec<VisualRow>,
 ) -> bool {
     let text = document.line_text(line);
-    let chars: Vec<char> = text.chars().collect();
-    let rows = WrapRows {
-        chars: &chars,
-        width,
-        tab_width,
-        start: 0,
-        done: false,
-    };
-    for (start, end) in rows {
+    for (start, end) in WrapRows::new(&text, width, tab_width) {
         out.push(VisualRow { line, start, end });
         if out.len() >= limit {
             return true;
@@ -306,10 +312,21 @@ pub fn cells(text: &str, tab_width: usize, start_cell: u16) -> u16 {
     cell.saturating_sub(start_cell)
 }
 
-/// Cells occupied by the first `char_count` chars of `text`.
+/// Cells occupied by the first `char_count` chars of `text`. Folds the tab-stop
+/// math directly over the iterator: the previous version copied the prefix into
+/// a new `String` first, once per frame and per keystroke.
 pub fn cells_prefix(text: &str, char_count: usize, tab_width: usize) -> u16 {
-    let prefix: String = text.chars().take(char_count).collect();
-    cells(&prefix, tab_width, 0)
+    let tab = tab_width.max(1) as u16;
+    let mut cell = 0u16;
+    for ch in text.chars().take(char_count) {
+        let advance = if ch == '\t' {
+            tab - (cell % tab)
+        } else {
+            UnicodeWidthStr::width(ch.encode_utf8(&mut [0u8; 4])) as u16
+        };
+        cell = cell.saturating_add(advance);
+    }
+    cell
 }
 
 /// Char index whose display cell contains `target`, clamped to the line end.
@@ -450,15 +467,7 @@ mod tests {
             ("abcdef", 3),
             ("ab cd", 3),
         ] {
-            let chars: Vec<char> = text.chars().collect();
-            let streamed: Vec<(usize, usize)> = WrapRows {
-                chars: &chars,
-                width,
-                tab_width: 4,
-                start: 0,
-                done: false,
-            }
-            .collect();
+            let streamed: Vec<(usize, usize)> = WrapRows::new(text, width, 4).collect();
             assert_eq!(streamed, wrap_ranges(text, width, 4), "{text:?}");
         }
     }

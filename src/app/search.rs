@@ -75,7 +75,21 @@ impl App {
         let Some(document) = self.state.documents.get(&document_id) else {
             return;
         };
-        let text = document.rope().to_string();
+        // The document does not change while the query is typed, so the copy is
+        // made once per revision instead of on every keystroke.
+        let text = match &self.search_text {
+            Some((cached, revision, text))
+                if *cached == document_id && *revision == document.revision =>
+            {
+                std::sync::Arc::clone(text)
+            }
+            _ => {
+                let text = std::sync::Arc::new(document.rope().to_string());
+                self.search_text =
+                    Some((document_id, document.revision, std::sync::Arc::clone(&text)));
+                text
+            }
+        };
         let matcher = match crate::search_options::Matcher::new(&query, options) {
             Ok(matcher) => matcher,
             Err(error) => {
