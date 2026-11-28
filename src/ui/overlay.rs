@@ -587,6 +587,10 @@ fn prompt_title(state: &AppState, prompt: &PromptState) -> String {
         PromptKind::Find => match state.search.as_ref() {
             Some(search)
                 if Some(search.document) == state.active_document_id()
+                    && state
+                        .documents
+                        .get(&search.document)
+                        .is_some_and(|document| document.revision == search.revision)
                     && search.query == query
                     && !search.matches.is_empty() =>
             {
@@ -604,7 +608,12 @@ fn prompt_title(state: &AppState, prompt: &PromptState) -> String {
                 .search
                 .as_ref()
                 .filter(|search| {
-                    search.query == query && Some(search.document) == state.active_document_id()
+                    search.query == query
+                        && Some(search.document) == state.active_document_id()
+                        && state
+                            .documents
+                            .get(&search.document)
+                            .is_some_and(|document| document.revision == search.revision)
                 })
                 .map(|search| (search.matches.len(), search.truncated));
             match counts {

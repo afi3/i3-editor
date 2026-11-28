@@ -968,6 +968,62 @@ fn tabbed_layout_hides_siblings_and_restores() {
 }
 
 #[test]
+fn clicking_a_row_scrolled_by_wrap_offset_lands_on_the_drawn_row() {
+    use ratatui::crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+    use ratatui::layout::Rect;
+
+    let source = "word ".repeat(400);
+    let (mut app, dir) = fixture(&source);
+    app.state.config.editor.word_wrap = true;
+    crate::ui::compute_layout(&mut app.state, Rect::new(0, 0, 60, 14));
+    for _ in 0..40 {
+        app.dispatch(Command::MoveCursor(crate::command::Move::Down))
+            .expect("down");
+    }
+    let pane_id = app.state.focused_pane_id().expect("pane");
+    let scroll_row = app.state.panes[&pane_id].scroll_row;
+    let scroll_top = app.state.panes[&pane_id].scroll_top;
+    assert!(scroll_row > 0, "the line must be scrolled by row");
+    let geometry = {
+        let pane = &app.state.panes[&pane_id];
+        let document = app.state.active_document().expect("doc");
+        crate::ui::pane::text_geometry(
+            &app.state,
+            pane,
+            document,
+            app.state.ui.pane_rects[&pane_id],
+        )
+        .expect("geometry")
+    };
+    let expected = {
+        let document = app.state.active_document().expect("doc");
+        let rows = crate::editor::text::visual_rows(
+            document,
+            scroll_top,
+            geometry.text_width,
+            document.indent.tab_width.max(1),
+            scroll_row + 1,
+        );
+        rows[scroll_row]
+    };
+    app.handle_mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: geometry.area.x + geometry.gutter + 2,
+        row: geometry.area.y,
+        modifiers: ratatui::crossterm::event::KeyModifiers::NONE,
+    });
+    let cursor = app.state.panes[&pane_id].cursor;
+    let document = app.state.active_document().expect("doc");
+    assert_eq!(document.line_of_char(cursor), expected.line);
+    let column = cursor - document.char_of_line(expected.line);
+    assert!(
+        column >= expected.start && column <= expected.end,
+        "clicked char {column} outside the drawn row {expected:?}"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn closing_a_tabbed_pane_focuses_a_visible_one() {
     let (mut app, dir) = fixture("x\n");
     app.dispatch(Command::SplitLeftRight).expect("split");

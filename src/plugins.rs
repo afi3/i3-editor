@@ -208,6 +208,7 @@ impl Plugins {
 
     /// Run a registered command. Returns false when no plugin owns that name.
     pub fn invoke_command(&mut self, name: &str, snapshot: &Snapshot) -> bool {
+        self.last_status = None;
         let entry = {
             let registry = self.registry.borrow();
             registry
@@ -230,6 +231,9 @@ impl Plugins {
     }
 
     pub fn fire(&mut self, event: &str, snapshot: &Snapshot) {
+        // A callback can change what the status hooks read, even with the same
+        // snapshot, so the cached segments must not survive it.
+        self.last_status = None;
         let hooks: Vec<(String, usize)> = {
             let registry = self.registry.borrow();
             registry
@@ -406,18 +410,29 @@ fn run_process(mut command: std::process::Command) -> std::result::Result<Proces
             }
         }
     };
+    let (stdout, stdout_dropped) = join_process_pipe(stdout);
+    let (stderr, stderr_dropped) = join_process_pipe(stderr);
+    if stdout_dropped || stderr_dropped {
+        // Returning a short string as if it were complete would corrupt any
+        // plugin that parses it.
+        return Err(format!(
+            "process output exceeded {} bytes",
+            PROCESS_OUTPUT_LIMIT
+        ));
+    }
     Ok(ProcessOutput {
         success: status.success(),
-        stdout: String::from_utf8_lossy(&join_process_pipe(stdout)).into_owned(),
-        stderr: String::from_utf8_lossy(&join_process_pipe(stderr)).into_owned(),
+        stdout: String::from_utf8_lossy(&stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&stderr).into_owned(),
     })
 }
 
 fn collect_process_pipe(
     mut pipe: impl std::io::Read + Send + 'static,
-) -> std::thread::JoinHandle<Vec<u8>> {
+) -> std::thread::JoinHandle<(Vec<u8>, bool)> {
     std::thread::spawn(move || {
         let mut kept = Vec::new();
+        let mut dropped = false;
         let mut buffer = [0u8; 8192];
         loop {
             match pipe.read(&mut buffer) {
@@ -426,15 +441,20 @@ fn collect_process_pipe(
                     if kept.len() < PROCESS_OUTPUT_LIMIT {
                         let take = read.min(PROCESS_OUTPUT_LIMIT - kept.len());
                         kept.extend_from_slice(&buffer[..take]);
+                        if take < read {
+                            dropped = true;
+                        }
+                    } else {
+                        dropped = true;
                     }
                 }
             }
         }
-        kept
+        (kept, dropped)
     })
 }
 
-fn join_process_pipe(handle: Option<std::thread::JoinHandle<Vec<u8>>>) -> Vec<u8> {
+fn join_process_pipe(handle: Option<std::thread::JoinHandle<(Vec<u8>, bool)>>) -> (Vec<u8>, bool) {
     handle
         .and_then(|handle| handle.join().ok())
         .unwrap_or_default()
@@ -763,6 +783,34 @@ end)
         let mut plugins = Plugins::new(dir.clone(), &config(false)).expect("plugins");
         let warnings = plugins.take_warnings();
         assert!(warnings.is_empty(), "{warnings:?}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn running_a_command_refreshes_the_cached_status_segments() {
+        let dir = dir("status-refresh");
+        std::fs::write(
+            dir.join("refresh.lua"),
+            r#"
+count = 0
+commands.register("bump", function()
+  count = count + 1
+end)
+statusline.register(function()
+  return tostring(count)
+end)
+"#,
+        )
+        .expect("write");
+        let mut plugins = Plugins::new(dir.clone(), &config(false)).expect("plugins");
+        let snap = snapshot();
+        assert_eq!(plugins.status_segments(&snap), vec!["0".to_string()]);
+        assert!(plugins.invoke_command("bump", &snap));
+        assert_eq!(
+            plugins.status_segments(&snap),
+            vec!["1".to_string()],
+            "a command must invalidate the cached segments"
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 

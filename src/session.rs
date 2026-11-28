@@ -260,10 +260,16 @@ fn snapshot_for(state: &AppState, root: PathBuf) -> Option<Session> {
     if workspaces.is_empty() || documents.is_empty() {
         return None;
     }
+    // A file written for another root must start on that root's workspace,
+    // not on whichever workspace happened to be active during the save.
+    let active = workspaces
+        .iter()
+        .position(|workspace| workspace.root.as_deref() == Some(root.as_path()))
+        .unwrap_or(active.min(workspaces.len() - 1));
     Some(Session {
         version: VERSION,
         root,
-        active: active.min(workspaces.len() - 1),
+        active,
         show_hidden: state.explorer.show_hidden,
         documents,
         folds,
@@ -823,11 +829,24 @@ mod tests {
         state.panes.get_mut(&first).expect("pane").tabs.push(a_id);
         state.panes.get_mut(&first).expect("pane").active = Some(a_id);
 
+        let second = state.ids.pane();
+        state.panes.insert(second, Pane::new(second));
+        let workspace = state.ids.workspace();
+        state
+            .workspaces
+            .workspaces
+            .push(Workspace::new(workspace, "other", second, other.clone()));
+        state.workspaces.active = 0;
+
         let path = dir.join("session-other.toml");
         save_to_root(&path, &state, &other).expect("save");
         let text = std::fs::read_to_string(&path).expect("read");
         let session: Session = toml::from_str(&text).expect("toml");
         assert_eq!(session.root, other);
+        assert_eq!(
+            session.active, 1,
+            "the file starts on the workspace that owns its root"
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 

@@ -32,6 +32,8 @@ pub fn init() -> io::Result<Setup> {
     };
     let mut stdout = io::stdout();
     if let Err(error) = execute!(stdout, EnableBracketedPaste, EnableMouseCapture) {
+        // The first sequence may have reached the terminal before the failure.
+        let _ = execute!(stdout, DisableBracketedPaste, DisableMouseCapture);
         ratatui::restore();
         return Err(error);
     }

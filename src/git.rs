@@ -236,26 +236,35 @@ impl MarksTask {
 }
 
 /// The `diff --git` section that belongs to one repository-relative path.
+/// The header alone is ambiguous when a path contains `" b/"`, so a renamed
+/// file is recognised by its `+++ b/<path>` line, which holds only the path.
 fn section<'a>(diff: &'a str, relative: &str) -> Option<&'a str> {
-    // The old side differs for a rename, so the header is anchored on its new
-    // path. Matching a suffix keeps paths that themselves contain " b/" intact.
-    let suffix = format!(" b/{relative}");
-    let mut start = None;
-    let mut end = diff.len();
     let mut offset = 0;
+    let mut start = None;
     for line in diff.split_inclusive('\n') {
-        if let Some(rest) = line.strip_prefix("diff --git ") {
-            if start.is_some() {
-                end = offset;
-                break;
+        if line.starts_with("diff --git ") {
+            if let Some(begin) = start {
+                let body = &diff[begin..offset];
+                if section_owns(body, relative) {
+                    return Some(body);
+                }
             }
-            if rest.trim_end().ends_with(&suffix) {
-                start = Some(offset);
-            }
+            start = Some(offset);
         }
         offset += line.len();
     }
-    start.map(|start| &diff[start..end])
+    let begin = start?;
+    let body = &diff[begin..];
+    section_owns(body, relative).then_some(body)
+}
+
+fn section_owns(body: &str, relative: &str) -> bool {
+    let header = body.lines().next().unwrap_or("");
+    if header == format!("diff --git a/{relative} b/{relative}") {
+        return true;
+    }
+    let new_side = format!("+++ b/{relative}");
+    body.lines().any(|line| line == new_side)
 }
 
 fn parse_marks(diff: &str, path: &Path) -> Vec<Option<Change>> {
@@ -536,7 +545,8 @@ fn relative_path(repo: &Path, path: &Path) -> Option<String> {
 }
 
 /// A git command may hang on a dead remote or a blocking credential helper.
-const COMMAND_TIMEOUT: Duration = Duration::from_secs(180);
+/// Long enough for a big push or an interactive signing prompt.
+const COMMAND_TIMEOUT: Duration = Duration::from_secs(600);
 
 /// Cancel flag and deadline shared between a worker and the run loop.
 #[derive(Clone)]
@@ -623,8 +633,21 @@ fn push_with(binary: &str, repo: &Path, guard: Option<&Guard>) -> Result<String,
 }
 
 fn ensure_clean(binary: &str, repo: &Path, guard: Option<&Guard>) -> Result<(), String> {
-    let unstaged = run_guarded(binary, repo, &["diff", "--quiet"], guard).is_err();
-    let staged = run_guarded(binary, repo, &["diff", "--cached", "--quiet"], guard).is_err();
+    // A guard failure is not "dirty": a timeout or cancel must keep its message.
+    fn dirty(result: Result<String, String>) -> Result<bool, String> {
+        match result {
+            Ok(_) => Ok(false),
+            Err(error) if error.contains("timed out") || error.contains("cancelled") => Err(error),
+            Err(_) => Ok(true),
+        }
+    }
+    let unstaged = dirty(run_guarded(binary, repo, &["diff", "--quiet"], guard))?;
+    let staged = dirty(run_guarded(
+        binary,
+        repo,
+        &["diff", "--cached", "--quiet"],
+        guard,
+    ))?;
     if unstaged || staged {
         return Err(
             "working tree has uncommitted changes; commit or stash them before pulling".to_string(),
@@ -690,12 +713,12 @@ fn run_guarded(
     let deadline = Instant::now() + guard.timeout;
     let status = loop {
         if guard.cancel.load(Ordering::Relaxed) {
-            let _ = child.kill();
+            terminate(&mut child);
             let _ = child.wait();
             return Err("git command cancelled".to_string());
         }
         if Instant::now() >= deadline {
-            let _ = child.kill();
+            terminate(&mut child);
             let _ = child.wait();
             return Err(format!(
                 "git {args:?} timed out after {}s",
@@ -718,6 +741,29 @@ fn run_guarded(
         stderr: join_pipe(stderr),
     };
     finish(output)
+}
+
+/// Stop a child without leaving git's lock files behind: SIGTERM lets git
+/// clean up (a SIGKILL mid-commit leaves `.git/index.lock`), SIGKILL is only
+/// the fallback when it ignores the signal.
+fn terminate(child: &mut std::process::Child) {
+    #[cfg(unix)]
+    {
+        let _ = std::process::Command::new("kill")
+            .arg("-TERM")
+            .arg(child.id().to_string())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline {
+            if matches!(child.try_wait(), Ok(Some(_))) {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+    let _ = child.kill();
 }
 
 fn collect_pipe(mut pipe: impl Read + Send + 'static) -> std::thread::JoinHandle<Vec<u8>> {
@@ -852,6 +898,26 @@ mod tests {
         let marks = tree_marks("git", &dir, std::slice::from_ref(&path));
         assert_eq!(marks.get(&path).map(Vec::len), Some(2), "{marks:?}");
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_section_is_matched_by_its_new_path_not_a_lookalike() {
+        let plain = "diff --git a/note.txt b/note.txt\n--- a/note.txt\n+++ b/note.txt\n@@ -1 +1 @@\n-a\n+b\n";
+        assert!(section(plain, "note.txt").is_some());
+
+        let renamed =
+            "diff --git a/old name.txt b/new name.txt\n--- a/old name.txt\n+++ b/new name.txt\n";
+        assert!(section(renamed, "new name.txt").is_some());
+
+        let spaced = "diff --git a/x b/y.txt b/x b/y.txt\n--- a/x b/y.txt\n+++ b/x b/y.txt\n";
+        assert!(section(spaced, "x b/y.txt").is_some());
+
+        // A sibling whose directory ends in " b" must not be mistaken for it.
+        let lookalike = "diff --git a/team b/report.txt b/team b/report.txt\n--- a/team b/report.txt\n+++ b/team b/report.txt\n";
+        assert!(
+            section(lookalike, "report.txt").is_none(),
+            "a lookalike section must not be adopted"
+        );
     }
 
     #[test]

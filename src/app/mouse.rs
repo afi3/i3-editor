@@ -333,14 +333,17 @@ impl App {
         let line_offset = usize::from(row.saturating_sub(geometry.area.y));
         let tab_width = document.indent.tab_width.max(1);
         if self.state.config.editor.word_wrap {
+            // The renderer skips `scroll_row` rows of the top line, so a click
+            // must be mapped against the same window.
+            let skip = pane.scroll_row;
             let rows = textutil::visual_rows(
                 document,
                 pane.scroll_top,
                 geometry.text_width,
                 tab_width,
-                line_offset + 1,
+                line_offset + skip + 1,
             );
-            let row = rows.get(line_offset)?;
+            let row = rows.get(line_offset + skip)?;
             let full = document.line_text(row.line);
             let segment: String = full
                 .chars()
