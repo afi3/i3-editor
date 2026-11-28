@@ -307,7 +307,7 @@ pub struct AiAttachment {
     pub text: String,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct AiPanel {
     pub visible: bool,
     pub focused: bool,
@@ -326,6 +326,34 @@ pub struct AiPanel {
     pub tool_map: std::collections::BTreeMap<String, (String, String)>,
     pub prompt_tokens: u64,
     pub completion_tokens: u64,
+    /// Keep the transcript scrolled to the newest line. Any manual scroll turns
+    /// this off; `End` turns it back on.
+    pub follow: bool,
+}
+
+impl Default for AiPanel {
+    fn default() -> Self {
+        Self {
+            visible: false,
+            focused: false,
+            entries: Vec::new(),
+            input: String::new(),
+            cursor: 0,
+            scroll: 0,
+            scroll_x: 0,
+            busy: false,
+            conversation: Vec::new(),
+            pending: std::collections::VecDeque::new(),
+            waiting: None,
+            rounds: 0,
+            queued_question: None,
+            attachments: Vec::new(),
+            tool_map: std::collections::BTreeMap::new(),
+            prompt_tokens: 0,
+            completion_tokens: 0,
+            follow: true,
+        }
+    }
 }
 
 /// Selectable hunk list for partial staging.

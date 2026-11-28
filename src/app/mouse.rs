@@ -284,6 +284,18 @@ impl App {
             self.state.explorer.move_selection(steps * 3);
             return;
         }
+        if self.state.ai.visible && contains(self.state.ui.ai, column, row) {
+            let last = crate::ui::ai::max_scroll(&self.state);
+            let delta = (steps * 3).unsigned_abs();
+            self.state.ai.scroll = if steps < 0 {
+                self.state.ai.scroll.saturating_sub(delta)
+            } else {
+                (self.state.ai.scroll + delta).min(last)
+            };
+            // A manual scroll hands control back to the reader.
+            self.state.ai.follow = false;
+            return;
+        }
         if let Some((pane_id, _)) = self.document_tab_hit(column, row) {
             self.scroll_document_tabs(pane_id, steps.signum());
             return;
@@ -295,6 +307,11 @@ impl App {
 
     fn on_horizontal_wheel(&mut self, column: u16, row: u16, steps: isize) {
         if self.state.explorer.visible && contains(self.state.ui.explorer, column, row) {
+            return;
+        }
+        if self.state.ai.visible && contains(self.state.ui.ai, column, row) {
+            self.scroll_ai_horizontal((steps * 4) as i16);
+            self.state.ai.follow = false;
             return;
         }
         if let Some((pane_id, _)) = self.document_tab_hit(column, row) {

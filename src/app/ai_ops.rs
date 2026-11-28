@@ -84,6 +84,7 @@ impl App {
         self.state.ai.cursor = 0;
         self.state.ai.scroll = 0;
         self.state.ai.scroll_x = 0;
+        self.state.ai.follow = true;
         self.state.ai.rounds = 0;
         self.ai_compacted = false;
         self.ai_compact_dropped = None;
@@ -114,6 +115,14 @@ impl App {
             self.state.config.ai.panel_width
         ));
         self.dirty = true;
+    }
+
+    /// Keep the newest line visible while output arrives, unless the user has
+    /// scrolled away. Runs once per loop iteration, before drawing.
+    fn follow_ai_transcript(&mut self) {
+        if self.state.ai.visible && self.state.ai.follow {
+            self.state.ai.scroll = crate::ui::ai::max_scroll(&self.state);
+        }
     }
 
     pub(crate) fn scroll_ai_horizontal(&mut self, delta: i16) {
@@ -198,12 +207,30 @@ impl App {
         }
         let last = crate::ui::ai::max_scroll(&self.state);
         match combo.code {
-            KeyCode::Up => self.state.ai.scroll = self.state.ai.scroll.saturating_sub(1),
-            KeyCode::Down => self.state.ai.scroll = (self.state.ai.scroll + 1).min(last),
-            KeyCode::PageUp => self.state.ai.scroll = self.state.ai.scroll.saturating_sub(10),
-            KeyCode::PageDown => self.state.ai.scroll = (self.state.ai.scroll + 10).min(last),
-            KeyCode::Home => self.state.ai.scroll = 0,
-            KeyCode::End => self.state.ai.scroll = last,
+            KeyCode::Up => {
+                self.state.ai.follow = false;
+                self.state.ai.scroll = self.state.ai.scroll.saturating_sub(1);
+            }
+            KeyCode::Down => {
+                self.state.ai.follow = false;
+                self.state.ai.scroll = (self.state.ai.scroll + 1).min(last);
+            }
+            KeyCode::PageUp => {
+                self.state.ai.follow = false;
+                self.state.ai.scroll = self.state.ai.scroll.saturating_sub(10);
+            }
+            KeyCode::PageDown => {
+                self.state.ai.follow = false;
+                self.state.ai.scroll = (self.state.ai.scroll + 10).min(last);
+            }
+            KeyCode::Home => {
+                self.state.ai.follow = false;
+                self.state.ai.scroll = 0;
+            }
+            KeyCode::End => {
+                self.state.ai.follow = true;
+                self.state.ai.scroll = last;
+            }
             _ => self.handle_ai_input(combo),
         }
     }
@@ -977,6 +1004,7 @@ impl App {
         self.state.ai.cursor = 0;
         self.state.ai.scroll = 0;
         self.state.ai.scroll_x = 0;
+        self.state.ai.follow = true;
         if !question.is_empty() {
             self.state.ai.entries.push(format!("> {question}"));
         }
@@ -1254,6 +1282,7 @@ impl App {
     }
 
     pub(crate) fn pump_ai(&mut self) {
+        self.follow_ai_transcript();
         if self.ai_stream.is_some() {
             self.pump_ai_stream();
             return;

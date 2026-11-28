@@ -597,6 +597,10 @@ is unavailable; MCP servers are not sandboxed by this option.
   toggles it. `ai_wider`/`ai_narrower` resize it, `ai_clear` clears a finished
   conversation, and `ai_copy` copies the transcript to the internal and system
   clipboards. History is session-only unless `persist_history = true`.
+- The transcript scrolls with `Up`/`Down`, `PageUp`/`PageDown`, `Home`/`End`,
+  and the mouse wheel over the panel; `Ctrl+Left`/`Ctrl+Right` (or a horizontal
+  wheel) scroll it sideways. New output follows the newest line until you scroll
+  away; `End` resumes following.
 - `ai_attach_file` attaches the active document, `ai_attach_selection` attaches
   the selected text, and `ai_clear_context` drops pending attachments. Attached
   context is prefixed to the next user message as explicit `<context>` blocks

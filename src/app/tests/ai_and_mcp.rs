@@ -476,6 +476,76 @@ fn a_failure_on_another_server_leaves_the_waiting_call_alone() {
 }
 
 #[test]
+fn the_wheel_scrolls_the_ai_transcript_without_taking_focus() {
+    use ratatui::crossterm::event::{MouseEvent, MouseEventKind};
+    use ratatui::layout::Rect;
+
+    let (mut app, dir) = fixture("x\n");
+    app.dispatch(Command::AiChat).expect("panel");
+    app.state.ai.entries = (0..200).map(|index| format!("line {index}")).collect();
+    crate::ui::compute_layout(&mut app.state, Rect::new(0, 0, 100, 40));
+    let area = app.state.ui.ai;
+    let before = app.state.focus;
+    let column = area.x + 2;
+    let row = area.y + 2;
+
+    app.handle_mouse(MouseEvent {
+        kind: MouseEventKind::ScrollDown,
+        column,
+        row,
+        modifiers: ratatui::crossterm::event::KeyModifiers::NONE,
+    });
+    assert!(app.state.ai.scroll > 0, "the transcript must scroll");
+    assert!(!app.state.ai.follow, "a manual scroll stops following");
+    app.handle_mouse(MouseEvent {
+        kind: MouseEventKind::ScrollUp,
+        column,
+        row,
+        modifiers: ratatui::crossterm::event::KeyModifiers::NONE,
+    });
+    assert_eq!(app.state.ai.scroll, 0);
+    assert_eq!(app.state.focus, before, "the wheel must not take focus");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn the_transcript_follows_output_until_the_user_scrolls() {
+    use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use ratatui::layout::Rect;
+
+    let (mut app, dir) = fixture("x\n");
+    app.dispatch(Command::AiChat).expect("panel");
+    app.state.ai.entries = (0..200).map(|index| format!("line {index}")).collect();
+    crate::ui::compute_layout(&mut app.state, Rect::new(0, 0, 100, 40));
+
+    app.pump_ai();
+    let bottom = crate::ui::ai::max_scroll(&app.state);
+    assert_eq!(app.state.ai.scroll, bottom, "the newest line is visible");
+    assert!(bottom > 0);
+
+    app.state.ai.focused = true;
+    app.handle_key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+    assert!(!app.state.ai.follow);
+    let paused = app.state.ai.scroll;
+
+    app.state.ai.entries.push("more output".to_string());
+    app.pump_ai();
+    assert_eq!(
+        app.state.ai.scroll, paused,
+        "following stays off until the user asks for it"
+    );
+
+    app.handle_key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE));
+    assert!(app.state.ai.follow);
+    let latest = crate::ui::ai::max_scroll(&app.state);
+    assert_eq!(app.state.ai.scroll, latest);
+    app.state.ai.entries.push("even newer".to_string());
+    app.pump_ai();
+    assert_eq!(app.state.ai.scroll, crate::ui::ai::max_scroll(&app.state));
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn the_rules_overlay_takes_keys_before_the_ai_panel_under_it() {
     use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
