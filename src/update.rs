@@ -8,7 +8,8 @@
 
 use std::io::Read;
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Output, Stdio};
+use std::time::{Duration, Instant};
 
 use sha2::{Digest, Sha256};
 
@@ -16,6 +17,10 @@ use crate::error::{Error, Result};
 
 const REPO: &str = "afi3/i3-editor";
 const BIN: &str = "i3-editor";
+/// `tar` has no deadline flag, so a stalled extraction is killed here.
+const TAR_TIMEOUT: Duration = Duration::from_secs(120);
+/// One pipe of tar output may not exceed this.
+const TAR_OUTPUT_LIMIT: usize = 8 << 20;
 
 pub fn run() -> Result<()> {
     let current = env!("CARGO_PKG_VERSION");
@@ -263,6 +268,84 @@ pub(crate) fn sha256_file(path: &Path) -> Result<String> {
     Ok(format!("{:x}", hasher.finalize()))
 }
 
+/// Run `tar` under a deadline, draining both pipes so a chatty listing cannot
+/// block the child before it exits.
+fn run_tar(args: &[&str]) -> std::result::Result<Output, String> {
+    let mut command = Command::new("tar");
+    command.args(args);
+    run_bounded(command, TAR_TIMEOUT, "tar").map_err(|error| {
+        match error.strip_prefix("cannot start tar: ") {
+            Some(detail) => format!("tar is required: {detail}"),
+            None => error,
+        }
+    })
+}
+
+/// Run a child with both pipes drained on their own threads and kill it at the
+/// deadline. `tar` has no timeout flag, and a stalled extraction would
+/// otherwise block the update forever.
+fn run_bounded(
+    mut command: Command,
+    timeout: Duration,
+    label: &str,
+) -> std::result::Result<Output, String> {
+    let mut child = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| format!("cannot start {label}: {error}"))?;
+    let stdout = child.stdout.take().map(collect_tar_pipe);
+    let stderr = child.stderr.take().map(collect_tar_pipe);
+    let deadline = Instant::now() + timeout;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!("{label} timed out after {}s", timeout.as_secs()));
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(20)),
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!("{label}: {error}"));
+            }
+        }
+    };
+    Ok(Output {
+        status,
+        stdout: join_tar_pipe(stdout),
+        stderr: join_tar_pipe(stderr),
+    })
+}
+
+fn collect_tar_pipe(mut pipe: impl Read + Send + 'static) -> std::thread::JoinHandle<Vec<u8>> {
+    std::thread::spawn(move || {
+        let mut kept = Vec::new();
+        let mut buffer = [0u8; 8192];
+        loop {
+            match pipe.read(&mut buffer) {
+                Ok(0) | Err(_) => break,
+                Ok(read) => {
+                    if kept.len() < TAR_OUTPUT_LIMIT {
+                        let take = read.min(TAR_OUTPUT_LIMIT - kept.len());
+                        kept.extend_from_slice(&buffer[..take]);
+                    }
+                }
+            }
+        }
+        kept
+    })
+}
+
+fn join_tar_pipe(handle: Option<std::thread::JoinHandle<Vec<u8>>>) -> Vec<u8> {
+    handle
+        .and_then(|handle| handle.join().ok())
+        .unwrap_or_default()
+}
+
 /// A tar member may not be absolute or climb out of the target directory.
 fn entry_is_safe(line: &str) -> bool {
     !line.starts_with('/') && !line.split('/').any(|part| part == "..")
@@ -271,11 +354,7 @@ fn entry_is_safe(line: &str) -> bool {
 /// Extract with a member check first. The checksum already ties the archive to
 /// the release, but extraction is the step that writes to disk.
 pub(crate) fn safe_extract(archive: &Path, directory: &Path) -> std::result::Result<(), String> {
-    let listing = Command::new("tar")
-        .arg("-tzf")
-        .arg(archive)
-        .output()
-        .map_err(|error| format!("tar is required: {error}"))?;
+    let listing = run_tar(&["-tzf", &archive.display().to_string()])?;
     if !listing.status.success() {
         return Err(format!(
             "cannot list {}: {}",
@@ -289,14 +368,13 @@ pub(crate) fn safe_extract(archive: &Path, directory: &Path) -> std::result::Res
             return Err(format!("refusing unsafe archive entry: {line}"));
         }
     }
-    let output = Command::new("tar")
-        .arg("-xzf")
-        .arg(archive)
-        .arg("-C")
-        .arg(directory)
-        .arg("--no-same-owner")
-        .output()
-        .map_err(|error| format!("tar is required: {error}"))?;
+    let output = run_tar(&[
+        "-xzf",
+        &archive.display().to_string(),
+        "-C",
+        &directory.display().to_string(),
+        "--no-same-owner",
+    ])?;
     if !output.status.success() {
         return Err(format!(
             "cannot extract {}: {}",
@@ -379,6 +457,64 @@ mod tests {
         assert!(is_newer("0.2.0-beta", "0.2.0-alpha"));
         assert!(same_version("v0.2.0", "0.2.0"));
         assert!(!same_version("0.2.0", "0.2.0-alpha"));
+    }
+
+    #[test]
+    fn a_stalled_child_is_killed_at_the_deadline() {
+        let mut command = Command::new("/bin/sh");
+        command.args(["-c", "sleep 30"]);
+        let started = Instant::now();
+        let error = run_bounded(command, Duration::from_millis(150), "sleeper")
+            .expect_err("the child must be killed");
+        assert!(error.contains("sleeper timed out"), "{error}");
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "took {:?}",
+            started.elapsed()
+        );
+    }
+
+    #[test]
+    fn a_chatty_child_is_drained_before_it_exits() {
+        let mut command = Command::new("/bin/sh");
+        command.args([
+            "-c",
+            "i=0; while [ $i -lt 20000 ]; do echo line-$i; i=$((i+1)); done",
+        ]);
+        let output = run_bounded(command, Duration::from_secs(20), "noisy").expect("output");
+        assert!(output.status.success());
+        assert!(
+            String::from_utf8_lossy(&output.stdout).contains("line-19999"),
+            "output was drained"
+        );
+    }
+
+    #[test]
+    fn safe_extract_unpacks_a_plain_archive() {
+        let dir = std::env::temp_dir().join(format!("i3-extract-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("dir");
+        std::fs::write(dir.join("i3-editor"), b"binary").expect("payload");
+        let archive = dir.join("release.tar.gz");
+        let status = Command::new("tar")
+            .args([
+                "-czf",
+                &archive.display().to_string(),
+                "-C",
+                &dir.display().to_string(),
+                "i3-editor",
+            ])
+            .status()
+            .expect("tar");
+        assert!(status.success());
+        let out = dir.join("out");
+        std::fs::create_dir_all(&out).expect("out");
+        safe_extract(&archive, &out).expect("extract");
+        assert_eq!(
+            std::fs::read(out.join("i3-editor")).expect("read"),
+            b"binary"
+        );
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
