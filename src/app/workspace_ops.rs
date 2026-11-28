@@ -87,10 +87,15 @@ impl App {
         if !layout.remove_pane(pane_id) {
             return Err(Error::UnknownPane(pane_id));
         }
-        let next = layout
-            .leaves()
-            .first()
+        // `leaves()` includes inactive tabs, which are not drawn; focusing one
+        // would send typing to a pane the user cannot see.
+        let mut visible = std::collections::HashMap::new();
+        layout.layout(self.state.ui.panes, &mut visible);
+        let next = visible
+            .keys()
+            .min()
             .copied()
+            .or_else(|| layout.leaves().first().copied())
             .ok_or(Error::NoFocusedPane)?;
 
         let removed = self
@@ -157,6 +162,22 @@ impl App {
     }
 
     pub(crate) fn switch_workspace(&mut self, index: usize) -> Result<()> {
+        let Some(root) = self
+            .state
+            .workspaces
+            .workspaces
+            .get(index)
+            .map(|workspace| workspace.root.clone())
+        else {
+            self.notify(format!("no workspace {}", index + 1));
+            return Ok(());
+        };
+        // Switching commits the layout and panes; a root that no longer exists
+        // would leave the explorer and every service on the old project.
+        if !root.is_dir() {
+            self.notify(format!("workspace root unavailable: {}", root.display()));
+            return Ok(());
+        }
         if !self.state.workspaces.switch(index) {
             self.notify(format!("no workspace {}", index + 1));
             return Ok(());
@@ -262,9 +283,42 @@ impl App {
             return Ok(());
         }
 
+        // The workspace that becomes active must still have its root on disk,
+        // or the close would leave every service on the old project.
+        let count = self.state.workspaces.workspaces.len();
+        let fallback = if active + 1 < count {
+            active
+        } else {
+            active.saturating_sub(1)
+        };
+        let fallback_root = self
+            .state
+            .workspaces
+            .workspaces
+            .get(fallback)
+            .map(|workspace| workspace.root.clone());
+        if let Some(root) = &fallback_root
+            && !root.is_dir()
+        {
+            self.notify(format!("workspace root unavailable: {}", root.display()));
+            return Ok(());
+        }
+
         let removed = self.state.workspaces.close(active)?;
         let closed_id = removed.id;
         self.watchers.retain(|(id, _)| *id != closed_id);
+        // Its per-root session file would otherwise restore the closed
+        // workspace on the next launch in that directory.
+        if !self
+            .state
+            .workspaces
+            .workspaces
+            .iter()
+            .any(|workspace| workspace.root == removed.root)
+            && let Some(path) = crate::session::path_for(&removed.root)
+        {
+            let _ = std::fs::remove_file(path);
+        }
         for leaf in removed.layout.leaves() {
             if let Some(pane) = self.state.panes.remove(&leaf) {
                 for id in pane.tabs {

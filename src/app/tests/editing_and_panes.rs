@@ -954,6 +954,21 @@ fn tabbed_layout_hides_siblings_and_restores() {
 }
 
 #[test]
+fn closing_a_tabbed_pane_focuses_a_visible_one() {
+    let (mut app, dir) = fixture("x\n");
+    app.dispatch(Command::SplitLeftRight).expect("split");
+    app.dispatch(Command::ToggleTabbed).expect("tabbed");
+    app.dispatch(Command::NextPaneTab).expect("second tab");
+    app.dispatch(Command::ClosePane).expect("close");
+    let focused = app.state.focused_pane_id().expect("focus");
+    assert!(
+        app.state.ui.pane_rects.contains_key(&focused),
+        "focus landed on an inactive tab: {focused:?}"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn tabbed_needs_a_split_first() {
     let (mut app, dir) = fixture("x\n");
     app.dispatch(Command::ToggleTabbed).expect("tabbed");

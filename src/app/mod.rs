@@ -86,6 +86,7 @@ impl App {
             mcp_trusted: std::collections::HashSet::new(),
             mcp_recent: std::collections::BTreeMap::new(),
             mcp_subscriptions: std::collections::BTreeSet::new(),
+            mcp_subscription_picks: Vec::new(),
             mcp_resource_view: None,
             persist_mcp_state: false,
             plugins: None,
@@ -228,6 +229,9 @@ pub struct App {
     pub(crate) mcp_recent: std::collections::BTreeMap<String, Vec<String>>,
     /// Explicit MCP resource subscriptions for this session.
     pub(crate) mcp_subscriptions: std::collections::BTreeSet<(String, String)>,
+    /// The rows of the subscription picker, kept as pairs: a server name may
+    /// contain a space, so the label cannot be parsed back.
+    pub(crate) mcp_subscription_picks: Vec<(String, String)>,
     /// Resource currently shown in the MCP overlay.
     pub(crate) mcp_resource_view: Option<(String, String)>,
     /// Persist MCP trust/recent state; disabled in headless tests.
@@ -283,7 +287,14 @@ impl App {
         let mut panes = HashMap::new();
         panes.insert(pane_id, Pane::new(pane_id));
         let workspaces = WorkspaceManager {
-            workspaces: vec![Workspace::new(workspace_id, name, pane_id, root.clone())],
+            // `ExplorerState` canonicalized the root; storing the raw argument
+            // made every switch back to it look like a different directory.
+            workspaces: vec![Workspace::new(
+                workspace_id,
+                name,
+                pane_id,
+                explorer.root.clone(),
+            )],
             active: 0,
         };
         let config_path = crate::config::default_path();
@@ -389,6 +400,7 @@ impl App {
             mcp_trusted,
             mcp_recent,
             mcp_subscriptions: std::collections::BTreeSet::new(),
+            mcp_subscription_picks: Vec::new(),
             mcp_resource_view: None,
             persist_mcp_state: true,
             plugins: None,
@@ -448,7 +460,10 @@ impl App {
     /// restore, a workspace switch, or a root change.
     pub(crate) fn apply_active_root(&mut self) -> Result<()> {
         let root = self.state.workspaces.active().root.clone();
-        if self.state.explorer.root == root {
+        // The explorer stores a canonical root; a workspace may hold an
+        // equivalent path spelled differently, which must not look like a move.
+        let resolved = root.canonicalize().unwrap_or_else(|_| root.clone());
+        if self.state.explorer.root == resolved {
             return Ok(());
         }
         let visible = self.state.explorer.visible;
@@ -479,9 +494,8 @@ impl App {
             .iter()
             .map(|workspace| (workspace.id, workspace.root.clone()))
             .collect();
-        for (index, (id, root)) in roots.into_iter().enumerate() {
-            let watched_config = if index == 0 { config } else { None };
-            match crate::watch::Watcher::new(&root, watched_config) {
+        for (id, root) in roots {
+            match crate::watch::Watcher::new(&root, config) {
                 Ok(mut watcher) => {
                     if let Some(warning) = watcher.take_warning() {
                         self.state.warnings.push(warning);
@@ -498,7 +512,10 @@ impl App {
 
     pub(crate) fn replace_watcher(&mut self, id: crate::state::WorkspaceId, root: &Path) {
         self.watchers.retain(|(watched, _)| *watched != id);
-        match crate::watch::Watcher::new(root, None) {
+        // Config and plugin reloads depend on this watch; a replacement that
+        // dropped it would stop them for the rest of the session.
+        let config = self.state.config_path.clone();
+        match crate::watch::Watcher::new(root, config.as_deref()) {
             Ok(mut watcher) => {
                 if let Some(warning) = watcher.take_warning() {
                     self.state.warnings.push(warning);
@@ -787,13 +804,30 @@ impl App {
         };
         crate::session::save_to(&path, &self.state)
             .map_err(|error| Error::io("write session", &path, error))?;
-        // The shared file is only the upgrade fallback; once a per-root file
-        // exists it must not resurrect documents the user closed.
-        if self.session_path.is_none()
-            && let Some(legacy) = crate::session::default_path()
-            && legacy != path
-        {
-            let _ = std::fs::remove_file(legacy);
+        if self.session_path.is_none() {
+            // Every workspace root keeps its own file, so a root that is not
+            // active does not restore a layout from an older save.
+            let mut roots: Vec<std::path::PathBuf> = Vec::new();
+            for workspace in &self.state.workspaces.workspaces {
+                if !roots.iter().any(|root| root == &workspace.root) {
+                    roots.push(workspace.root.clone());
+                }
+            }
+            for root in roots {
+                if root == self.state.explorer.root {
+                    continue;
+                }
+                if let Some(path) = crate::session::path_for(&root) {
+                    let _ = crate::session::save_to_root(&path, &self.state, &root);
+                }
+            }
+            // The shared file is only the upgrade fallback; once a per-root
+            // file exists it must not resurrect documents the user closed.
+            if let Some(legacy) = crate::session::default_path()
+                && legacy != path
+            {
+                let _ = std::fs::remove_file(legacy);
+            }
         }
         Ok(())
     }

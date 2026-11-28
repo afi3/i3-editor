@@ -122,6 +122,31 @@ impl App {
         }
     }
 
+    /// Keep other workspaces pointing at a renamed directory. Without this a
+    /// nested workspace keeps a dangling root and a watcher on the old path.
+    pub(crate) fn retarget_workspaces(&mut self, from: &Path, to: &Path) {
+        let from_resolved = resolve_entry(from);
+        let to_resolved = resolve_entry(to);
+        let active = self.state.workspaces.active().id;
+        let mut changed: Vec<(crate::state::WorkspaceId, PathBuf)> = Vec::new();
+        for workspace in &mut self.state.workspaces.workspaces {
+            if let Ok(rest) = resolve_entry(&workspace.root).strip_prefix(&from_resolved) {
+                workspace.root = join_rest(&to_resolved, rest);
+                changed.push((workspace.id, workspace.root.clone()));
+            }
+            if let Ok(rest) = resolve_entry(&workspace.terminal_dir).strip_prefix(&from_resolved) {
+                workspace.terminal_dir = join_rest(&to_resolved, rest);
+            }
+        }
+        let active_moved = changed.iter().any(|(id, _)| *id == active);
+        for (id, root) in changed {
+            self.replace_watcher(id, &root);
+        }
+        if active_moved {
+            self.state.explorer.root = self.state.workspaces.active().root.clone();
+        }
+    }
+
     pub(crate) fn copy_path(&mut self) -> Result<()> {
         let Some(path) = self.file_operation_path() else {
             self.notify("no file selected");

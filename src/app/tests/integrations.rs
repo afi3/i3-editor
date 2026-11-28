@@ -91,7 +91,16 @@ fn watcher_reloads_a_clean_buffer_and_refreshes_the_explorer() {
         prompt
             .candidates
             .iter()
-            .any(|candidate| candidate == "new.txt")
+            .any(|candidate| candidate == "new.txt"),
+        "candidates={:?} rows={:?} message={}",
+        prompt.candidates,
+        app.state
+            .explorer
+            .rows
+            .iter()
+            .map(|row| row.name.clone())
+            .collect::<Vec<_>>(),
+        app.state.ui.message
     );
     std::fs::remove_dir_all(&dir).ok();
 }
@@ -922,6 +931,27 @@ fn git_pull_refuses_unsaved_buffers_before_touching_git() {
 }
 
 #[test]
+fn reloading_an_unrelated_setting_keeps_mcp_subscriptions() {
+    let (mut app, dir) = fixture("x\n");
+    let path = dir.join("config.toml");
+    std::fs::write(&path, "[appearance]\ntheme = \"dark\"\n").expect("write");
+    app.state.config_path = Some(path.clone());
+    // First reload establishes the baseline the next one is compared with.
+    app.reload_config();
+    app.mcp_subscriptions
+        .insert(("srv".to_string(), "file:///x".to_string()));
+
+    std::fs::write(&path, "[appearance]\ntheme = \"light\"\n").expect("rewrite");
+    app.reload_config();
+    assert_eq!(
+        app.mcp_subscriptions.len(),
+        1,
+        "an unrelated edit must not drop subscriptions"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn renaming_an_open_file_moves_the_buffer_with_it() {
     let (mut app, dir) = fixture("one\n");
     let row = app
@@ -1006,6 +1036,55 @@ fn renaming_a_buffer_keeps_its_external_change_flag() {
     assert!(
         document.disk_changed(),
         "a rename must not clear the external-change warning"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn switching_to_a_workspace_with_a_missing_root_is_refused() {
+    let (mut app, dir) = fixture("x\n");
+    app.dispatch(Command::NewWorkspace).expect("new workspace");
+    assert_eq!(app.state.workspaces.workspaces.len(), 2);
+    app.state.workspaces.workspaces[1].root = dir.join("gone");
+    let before = app.state.workspaces.active;
+    app.dispatch(Command::SwitchWorkspace(1)).expect("switch");
+    assert_eq!(
+        app.state.workspaces.active, before,
+        "a missing root must not be entered"
+    );
+    assert!(
+        app.state.ui.message.contains("unavailable"),
+        "{}",
+        app.state.ui.message
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn renaming_a_directory_moves_a_nested_workspace_root() {
+    let (mut app, dir) = fixture("x\n");
+    std::fs::create_dir(dir.join("sub")).expect("sub");
+    app.dispatch(Command::NewWorkspace).expect("new workspace");
+    let sub = dir.join("sub").canonicalize().expect("canonical");
+    app.state.workspaces.workspaces[1].root = sub;
+    app.dispatch(Command::SwitchWorkspace(0)).expect("back");
+    app.state.explorer.rebuild();
+    let row = app
+        .state
+        .explorer
+        .rows
+        .iter()
+        .position(|row| row.name == "sub" && row.is_dir)
+        .expect("row");
+    app.state.explorer.selected = row;
+    app.dispatch(Command::RenameTo(std::path::PathBuf::from("moved")))
+        .expect("rename");
+    assert_eq!(
+        app.state.workspaces.workspaces[1]
+            .root
+            .canonicalize()
+            .expect("root"),
+        dir.join("moved").canonicalize().expect("moved")
     );
     std::fs::remove_dir_all(&dir).ok();
 }

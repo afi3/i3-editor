@@ -158,7 +158,13 @@ pub fn restore(state: &mut AppState) -> Vec<String> {
 
 /// Save `state` to `path`. An empty session (no pane with a file) writes nothing.
 pub fn save_to(path: &Path, state: &AppState) -> std::io::Result<()> {
-    let Some(session) = snapshot(state) else {
+    save_to_root(path, state, &state.explorer.root)
+}
+
+/// Save `state` stamped with `root`, so the per-root file of a workspace that
+/// is not active still restores its own layout.
+pub fn save_to_root(path: &Path, state: &AppState, root: &Path) -> std::io::Result<()> {
+    let Some(session) = snapshot_for(state, root.to_path_buf()) else {
         // Nothing worth restoring: drop a session from an earlier run so it
         // cannot resurrect files the user has closed.
         return match std::fs::remove_file(path) {
@@ -176,7 +182,7 @@ pub fn save_to(path: &Path, state: &AppState) -> std::io::Result<()> {
     crate::editor::document::write_atomic(path, text.as_bytes())
 }
 
-fn snapshot(state: &AppState) -> Option<Session> {
+fn snapshot_for(state: &AppState, root: PathBuf) -> Option<Session> {
     let mut documents: Vec<PathBuf> = Vec::new();
     let mut folds: Vec<Vec<(usize, usize)>> = Vec::new();
     let mut positions: HashMap<PathBuf, usize> = HashMap::new();
@@ -256,7 +262,7 @@ fn snapshot(state: &AppState) -> Option<Session> {
     }
     Some(Session {
         version: VERSION,
-        root: state.explorer.root.clone(),
+        root,
         active: active.min(workspaces.len() - 1),
         show_hidden: state.explorer.show_hidden,
         documents,
@@ -800,6 +806,28 @@ mod tests {
         let mut restored = state_with(&dir);
         restore_from(&session_path, &mut restored).expect("restore");
         assert!(restored.documents.is_empty());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_workspace_root_can_be_stamped_into_its_own_session_file() {
+        let dir = temp_dir("stamped");
+        let other = dir.join("other");
+        std::fs::create_dir_all(&other).expect("other");
+        let a = dir.join("a.rs");
+        std::fs::write(&a, "fn a() {}\n").expect("a");
+
+        let mut state = state_with(&dir);
+        let first = first_pane_id(&state);
+        let a_id = add_document(&mut state, &a);
+        state.panes.get_mut(&first).expect("pane").tabs.push(a_id);
+        state.panes.get_mut(&first).expect("pane").active = Some(a_id);
+
+        let path = dir.join("session-other.toml");
+        save_to_root(&path, &state, &other).expect("save");
+        let text = std::fs::read_to_string(&path).expect("read");
+        let session: Session = toml::from_str(&text).expect("toml");
+        assert_eq!(session.root, other);
         std::fs::remove_dir_all(&dir).ok();
     }
 

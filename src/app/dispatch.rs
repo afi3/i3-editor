@@ -348,6 +348,7 @@ impl App {
                 let path = self.state.explorer.rename(&display)?;
                 if let Some(before) = before {
                     self.retarget_documents(&before, &path);
+                    self.retarget_workspaces(&before, &path);
                 }
                 self.notify(format!("renamed to {}", path.display()));
             }
