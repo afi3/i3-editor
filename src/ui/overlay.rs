@@ -669,6 +669,7 @@ fn field_label(prompt: &PromptState, index: usize) -> String {
         (PromptKind::AiProviderAdd, 1) => "Base URL: ".to_string(),
         (PromptKind::AiProviderAdd, 2) => "Model: ".to_string(),
         (PromptKind::AiProviderAdd, 3) => "API key env: ".to_string(),
+        (PromptKind::AiProviderAdd, _) => "API key: ".to_string(),
         (PromptKind::AiModel, _) => "Model: ".to_string(),
         (PromptKind::AiKey, _) => "Env var: ".to_string(),
         (PromptKind::McpPromptArgs, index) => format!(

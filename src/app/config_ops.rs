@@ -42,8 +42,17 @@ impl App {
         let base_url = prompt.fields.get(1).map_or("", String::as_str).trim();
         let model = prompt.fields.get(2).map_or("", String::as_str).trim();
         let api_key_env = prompt.fields.get(3).map_or("", String::as_str).trim();
+        let api_key = prompt.fields.get(4).map_or("", String::as_str).trim();
         if name.is_empty() || base_url.is_empty() || model.is_empty() {
             self.notify("provider needs a name, base URL, and model");
+            return Ok(());
+        }
+        if !api_key_env.is_empty()
+            && !api_key_env
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+        {
+            self.notify("environment variable names use letters, digits and '_'");
             return Ok(());
         }
         if !name
@@ -58,6 +67,7 @@ impl App {
             base_url: base_url.to_string(),
             model: model.to_string(),
             api_key_env: api_key_env.to_string(),
+            api_key: api_key.to_string(),
             ..Default::default()
         };
         match self.state.config_path.clone() {
@@ -68,6 +78,7 @@ impl App {
                     &provider.base_url,
                     &provider.model,
                     &provider.api_key_env,
+                    &provider.api_key,
                 ) {
                     Ok(()) => {
                         self.state
@@ -78,7 +89,14 @@ impl App {
                         self.state.config.ai.activate(&name);
                         self.reload_config();
                         let model = self.state.config.ai.model.clone();
-                        self.notify(format!("AI provider: {name} ({model})"));
+                        let note = if api_key.is_empty() {
+                            String::new()
+                        } else if api_key_env.is_empty() {
+                            "; API key stored in config.toml (plaintext, mode 0600)".to_string()
+                        } else {
+                            "; API key stored in config.toml (plaintext, mode 0600; it wins over the env var)".to_string()
+                        };
+                        self.notify(format!("AI provider: {name} ({model}){note}"));
                     }
                     Err(error) => self.notify(format!("provider not saved: {error}")),
                 }

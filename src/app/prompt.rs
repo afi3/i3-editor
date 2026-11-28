@@ -710,6 +710,7 @@ impl App {
                     self.state.config.ai.base_url.clone(),
                     self.state.config.ai.model.clone(),
                     self.state.config.ai.api_key_env.clone(),
+                    String::new(),
                 ];
                 prompt.active = 0;
             }

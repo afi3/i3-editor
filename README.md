@@ -602,11 +602,14 @@ is unavailable; MCP servers are not sandboxed by this option.
   wheel) scroll it sideways. New output follows the newest line until you scroll
   away; `End` resumes following.
 - `select_ai_provider` switches between `[ai.providers.*]` blocks and records
-  `active_provider`. `ai_add_provider` writes a new block from four fields
-  (name, base URL, model, API-key env var) and activates it; `ai_set_model` and
-  `ai_set_key` change the active provider's model and key environment variable.
-  All three edit `config.toml` in place and apply immediately; without a config
-  path they change the running session only.
+  `active_provider`. `ai_add_provider` writes a new block from five fields
+  (name, base URL, model, API-key env var, optional API key) and activates it;
+  `ai_set_model` and `ai_set_key` change the active provider's model and key
+  environment variable. A key typed into the last field is stored as `api_key`
+  in `config.toml` — plaintext, mode `0600`, and it takes precedence over the
+  env var and keyring only when no keyring is configured; leaving it empty keeps
+  the env/keyring path. All three commands edit `config.toml` in place and apply
+  immediately; without a config path they change the running session only.
 - `ai_attach_file` attaches the active document, `ai_attach_selection` attaches
   the selected text, and `ai_clear_context` drops pending attachments. Attached
   context is prefixed to the next user message as explicit `<context>` blocks

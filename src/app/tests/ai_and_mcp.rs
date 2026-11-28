@@ -487,7 +487,11 @@ fn the_palette_adds_an_ai_provider_and_changes_its_model_and_key_env() {
     let InputMode::Prompt(prompt) = &mut app.state.mode else {
         panic!("add-provider prompt missing")
     };
-    assert_eq!(prompt.fields.len(), 4, "name, url, model, key env");
+    assert_eq!(
+        prompt.fields.len(),
+        5,
+        "name, url, model, key env, optional key"
+    );
     prompt.fields[0] = "local".to_string();
     prompt.fields[1] = "http://127.0.0.1:9/v1".to_string();
     prompt.fields[2] = "qwen".to_string();
@@ -533,6 +537,50 @@ fn the_palette_adds_an_ai_provider_and_changes_its_model_and_key_env() {
         toml["ai"]["providers"]["local"]["api_key_env"].as_str(),
         Some("LOCAL_KEY")
     );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn a_provider_can_store_an_api_key_instead_of_an_environment_variable() {
+    let (mut app, dir) = fixture("x\n");
+    let path = dir.join("config.toml");
+    std::fs::write(&path, "[ai]\n").expect("write");
+    app.state.config_path = Some(path.clone());
+
+    app.dispatch(Command::AiAddProvider).expect("prompt");
+    let InputMode::Prompt(prompt) = &mut app.state.mode else {
+        panic!("add-provider prompt missing")
+    };
+    prompt.fields[0] = "direct".to_string();
+    prompt.fields[1] = "https://api.example/v1".to_string();
+    prompt.fields[2] = "model-a".to_string();
+    prompt.fields[3] = String::new();
+    prompt.fields[4] = "sk-test-123".to_string();
+    app.submit_prompt().expect("add provider");
+
+    assert_eq!(app.state.config.ai.api_key, "sk-test-123");
+    assert_eq!(app.state.config.ai.api_key_env, "");
+    let text = std::fs::read_to_string(&path).expect("read");
+    let toml: toml::Value = toml::from_str(&text).expect("valid toml");
+    assert_eq!(
+        toml["ai"]["providers"]["direct"]["api_key"].as_str(),
+        Some("sk-test-123")
+    );
+    assert!(
+        app.state.ui.message.contains("plaintext"),
+        "{}",
+        app.state.ui.message
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&path)
+            .expect("metadata")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o600, "the config keeps the key owner-only");
+    }
     std::fs::remove_dir_all(&dir).ok();
 }
 

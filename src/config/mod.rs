@@ -1211,6 +1211,7 @@ mod tests {
             "http://127.0.0.1:11434/v1",
             "qwen2.5-coder",
             "OLLAMA",
+            "",
         )
         .expect("persist");
         let text = std::fs::read_to_string(&path).expect("read");
@@ -1227,8 +1228,15 @@ mod tests {
         assert_eq!(value["ai"]["model"].as_str(), Some("old"));
 
         // A second save updates the block instead of appending another one.
-        persist_provider_at(&path, "local", "http://127.0.0.1:11434/v1", "new-model", "")
-            .expect("update");
+        persist_provider_at(
+            &path,
+            "local",
+            "http://127.0.0.1:11434/v1",
+            "new-model",
+            "",
+            "",
+        )
+        .expect("update");
         let text = std::fs::read_to_string(&path).expect("read");
         assert_eq!(text.matches("[ai.providers.local]").count(), 1, "{text}");
         let value: toml::Value = toml::from_str(&text).expect("valid toml");
@@ -1438,12 +1446,20 @@ pub fn persist_provider_at(
     base_url: &str,
     model: &str,
     api_key_env: &str,
+    api_key: &str,
 ) -> std::io::Result<()> {
     let text = read_for_update(path)?;
     let header = format!("[ai.providers.{name}]");
     let text = set_table_value(&text, &header, "base_url", base_url);
     let text = set_table_value(&text, &header, "model", model);
     let text = set_table_value(&text, &header, "api_key_env", api_key_env);
+    // An empty field keeps an existing key, so editing a provider does not
+    // silently drop it.
+    let text = if api_key.trim().is_empty() {
+        text
+    } else {
+        set_table_value(&text, &header, "api_key", api_key.trim())
+    };
     write_private(path, &set_active_provider(&text, name))
 }
 
