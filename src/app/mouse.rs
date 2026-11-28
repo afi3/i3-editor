@@ -279,7 +279,8 @@ impl App {
             return;
         }
         if self.state.explorer.visible && contains(self.state.ui.explorer, column, row) {
-            self.state.focus = Focus::Explorer;
+            // Scrolling the tree must not steal keyboard focus: the next typed
+            // key would otherwise run an explorer command.
             self.state.explorer.move_selection(steps * 3);
             return;
         }

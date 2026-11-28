@@ -107,9 +107,10 @@ fn wheel_over_the_explorer_moves_the_selection() {
     let column = area.x + 2;
     let row = area.y + 2;
 
+    let before = app.state.focus;
     wheel(&mut app, MouseEventKind::ScrollDown, column, row);
     assert_eq!(app.state.explorer.selected, 3);
-    assert_eq!(app.state.focus, Focus::Explorer);
+    assert_eq!(app.state.focus, before, "the wheel must not take focus");
 
     wheel(&mut app, MouseEventKind::ScrollUp, column, row);
     assert_eq!(app.state.explorer.selected, 0);

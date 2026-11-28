@@ -62,6 +62,7 @@ impl App {
             selecting: None,
             enhanced: false,
             recoveries: Vec::new(),
+            recovery_stale: std::collections::HashSet::new(),
             swap: None,
             last_swap: std::time::Instant::now(),
             lsp: None,
@@ -189,6 +190,9 @@ pub struct App {
     pub(crate) enhanced: bool,
     /// Documents restored from swap files, resolved one prompt at a time.
     pub(crate) recoveries: Vec<crate::state::DocumentId>,
+    /// Recovered buffers whose file was newer than their swap at load time.
+    /// Checked before the first autosave rewrites the swap.
+    pub(crate) recovery_stale: std::collections::HashSet<crate::state::DocumentId>,
     /// This process's swap directory; `None` when no config directory can be
     /// resolved or the directory could not be claimed.
     pub(crate) swap: Option<crate::recovery::Instance>,
@@ -356,6 +360,7 @@ impl App {
             selecting: None,
             enhanced,
             recoveries: Vec::new(),
+            recovery_stale: std::collections::HashSet::new(),
             swap: None,
             last_swap: std::time::Instant::now(),
             lsp: None,
@@ -561,6 +566,21 @@ impl App {
             self.refresh_prompt_preview();
             return Ok(());
         }
+        if self.state.ai.visible && self.state.ai.focused {
+            self.paste_ai(&text);
+            return Ok(());
+        }
+        if self.state.help.is_some()
+            || self.state.git_diff.is_some()
+            || self.state.hunks.is_some()
+            || self.state.mcp_view.is_some()
+            || self.state.rules_view.is_some()
+            || self.state.trace_view.is_some()
+        {
+            // A modal surface owns the screen; a paste must not reach the
+            // buffer hidden behind it.
+            return Ok(());
+        }
         match self.state.focus {
             Focus::Shell => {
                 self.paste_to_shell(&text);
@@ -587,11 +607,15 @@ impl App {
     fn draw(&mut self) -> Result<()> {
         let size = self.terminal.size()?;
         let area = ratatui::layout::Rect::new(0, 0, size.width, size.height);
+        let resized = self.state.ui.area != area;
         ui::compute_layout(&mut self.state, area);
         self.reveal_active_tabs();
-        // A resize changes how many rows fit; without this the caret can sit
-        // outside the viewport until the next cursor command.
-        self.ensure_cursor_visible();
+        // Only a resize invalidates the viewport. Re-clamping every frame would
+        // undo wheel and scrollbar scrolling, which move the view without
+        // moving the caret.
+        if resized {
+            self.ensure_cursor_visible();
+        }
         let App {
             terminal, state, ..
         } = self;
@@ -607,6 +631,7 @@ impl App {
             || self.sampling_task.is_some()
             || self.native_verify.is_some()
             || self.git_command.is_some()
+            || self.mcp.as_ref().is_some_and(|mcp| mcp.has_backlog())
         {
             return Duration::from_millis(100);
         }
@@ -684,7 +709,9 @@ impl App {
             return;
         }
         if let Some(command) = self.plugin_binding(combo) {
-            self.run_plugin_command(&command);
+            if !self.run_plugin_command(&command) {
+                self.notify(format!("plugin command {command} is not registered"));
+            }
             return;
         }
         if matches!(self.state.focus, Focus::Pane(_))
@@ -753,7 +780,16 @@ impl App {
             },
         };
         crate::session::save_to(&path, &self.state)
-            .map_err(|error| Error::io("write session", &path, error))
+            .map_err(|error| Error::io("write session", &path, error))?;
+        // The shared file is only the upgrade fallback; once a per-root file
+        // exists it must not resurrect documents the user closed.
+        if self.session_path.is_none()
+            && let Some(legacy) = crate::session::default_path()
+            && legacy != path
+        {
+            let _ = std::fs::remove_file(legacy);
+        }
+        Ok(())
     }
 
     fn autosave_session(&mut self) {

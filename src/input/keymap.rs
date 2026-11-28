@@ -212,14 +212,19 @@ impl KeyMap {
     /// Bindings that a focused scope hides from the global scope.
     pub fn shadowed(&self) -> Vec<String> {
         let mut out = Vec::new();
-        for (combo, command) in &self.editing {
-            if let Some(global) = self.global.get(combo) {
-                out.push(format!(
-                    "{} runs {} when a pane is focused and {} globally",
-                    combo.label(),
-                    command.name(),
-                    global.name()
-                ));
+        for (scope, where_it_runs) in [
+            (&self.editing, "when a pane is focused"),
+            (&self.explorer, "when the explorer is focused"),
+        ] {
+            for (combo, command) in scope {
+                if let Some(global) = self.global.get(combo) {
+                    out.push(format!(
+                        "{} runs {} {where_it_runs} and {} globally",
+                        combo.label(),
+                        command.name(),
+                        global.name()
+                    ));
+                }
             }
         }
         out
@@ -253,6 +258,22 @@ mod tests {
 
     fn combo(text: &str) -> KeyCombo {
         KeyCombo::parse(text).expect("valid combo")
+    }
+
+    #[test]
+    fn explorer_overrides_that_hide_global_bindings_are_reported() {
+        let mut map = KeyMap::preset(false);
+        map.explorer.insert(
+            KeyCombo::parse("ctrl+p").expect("combo"),
+            Command::ExplorerRefresh,
+        );
+        assert!(
+            map.shadowed()
+                .iter()
+                .any(|line| line.contains("explorer is focused")),
+            "{:?}",
+            map.shadowed()
+        );
     }
 
     #[test]

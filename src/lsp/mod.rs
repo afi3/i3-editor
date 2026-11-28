@@ -97,7 +97,11 @@ pub enum Event {
         /// Empty when the server has nothing to say, which closes the popup.
         text: String,
     },
-    Definition(Option<Location>),
+    Definition {
+        document: crate::state::DocumentId,
+        revision: u64,
+        location: Option<Location>,
+    },
     Warning(String),
 }
 
@@ -594,7 +598,16 @@ impl LspManager {
                         });
                     }
                     ReplyKind::Definition => {
-                        events.push(Event::Definition(parse_definition(message.get("result"))));
+                        let Some(target) = pending.target else {
+                            continue;
+                        };
+                        // A superseded reply must not move the caret: JSON-RPC
+                        // allows out-of-order answers.
+                        events.push(Event::Definition {
+                            document: target.document,
+                            revision: target.revision,
+                            location: parse_definition(message.get("result")),
+                        });
                     }
                 }
             }
@@ -1272,7 +1285,7 @@ mod tests {
             match event {
                 Event::Completion { items, .. } => replies.completion = Some(items),
                 Event::Hover { text, .. } => replies.hover = Some(text),
-                Event::Definition(location) => replies.definition = Some(location),
+                Event::Definition { location, .. } => replies.definition = Some(location),
                 _ => {}
             }
         }

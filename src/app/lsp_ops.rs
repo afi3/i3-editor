@@ -83,7 +83,19 @@ impl App {
                     self.state.completions = None;
                     self.state.hover = (!text.is_empty()).then_some(text);
                 }
-                Event::Definition(location) => pending_definition = Some(location),
+                Event::Definition {
+                    document,
+                    revision,
+                    location,
+                } => {
+                    let current = self.state.documents.get(&document).map(|doc| doc.revision);
+                    if current != Some(revision)
+                        || self.state.active_document_id() != Some(document)
+                    {
+                        continue;
+                    }
+                    pending_definition = Some(location);
+                }
                 Event::Warning(message) => self.notify(message),
             }
         }

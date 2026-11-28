@@ -476,7 +476,7 @@ impl Command {
 
     fn layout_spec(&self) -> Option<(&'static str, &'static str)> {
         Some(match self {
-            Command::FocusPane(_) => ("focus_pane", "Move focus to another pane"),
+            Command::FocusPane(direction) => (focus_name(*direction), "Move focus to another pane"),
             Command::MovePane(direction) => (
                 direction_name(*direction),
                 "Move the focused pane in a direction",
@@ -660,6 +660,10 @@ impl Command {
             Command::AiSemanticIndex,
             Command::AiSemanticStatus,
             Command::SelectWorkspace,
+            Command::FocusPane(Direction::Left),
+            Command::FocusPane(Direction::Right),
+            Command::FocusPane(Direction::Up),
+            Command::FocusPane(Direction::Down),
             Command::MovePane(Direction::Left),
             Command::MovePane(Direction::Right),
             Command::MovePane(Direction::Up),
@@ -701,6 +705,15 @@ impl Command {
         Command::palette()
             .into_iter()
             .find(|command| command.name() == name)
+    }
+}
+
+fn focus_name(direction: Direction) -> &'static str {
+    match direction {
+        Direction::Left => "focus_left",
+        Direction::Right => "focus_right",
+        Direction::Up => "focus_up",
+        Direction::Down => "focus_down",
     }
 }
 
@@ -812,6 +825,9 @@ mod tests {
             Command::MoveCursor(Move::Left),
             Command::ExtendSelection(Move::Right),
             Command::FocusPane(Direction::Left),
+            Command::FocusPane(Direction::Right),
+            Command::FocusPane(Direction::Up),
+            Command::FocusPane(Direction::Down),
             Command::MovePane(Direction::Left),
             Command::MovePane(Direction::Right),
             Command::MovePane(Direction::Up),
@@ -879,6 +895,18 @@ mod tests {
             !names
                 .iter()
                 .any(|name| name.starts_with("switch_workspace_"))
+        );
+    }
+
+    #[test]
+    fn pane_focus_directions_resolve_from_names() {
+        assert_eq!(
+            Command::from_name("focus_left"),
+            Some(Command::FocusPane(Direction::Left))
+        );
+        assert_eq!(
+            Command::from_name("focus_down"),
+            Some(Command::FocusPane(Direction::Down))
         );
     }
 

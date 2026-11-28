@@ -495,6 +495,51 @@ fn dragging_a_split_separator_follows_the_pointer_once() {
 }
 
 #[test]
+fn a_paste_goes_to_the_focused_ai_composer() {
+    let (mut app, dir) = fixture("x\n");
+    app.dispatch(Command::AiChat).expect("panel");
+    app.state.ai.focused = true;
+    app.state.ai.input = "ab".to_string();
+    app.state.ai.cursor = 1;
+    app.handle_paste("XY".to_string()).expect("paste");
+    assert_eq!(app.state.ai.input, "aXYb");
+    assert_eq!(app.state.ai.cursor, 3);
+    assert_eq!(
+        text(&app),
+        "x\n",
+        "the buffer behind the panel is untouched"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn a_paste_while_an_overlay_is_open_leaves_the_buffer_alone() {
+    let (mut app, dir) = fixture("x\n");
+    app.dispatch(Command::Help).expect("help");
+    assert!(app.state.help.is_some());
+    app.handle_paste("oops".to_string()).expect("paste");
+    assert_eq!(text(&app), "x\n");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn wheeling_the_explorer_does_not_take_keyboard_focus() {
+    use ratatui::crossterm::event::{MouseEvent, MouseEventKind};
+
+    let (mut app, dir) = fixture("x\n");
+    let before = app.state.focus;
+    let rect = app.state.ui.explorer;
+    app.handle_mouse(MouseEvent {
+        kind: MouseEventKind::ScrollDown,
+        column: rect.x + 1,
+        row: rect.y + 2,
+        modifiers: ratatui::crossterm::event::KeyModifiers::NONE,
+    });
+    assert_eq!(app.state.focus, before, "the wheel must not move focus");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn wheel_moves_the_prompt_selection() {
     let (mut app, dir) = fixture("x\n");
     app.dispatch(Command::Palette).expect("palette");

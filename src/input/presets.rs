@@ -248,7 +248,15 @@ impl KeyMap {
                 continue;
             }
             seen.insert(parsed, action.clone());
-            scope.insert(parsed, command);
+            if let Some(replaced) = scope.insert(parsed, command.clone())
+                && replaced != command
+            {
+                warnings.push(format!(
+                    "{prefix}{} is bound to {} by default; {action} replaces it",
+                    parsed.label(),
+                    replaced.name()
+                ));
+            }
         }
     }
 }
@@ -261,6 +269,29 @@ mod tests {
 
     fn lookup(map: &KeyMap, text: &str) -> Option<Command> {
         map.resolve(Focus::Explorer, KeyCombo::parse(text).expect("combo"))
+    }
+
+    #[test]
+    fn an_override_that_replaces_a_default_binding_warns() {
+        let keys = KeysConfig {
+            global: std::collections::BTreeMap::from([(
+                "save_as".to_string(),
+                "ctrl+s".to_string(),
+            )]),
+            ..KeysConfig::default()
+        };
+        let (map, warnings) = KeyMap::from_config(&keys, true);
+        assert!(
+            warnings.iter().any(|warning| warning.contains("replaces")),
+            "{warnings:?}"
+        );
+        assert_eq!(
+            map.resolve(
+                crate::state::Focus::Pane(crate::state::PaneId(0)),
+                KeyCombo::parse("ctrl+s").expect("combo")
+            ),
+            Some(Command::SavePrompt)
+        );
     }
 
     #[test]
@@ -328,7 +359,13 @@ mod tests {
             .insert("nonsense".to_string(), "ctrl+k".to_string());
         keys.global.insert("quit".to_string(), "f12".to_string());
         let (map, warnings) = KeyMap::from_config(&keys, true);
-        assert_eq!(warnings.len(), 2, "{warnings:?}");
+        assert_eq!(warnings.len(), 3, "{warnings:?}");
+        assert!(
+            warnings
+                .iter()
+                .any(|warning| warning.contains("tabbed") && warning.contains("replaces")),
+            "{warnings:?}"
+        );
         assert_eq!(lookup(&map, "ctrl+s"), Some(Command::Save));
         assert_eq!(lookup(&map, "f12"), Some(Command::Quit));
     }
