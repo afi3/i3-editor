@@ -1832,6 +1832,16 @@ fn parse_tool_result(result: &Value) -> (Vec<ToolContent>, bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_http_session_header_is_read_case_insensitively() {
+        let session = Mutex::new(None);
+        let (sender, _incoming) = mpsc::channel();
+        let raw =
+            "HTTP/1.1 200 OK\r\nmcp-session-id: abc123\r\ncontent-type: application/json\r\n\r\n{}";
+        handle_http_response(raw, None, &session, &sender).expect("response");
+        assert_eq!(session.lock().expect("session").as_deref(), Some("abc123"));
+    }
     fn mock(mode: &str) -> McpManager {
         let script = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("tests")
