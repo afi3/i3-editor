@@ -263,6 +263,14 @@ impl App {
         }
     }
 
+    /// Insert pasted text at the composer cursor.
+    pub(crate) fn paste_ai(&mut self, text: &str) {
+        let byte = char_byte(&self.state.ai.input, self.state.ai.cursor);
+        self.state.ai.input.insert_str(byte, text);
+        self.state.ai.cursor += text.chars().count();
+        self.dirty = true;
+    }
+
     fn cancel_ai_turn(&mut self) {
         self.record_ai_trace("cancelled", None, None, 0);
         self.ai_compact_dropped = None;
@@ -1916,11 +1924,15 @@ impl App {
         self.dirty = true;
     }
 
-    fn run_native_tool(
+    pub(crate) fn run_native_tool(
         &mut self,
         root: &std::path::Path,
         call: &AiToolCall,
     ) -> Result<String, String> {
+        // `search` takes a query and an optional glob; it has no path argument.
+        if call.tool == "search" {
+            return crate::native::search(root, &call.arguments);
+        }
         let raw = call
             .arguments
             .get("path")
@@ -2136,6 +2148,48 @@ impl App {
         };
         self.state.ai.entries = history.entries;
         self.state.ai.conversation = history.conversation;
+        Self::repair_dangling_tool_calls(&mut self.state.ai.conversation);
+    }
+
+    /// Quitting at an approval prompt saves an assistant `tool_calls` message
+    /// whose results were never recorded; providers reject that history, so the
+    /// missing calls are closed out on load.
+    pub(crate) fn repair_dangling_tool_calls(conversation: &mut Vec<Value>) {
+        let Some(index) = conversation.iter().rposition(|message| {
+            message
+                .get("tool_calls")
+                .and_then(Value::as_array)
+                .is_some_and(|calls| !calls.is_empty())
+        }) else {
+            return;
+        };
+        let ids: Vec<String> = conversation[index]
+            .get("tool_calls")
+            .and_then(Value::as_array)
+            .map(|calls| {
+                calls
+                    .iter()
+                    .filter_map(|call| call.get("id").and_then(Value::as_str))
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default();
+        let answered: Vec<String> = conversation[index + 1..]
+            .iter()
+            .filter(|message| message.get("role").and_then(Value::as_str) == Some("tool"))
+            .filter_map(|message| message.get("tool_call_id").and_then(Value::as_str))
+            .map(str::to_string)
+            .collect();
+        for id in ids {
+            if answered.contains(&id) {
+                continue;
+            }
+            conversation.push(json!({
+                "role": "tool",
+                "tool_call_id": id,
+                "content": "Tool call was interrupted before a result was recorded."
+            }));
+        }
     }
 
     fn save_ai_history(&self) {

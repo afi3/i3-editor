@@ -22,6 +22,8 @@ pub const PROTOCOL_VERSION: &str = "2025-06-18";
 const MAX_MESSAGE_BYTES: usize = 8 << 20;
 /// Stderr is diagnostics, not protocol; one line may not exceed this.
 const MAX_DIAGNOSTIC_BYTES: usize = 64 << 10;
+/// Messages handled per server per frame; the rest waits for the next pump.
+const DRAIN_BUDGET: usize = 256;
 
 /// Read one newline-terminated line, refusing to buffer more than `limit`
 /// bytes. `read_line` allocates the whole line before a caller can check it,
@@ -254,6 +256,12 @@ pub enum Event {
         id: i64,
         params: Value,
     },
+    /// A request or transport belonging to one server failed. `Warning` is for
+    /// notices; only a failure may abort the tool call waiting on that server.
+    Failure {
+        server: String,
+        message: String,
+    },
     Log {
         /// Read by the tests and the log overlay.
         #[allow(dead_code)]
@@ -369,6 +377,8 @@ pub struct McpManager {
     next_id: i64,
     request_timeout: Duration,
     initialize_timeout: Duration,
+    /// Set when a pump left messages queued for the next frame.
+    backlog: bool,
 }
 
 impl McpManager {
@@ -381,6 +391,7 @@ impl McpManager {
             next_id: 0,
             request_timeout: REQUEST_TIMEOUT,
             initialize_timeout: INITIALIZE_TIMEOUT,
+            backlog: false,
         }
     }
 
@@ -624,6 +635,7 @@ impl McpManager {
     }
 
     pub fn pump(&mut self) -> Vec<Event> {
+        self.backlog = false;
         let names: Vec<String> = self.servers.keys().cloned().collect();
         let mut events = Vec::new();
         for name in names {
@@ -730,12 +742,26 @@ impl McpManager {
         self.next_id
     }
 
+    /// True when the last pump hit the per-server budget; the caller should
+    /// keep the frame timeout short until the backlog is drained.
+    pub fn has_backlog(&self) -> bool {
+        self.backlog
+    }
+
     fn pump_server(&mut self, name: &str, events: &mut Vec<Event>) {
         let mut messages = Vec::new();
         if let Some(server) = self.servers.get(name) {
-            while let Ok(message) = server.incoming.try_recv() {
-                messages.push(message);
+            // Bounded like the LSP drain: a flood stays queued for the next
+            // frame instead of being parsed in one go on the UI thread.
+            for _ in 0..DRAIN_BUDGET {
+                match server.incoming.try_recv() {
+                    Ok(message) => messages.push(message),
+                    Err(_) => break,
+                }
             }
+        }
+        if messages.len() == DRAIN_BUDGET {
+            self.backlog = true;
         }
         let mut closed = false;
         for message in messages {
@@ -751,7 +777,10 @@ impl McpManager {
                     events.push(Event::Log { line });
                 }
                 Incoming::ProtocolError(message) => {
-                    events.push(Event::Warning(format!("MCP {name}: {message}")));
+                    events.push(Event::Failure {
+                        server: name.to_string(),
+                        message,
+                    });
                     closed = true;
                 }
                 Incoming::Closed => closed = true,
@@ -761,7 +790,10 @@ impl McpManager {
         if closed {
             self.servers.remove(name);
             self.failed.insert(name.to_string());
-            events.push(Event::Warning(format!("MCP {name}: server stopped")));
+            events.push(Event::Failure {
+                server: name.to_string(),
+                message: "server stopped".to_string(),
+            });
         }
     }
 
@@ -784,7 +816,10 @@ impl McpManager {
         }
         for kind in expired {
             let _ = kind;
-            events.push(Event::Warning(format!("MCP {name}: request timed out")));
+            events.push(Event::Failure {
+                server: name.to_string(),
+                message: "request timed out".to_string(),
+            });
         }
     }
 
@@ -956,13 +991,19 @@ impl McpManager {
 
     fn handle_line(&mut self, name: &str, line: &str, events: &mut Vec<Event>) {
         if line.len() > MAX_MESSAGE_BYTES {
-            events.push(Event::Warning(format!("MCP {name}: response too large")));
+            events.push(Event::Failure {
+                server: name.to_string(),
+                message: "response too large".to_string(),
+            });
             return;
         }
         let value: Value = match serde_json::from_str(line) {
             Ok(value) => value,
             Err(error) => {
-                events.push(Event::Warning(format!("MCP {name}: invalid JSON: {error}")));
+                events.push(Event::Failure {
+                    server: name.to_string(),
+                    message: format!("invalid JSON: {error}"),
+                });
                 return;
             }
         };
@@ -983,7 +1024,10 @@ impl McpManager {
                     .get("message")
                     .and_then(Value::as_str)
                     .unwrap_or("request failed");
-                events.push(Event::Warning(format!("MCP {name}: {message}")));
+                events.push(Event::Failure {
+                    server: name.to_string(),
+                    message: message.to_string(),
+                });
                 return;
             }
             let result = value.get("result").cloned().unwrap_or(Value::Null);
@@ -1025,7 +1069,10 @@ impl McpManager {
             server.initialized = true;
             server.resources_subscribe = subscribe;
             if let Err(error) = send_notification(server, "notifications/initialized") {
-                events.push(Event::Warning(format!("MCP {name}: {error}")));
+                events.push(Event::Failure {
+                    server: name.to_string(),
+                    message: error,
+                });
             }
             let allow_sampling = self
                 .configs
@@ -1055,7 +1102,10 @@ impl McpManager {
                 request.kind,
                 request.tool,
             ) {
-                events.push(Event::Warning(error));
+                events.push(Event::Failure {
+                    server: name.to_string(),
+                    message: error,
+                });
             }
         }
     }
@@ -2234,10 +2284,10 @@ mod tests {
         manager.list_tools("mock").expect("list tools");
         let events = wait_for(
             &mut manager,
-            |event| matches!(event, Event::Warning(message) if message.contains("invalid JSON")),
+            |event| matches!(event, Event::Failure { message, .. } if message.contains("invalid JSON")),
         );
         assert!(events.iter().any(
-            |event| matches!(event, Event::Warning(message) if message.contains("invalid JSON"))
+            |event| matches!(event, Event::Failure { message, .. } if message.contains("invalid JSON"))
         ));
     }
 
@@ -2251,11 +2301,11 @@ mod tests {
         manager.list_tools("mock").expect("start server");
         let events = wait_for(
             &mut manager,
-            |event| matches!(event, Event::Warning(message) if message.contains("server stopped")),
+            |event| matches!(event, Event::Failure { message, .. } if message.contains("server stopped")),
         );
         assert!(manager.failed("mock"));
         assert!(events.iter().any(
-            |event| matches!(event, Event::Warning(message) if message.contains("server stopped"))
+            |event| matches!(event, Event::Failure { message, .. } if message.contains("server stopped"))
         ));
     }
     #[test]
@@ -2269,10 +2319,10 @@ mod tests {
         manager.list_tools("mock").expect("start server");
         let events = wait_for(
             &mut manager,
-            |event| matches!(event, Event::Warning(message) if message.contains("timed out")),
+            |event| matches!(event, Event::Failure { message, .. } if message.contains("timed out")),
         );
         assert!(events.iter().any(
-            |event| matches!(event, Event::Warning(message) if message.contains("timed out"))
+            |event| matches!(event, Event::Failure { message, .. } if message.contains("timed out"))
         ));
     }
 
@@ -2286,10 +2336,10 @@ mod tests {
         manager.list_tools("mock").expect("list tools");
         let events = wait_for(
             &mut manager,
-            |event| matches!(event, Event::Warning(message) if message.contains("too large")),
+            |event| matches!(event, Event::Failure { message, .. } if message.contains("too large")),
         );
         assert!(events.iter().any(
-            |event| matches!(event, Event::Warning(message) if message.contains("too large"))
+            |event| matches!(event, Event::Failure { message, .. } if message.contains("too large"))
         ));
     }
 

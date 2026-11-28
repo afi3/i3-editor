@@ -204,7 +204,10 @@ impl App {
 
     fn handle_mcp_event(&mut self, event: crate::mcp::Event) -> bool {
         match event {
-            crate::mcp::Event::Warning(message) => self.handle_mcp_warning(message),
+            crate::mcp::Event::Warning(message) => self.handle_mcp_notice(message),
+            crate::mcp::Event::Failure { server, message } => {
+                self.handle_mcp_failure(&server, message)
+            }
             crate::mcp::Event::Tools { .. } => return true,
             crate::mcp::Event::ToolResult {
                 server,
@@ -314,6 +317,17 @@ impl App {
             }
             return;
         }
+        // A prompt the user is typing in must not be replaced by an unsolicited
+        // one; the request is declined instead of silently discarding input.
+        if matches!(self.state.mode, InputMode::Prompt(_)) {
+            if let Some(manager) = self.mcp.as_mut() {
+                let _ = manager.respond_error(&server, id, "the editor is busy with a prompt");
+            }
+            self.notify(format!(
+                "{server}: sampling declined while a prompt is open"
+            ));
+            return;
+        }
         self.sampling_request = Some((server.clone(), id, params.clone()));
         let preview = params
             .get("messages")
@@ -398,18 +412,73 @@ impl App {
         self.dirty = true;
     }
 
-    fn handle_mcp_warning(&mut self, message: String) {
+    /// A notice such as a changed tool list: report it, but keep the turn and
+    /// any queued question exactly as they are.
+    pub(crate) fn handle_mcp_notice(&mut self, message: String) {
+        self.notify(message);
+    }
+
+    /// A request or transport on `server` failed. The tool call waiting on that
+    /// server must be answered, or the conversation keeps a `tool_call_id` with
+    /// no reply and every later request is rejected by the provider.
+    pub(crate) fn handle_mcp_failure(&mut self, server: &str, message: String) {
+        let message = if message.starts_with(&format!("MCP {server}")) {
+            message
+        } else {
+            format!("MCP {server}: {message}")
+        };
+        let waiting_matches = self
+            .state
+            .ai
+            .waiting
+            .as_ref()
+            .is_some_and(|waiting| waiting.server == server);
+        if waiting_matches && let Some(waiting) = self.state.ai.waiting.take() {
+            super::audit::result(&self.state, &waiting, "error", Some(&message));
+            self.state.ai.conversation.push(serde_json::json!({
+                "role": "tool",
+                "tool_call_id": waiting.id,
+                "content": format!("Tool call failed: {message}")
+            }));
+        }
+        let pending: Vec<crate::state::AiToolCall> = self
+            .state
+            .ai
+            .pending
+            .iter()
+            .filter(|call| call.server == server)
+            .cloned()
+            .collect();
+        let mut closed_pending = false;
+        if !pending.is_empty() {
+            closed_pending = true;
+            self.state.ai.pending.retain(|call| call.server != server);
+            for call in pending {
+                super::audit::blocked(
+                    &self.state,
+                    &call.id,
+                    &call.server,
+                    &call.tool,
+                    &call.arguments,
+                    &format!("server failed: {message}"),
+                );
+                self.state.ai.conversation.push(serde_json::json!({
+                    "role": "tool",
+                    "tool_call_id": call.id,
+                    "content": format!("Tool call not run: {message}")
+                }));
+            }
+        }
+        if waiting_matches || closed_pending {
+            self.state.ai.busy = false;
+            self.state.ai.entries.push(format!("[error] {message}"));
+        }
         if self.state.ai.queued_question.is_some() {
             self.state.ai.queued_question = None;
             self.state
                 .ai
                 .entries
                 .push(format!("[error] MCP tools unavailable: {message}"));
-        }
-        if let Some(waiting) = self.state.ai.waiting.take() {
-            super::audit::result(&self.state, &waiting, "error", Some(&message));
-            self.state.ai.busy = false;
-            self.state.ai.entries.push(format!("[error] {message}"));
         }
         self.notify(message);
     }

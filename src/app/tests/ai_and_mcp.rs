@@ -335,6 +335,108 @@ fn embeddings_come_back_in_input_order() {
 }
 
 #[test]
+fn the_native_search_tool_needs_no_path_argument() {
+    let (mut app, dir) = fixture("needle in the haystack\n");
+    let call = crate::state::AiToolCall {
+        id: "c1".to_string(),
+        server: crate::native::SERVER.to_string(),
+        tool: "search".to_string(),
+        capability: "read".to_string(),
+        arguments: serde_json::json!({"query": "needle"}),
+    };
+    let root = app.state.explorer.root.clone();
+    let output = app.run_native_tool(&root, &call).expect("search runs");
+    assert!(output.contains("needle"), "{output}");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn a_saved_conversation_with_a_dangling_tool_call_is_repaired() {
+    let mut conversation = vec![
+        serde_json::json!({"role": "user", "content": "hi"}),
+        serde_json::json!({"role": "assistant", "content": null, "tool_calls": [
+            {"id": "c1", "type": "function", "function": {"name": "x", "arguments": "{}"}}
+        ]}),
+        serde_json::json!({"role": "tool", "tool_call_id": "c1", "content": "ok"}),
+        serde_json::json!({"role": "assistant", "content": null, "tool_calls": [
+            {"id": "c2", "type": "function", "function": {"name": "y", "arguments": "{}"}}
+        ]}),
+    ];
+    crate::app::App::repair_dangling_tool_calls(&mut conversation);
+    let last = conversation.last().expect("tool message");
+    assert_eq!(last["role"], "tool");
+    assert_eq!(last["tool_call_id"], "c2");
+    assert_eq!(
+        conversation
+            .iter()
+            .filter(|message| message["tool_call_id"] == "c1")
+            .count(),
+        1,
+        "an answered call is not closed twice"
+    );
+}
+
+#[test]
+fn a_failed_mcp_tool_call_is_answered_in_the_conversation() {
+    let (mut app, dir) = fixture("x\n");
+    app.state.ai.conversation = vec![serde_json::json!({
+        "role": "assistant",
+        "content": null,
+        "tool_calls": [{"id": "c1", "type": "function",
+                        "function": {"name": "mcp__srv__tool", "arguments": "{}"}}]
+    })];
+    app.state.ai.waiting = Some(crate::state::AiWaiting {
+        id: "c1".to_string(),
+        server: "srv".to_string(),
+        tool: "tool".to_string(),
+        capability: "read".to_string(),
+    });
+    app.state.ai.busy = true;
+    app.handle_mcp_failure("srv", "request timed out".to_string());
+
+    let last = app.state.ai.conversation.last().expect("tool message");
+    assert_eq!(last["role"], "tool");
+    assert_eq!(last["tool_call_id"], "c1");
+    assert!(
+        last["content"]
+            .as_str()
+            .is_some_and(|text| text.contains("timed out"))
+    );
+    assert!(!app.state.ai.busy, "the failed turn must stop waiting");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn an_mcp_notice_does_not_abort_the_running_call() {
+    let (mut app, dir) = fixture("x\n");
+    app.state.ai.waiting = Some(crate::state::AiWaiting {
+        id: "c1".to_string(),
+        server: "srv".to_string(),
+        tool: "tool".to_string(),
+        capability: "read".to_string(),
+    });
+    app.state.ai.queued_question = Some("next question".to_string());
+    app.handle_mcp_notice("MCP srv: tool list changed; refresh tools".to_string());
+    assert!(app.state.ai.waiting.is_some(), "a notice is not a failure");
+    assert!(app.state.ai.queued_question.is_some());
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn a_failure_on_another_server_leaves_the_waiting_call_alone() {
+    let (mut app, dir) = fixture("x\n");
+    app.state.ai.waiting = Some(crate::state::AiWaiting {
+        id: "c1".to_string(),
+        server: "srv".to_string(),
+        tool: "tool".to_string(),
+        capability: "read".to_string(),
+    });
+    app.handle_mcp_failure("other", "server stopped".to_string());
+    assert!(app.state.ai.waiting.is_some());
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn the_rules_overlay_takes_keys_before_the_ai_panel_under_it() {
     use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 

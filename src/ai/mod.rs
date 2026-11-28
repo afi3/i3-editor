@@ -4,7 +4,7 @@
 //! avoiding a second TLS stack. The panel uses SSE streaming by default and
 //! falls back to a single JSON response when the provider does not stream.
 
-use std::io::Write;
+use std::io::{Read, Write};
 use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -358,6 +358,27 @@ impl AttemptError {
     }
 }
 
+/// Read a child pipe to EOF on its own thread.
+fn drain_pipe(mut pipe: impl Read + Send + 'static) -> thread::JoinHandle<Vec<u8>> {
+    thread::spawn(move || {
+        let mut out = Vec::new();
+        let mut buffer = [0u8; 8192];
+        loop {
+            match pipe.read(&mut buffer) {
+                Ok(0) | Err(_) => break,
+                Ok(read) => out.extend_from_slice(&buffer[..read]),
+            }
+        }
+        out
+    })
+}
+
+fn join_pipe(handle: Option<thread::JoinHandle<Vec<u8>>>) -> Vec<u8> {
+    handle
+        .and_then(|handle| handle.join().ok())
+        .unwrap_or_default()
+}
+
 fn request_once(curl_config: &str, cancel: &AtomicBool) -> Result<Reply, AttemptError> {
     let mut child = Command::new("curl")
         .args([
@@ -380,23 +401,32 @@ fn request_once(curl_config: &str, cancel: &AtomicBool) -> Result<Reply, Attempt
         let _ = child.wait();
         return Err(AttemptError::new(format!("curl config: {error}"), false));
     }
-    loop {
+    // A reply larger than the pipe buffer would block curl on write while the
+    // loop only polls `try_wait`, so both pipes are drained on their own
+    // threads until the child exits.
+    let stdout = child.stdout.take().map(drain_pipe);
+    let stderr = child.stderr.take().map(drain_pipe);
+    let status = loop {
         if cancel.load(Ordering::Relaxed) {
             let _ = child.kill();
             let _ = child.wait();
             return Err(AttemptError::new("AI request cancelled", false));
         }
         match child.try_wait() {
-            Ok(Some(_)) => break,
+            Ok(Some(status)) => break status,
             Ok(None) => thread::sleep(Duration::from_millis(20)),
             Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
                 return Err(AttemptError::new(format!("curl: {error}"), true));
             }
         }
-    }
-    let output = child
-        .wait_with_output()
-        .map_err(|error| AttemptError::new(format!("curl: {error}"), true))?;
+    };
+    let output = std::process::Output {
+        status,
+        stdout: join_pipe(stdout),
+        stderr: join_pipe(stderr),
+    };
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         let retryable = transient_curl_error(&stderr);
@@ -716,6 +746,30 @@ fn trim_large_contents(messages: &mut [Value], budget: usize, max_tool_chars: us
             let trimmed = truncate_text(content, per_message);
             message["content"] = Value::String(trimmed);
         }
+        // A tool call carries its payload in `function.arguments`, not in
+        // `content`; a `write_file` body would otherwise ride along at full
+        // size in every later request.
+        if let Some(calls) = message.get_mut("tool_calls").and_then(Value::as_array_mut) {
+            for call in calls {
+                let Some(function) = call.get_mut("function") else {
+                    continue;
+                };
+                let Some(arguments) = function.get_mut("arguments") else {
+                    continue;
+                };
+                let Some(text) = arguments.as_str() else {
+                    continue;
+                };
+                if text.chars().count() > per_message {
+                    // Keep the history parseable: a cut JSON string would be
+                    // rejected as invalid tool arguments.
+                    *arguments = Value::String(
+                        json!({"truncated": true, "note": "arguments omitted to fit the context budget"})
+                            .to_string(),
+                    );
+                }
+            }
+        }
     }
     if estimate_messages(messages) > budget {
         let user_cap = budget.saturating_mul(4).max(200);
@@ -855,6 +909,55 @@ mod tests {
         let reply = ask(&config, "hello").expect("reply");
         assert_eq!(reply, "hello from mock");
         server.join().expect("server");
+    }
+
+    #[test]
+    fn a_large_reply_is_read_without_deadlocking() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
+        let address = listener.local_addr().expect("address");
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept");
+            let mut request = [0u8; 8192];
+            let _ = stream.read(&mut request).expect("read");
+            // Larger than any pipe buffer: without draining this blocks curl.
+            let content = "x".repeat(300_000);
+            let body = format!("{{\"choices\":[{{\"message\":{{\"content\":\"{content}\"}}}}]}}");
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            stream.write_all(response.as_bytes()).expect("write");
+        });
+        let config = test_config(format!("http://{address}/v1"));
+        let reply = ask(&config, "hello").expect("reply");
+        assert_eq!(reply.len(), 300_000);
+        server.join().expect("server");
+    }
+
+    #[test]
+    fn trimming_bounds_tool_call_arguments_too() {
+        let big = format!("{{\"content\":\"{}\"}}", "x".repeat(400_000));
+        let mut messages = vec![
+            json!({"role": "user", "content": "go"}),
+            json!({"role": "assistant", "content": null, "tool_calls": [
+                {"id": "c1", "type": "function",
+                 "function": {"name": "native/write_file", "arguments": big}}
+            ]}),
+            json!({"role": "tool", "tool_call_id": "c1", "content": "done"}),
+        ];
+        trim_large_contents(&mut messages, 2_000, 8_000);
+        let arguments = messages[1]["tool_calls"][0]["function"]["arguments"]
+            .as_str()
+            .expect("arguments");
+        assert!(
+            arguments.len() < 1_000,
+            "{} bytes left in the history",
+            arguments.len()
+        );
+        assert!(
+            serde_json::from_str::<Value>(arguments).is_ok(),
+            "a bounded argument list must stay valid JSON: {arguments}"
+        );
     }
 
     #[test]
