@@ -68,6 +68,10 @@ pub fn build(root: &Path) -> Index {
     }
 }
 
+fn depth(path: &str) -> usize {
+    path.matches('/').count()
+}
+
 pub fn select(index: &Index, query: &str, limit: usize) -> Vec<Entry> {
     let terms: Vec<String> = query
         .split(|ch: char| !ch.is_alphanumeric() && ch != '_' && ch != '-')
@@ -95,6 +99,9 @@ pub fn select(index: &Index, query: &str, limit: usize) -> Vec<Entry> {
         right
             .0
             .cmp(&left.0)
+            // A file near the root is the likelier target than a tiny one buried
+            // in a vendor directory; size only separates equal depths.
+            .then_with(|| depth(&left.1.path).cmp(&depth(&right.1.path)))
             .then_with(|| left.1.size.cmp(&right.1.size))
             .then_with(|| left.1.path.cmp(&right.1.path))
     });
@@ -133,5 +140,43 @@ mod tests {
         assert!(!index.files.iter().any(|entry| entry.path == "ignored.txt"));
         assert!(index.files.iter().all(|entry| entry.size > 0));
         std::fs::remove_dir_all(root).ok();
+    }
+}
+
+#[cfg(test)]
+mod select_tests {
+    use super::*;
+
+    fn entry(path: &str, size: u64) -> Entry {
+        Entry {
+            path: path.to_string(),
+            size,
+        }
+    }
+
+    #[test]
+    fn shallow_paths_win_equal_scores() {
+        let index = Index {
+            version: VERSION,
+            files: vec![
+                entry("vendor/deep/main.rs", 10),
+                entry("main.rs", 500),
+                entry("src/main.rs", 200),
+            ],
+        };
+        let picked = select(&index, "main", 3);
+        let order: Vec<&str> = picked.iter().map(|item| item.path.as_str()).collect();
+        assert_eq!(order, vec!["main.rs", "src/main.rs", "vendor/deep/main.rs"]);
+    }
+
+    #[test]
+    fn equal_depths_still_prefer_smaller_files() {
+        let index = Index {
+            version: VERSION,
+            files: vec![entry("a/alpha.rs", 900), entry("b/alpha.rs", 100)],
+        };
+        let picked = select(&index, "alpha", 2);
+        let order: Vec<&str> = picked.iter().map(|item| item.path.as_str()).collect();
+        assert_eq!(order, vec!["b/alpha.rs", "a/alpha.rs"]);
     }
 }
