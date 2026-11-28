@@ -584,6 +584,9 @@ impl App {
         let area = ratatui::layout::Rect::new(0, 0, size.width, size.height);
         ui::compute_layout(&mut self.state, area);
         self.reveal_active_tabs();
+        // A resize changes how many rows fit; without this the caret can sit
+        // outside the viewport until the next cursor command.
+        self.ensure_cursor_visible();
         let App {
             terminal, state, ..
         } = self;
@@ -869,9 +872,14 @@ impl App {
         pane.active = Some(id);
         pane.anchor = None;
         pane.cursor = pane.cursor.min(self.state.documents[&id].len_chars());
+        // A viewport offset left from another document can point past the end
+        // of this one, which renders an empty pane until the next cursor move.
+        pane.scroll_top = 0;
+        pane.scroll_left = 0;
         let pane_id = pane.id;
         self.state.focus = Focus::Pane(pane_id);
         self.reveal_document_tab(pane_id, id);
+        self.ensure_cursor_visible();
         self.plugin_event("focus");
         Ok(())
     }

@@ -576,6 +576,24 @@ fn quit_can_save_every_document_first() {
 }
 
 #[test]
+fn prompt_typing_keeps_the_case_the_user_typed() {
+    use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    let (mut app, dir) = fixture("x\n");
+    app.dispatch(Command::NewPrompt).expect("new file");
+    for ch in ['N', 'o', 't', 'e', 's'] {
+        let mods = if ch.is_ascii_uppercase() {
+            KeyModifiers::SHIFT
+        } else {
+            KeyModifiers::NONE
+        };
+        app.handle_key(KeyEvent::new(KeyCode::Char(ch), mods));
+    }
+    assert_eq!(prompt_input(&app), "Notes");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn new_prompt_creates_a_file_on_disk() {
     let (mut app, dir) = fixture("x\n");
     app.dispatch(Command::NewPrompt).expect("new file");

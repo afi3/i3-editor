@@ -374,7 +374,12 @@ fn run_verify(
     };
     let timeout = Duration::from_secs(spec.timeout_secs.max(1));
     let deadline = Instant::now() + timeout;
-    loop {
+    // A command that logs more than a pipe buffer blocks on write and never
+    // exits; the readers keep both pipes empty while the deadline is watched.
+    let limit = max_chars.max(64 * 1024) * 2;
+    let stdout = child.stdout.take().map(|pipe| collect_pipe(pipe, limit));
+    let stderr = child.stderr.take().map(|pipe| collect_pipe(pipe, limit));
+    let status = loop {
         if cancel.load(Ordering::Relaxed) {
             let _ = child.kill();
             let _ = child.wait();
@@ -392,7 +397,7 @@ fn run_verify(
             };
         }
         match child.try_wait() {
-            Ok(Some(_)) => break,
+            Ok(Some(status)) => break status,
             Ok(None) => thread::sleep(Duration::from_millis(20)),
             Err(error) => {
                 let _ = child.kill();
@@ -403,34 +408,50 @@ fn run_verify(
                 };
             }
         }
-    }
-    let output = match child.wait_with_output() {
-        Ok(output) => output,
-        Err(error) => {
-            return VerifyResult {
-                success: false,
-                output: format!("verify {name}: {error}"),
-            };
-        }
     };
-    let mut text = String::from_utf8_lossy(&output.stderr).into_owned();
-    text.push_str(&String::from_utf8_lossy(&output.stdout));
+    let mut text = String::from_utf8_lossy(&collect(stderr)).into_owned();
+    text.push_str(&String::from_utf8_lossy(&collect(stdout)));
     if text.trim().is_empty() {
         text = "(no output)".to_string();
     }
     let text = crate::ai::truncate_text(&text, max_chars);
     VerifyResult {
-        success: output.status.success(),
+        success: status.success(),
         output: format!(
             "verify {name}: {} in {:.1}s\n{text}",
-            if output.status.success() {
-                "passed"
-            } else {
-                "failed"
-            },
+            if status.success() { "passed" } else { "failed" },
             started.elapsed().as_secs_f64()
         ),
     }
+}
+
+/// Read a child pipe to EOF on its own thread, keeping at most `limit` bytes.
+fn collect_pipe(
+    mut pipe: impl std::io::Read + Send + 'static,
+    limit: usize,
+) -> thread::JoinHandle<Vec<u8>> {
+    thread::spawn(move || {
+        let mut kept = Vec::new();
+        let mut buffer = [0u8; 8192];
+        loop {
+            match pipe.read(&mut buffer) {
+                Ok(0) | Err(_) => break,
+                Ok(read) => {
+                    if kept.len() < limit {
+                        let take = read.min(limit - kept.len());
+                        kept.extend_from_slice(&buffer[..take]);
+                    }
+                }
+            }
+        }
+        kept
+    })
+}
+
+fn collect(handle: Option<thread::JoinHandle<Vec<u8>>>) -> Vec<u8> {
+    handle
+        .and_then(|handle| handle.join().ok())
+        .unwrap_or_default()
 }
 
 fn verify_command(root: &Path, spec: &VerifyConfig) -> Result<Command, String> {
@@ -510,7 +531,11 @@ fn run_cargo_check(root: &Path, timeout: Duration, cancel: &AtomicBool) -> Check
         }
     };
     let deadline = Instant::now() + timeout;
-    loop {
+    // Same hazard as `run_verify`: nobody reads the pipes while polling, so a
+    // chatty build would block on write and be killed at the deadline.
+    let stdout = child.stdout.take().map(|pipe| collect_pipe(pipe, 1 << 20));
+    let stderr = child.stderr.take().map(|pipe| collect_pipe(pipe, 1 << 20));
+    let status = loop {
         if cancel.load(Ordering::Relaxed) {
             let _ = child.kill();
             let _ = child.wait();
@@ -528,7 +553,7 @@ fn run_cargo_check(root: &Path, timeout: Duration, cancel: &AtomicBool) -> Check
             };
         }
         match child.try_wait() {
-            Ok(Some(_)) => break,
+            Ok(Some(status)) => break status,
             Ok(None) => thread::sleep(Duration::from_millis(20)),
             Err(error) => {
                 let _ = child.kill();
@@ -539,23 +564,14 @@ fn run_cargo_check(root: &Path, timeout: Duration, cancel: &AtomicBool) -> Check
                 };
             }
         }
-    }
-    let output = match child.wait_with_output() {
-        Ok(output) => output,
-        Err(error) => {
-            return CheckResult {
-                success: false,
-                output: format!("cargo check: {error}"),
-            };
-        }
     };
-    let mut text = String::from_utf8_lossy(&output.stderr).into_owned();
-    text.push_str(&String::from_utf8_lossy(&output.stdout));
+    let mut text = String::from_utf8_lossy(&collect(stderr)).into_owned();
+    text.push_str(&String::from_utf8_lossy(&collect(stdout)));
     if text.trim().is_empty() {
         text = "cargo check: ok".to_string();
     }
     CheckResult {
-        success: output.status.success(),
+        success: status.success(),
         output: text,
     }
 }
@@ -962,6 +978,24 @@ mod tests {
         let path = root.join("main.rs");
         fs::write(&path, "fn main() {\n    println!(\"hi\");\n}\n").expect("seed");
         (root, path)
+    }
+
+    #[test]
+    fn a_noisy_verify_command_is_not_mistaken_for_a_timeout() {
+        let (root, _path) = workspace();
+        let spec = VerifyConfig {
+            command: "/bin/sh".to_string(),
+            args: vec![
+                "-c".to_string(),
+                "i=0; while [ $i -lt 20000 ]; do echo line-$i; i=$((i+1)); done".to_string(),
+            ],
+            timeout_secs: 20,
+            sandbox: false,
+        };
+        let result = run_verify(&root, "noisy", &spec, 500, &AtomicBool::new(false));
+        assert!(result.success, "{}", result.output);
+        assert!(result.output.contains("passed"), "{}", result.output);
+        fs::remove_dir_all(root).ok();
     }
 
     #[test]

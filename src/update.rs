@@ -101,6 +101,10 @@ fn latest_tag() -> Result<String> {
         .arg("-fsSL")
         .arg("--retry")
         .arg("2")
+        .arg("--connect-timeout")
+        .arg("15")
+        .arg("--max-time")
+        .arg("600")
         .arg(url)
         .output()
         .map_err(curl_error)?;
@@ -196,6 +200,10 @@ fn download(url: &str, path: &Path) -> Result<()> {
         .arg("-fsSL")
         .arg("--retry")
         .arg("2")
+        .arg("--connect-timeout")
+        .arg("15")
+        .arg("--max-time")
+        .arg("600")
         .arg("-o")
         .arg(path);
     if url.starts_with("https://") {

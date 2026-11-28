@@ -20,6 +20,46 @@ use sha2::{Digest, Sha256};
 pub const PROTOCOL_VERSION: &str = "2025-06-18";
 
 const MAX_MESSAGE_BYTES: usize = 8 << 20;
+/// Stderr is diagnostics, not protocol; one line may not exceed this.
+const MAX_DIAGNOSTIC_BYTES: usize = 64 << 10;
+
+/// Read one newline-terminated line, refusing to buffer more than `limit`
+/// bytes. `read_line` allocates the whole line before a caller can check it,
+/// so the limit would arrive too late.
+fn read_bounded_line(
+    reader: &mut impl BufRead,
+    line: &mut String,
+    limit: usize,
+) -> Result<(), String> {
+    line.clear();
+    let mut bytes = Vec::new();
+    loop {
+        let buffer = reader.fill_buf().map_err(|error| error.to_string())?;
+        if buffer.is_empty() {
+            break;
+        }
+        match buffer.iter().position(|byte| *byte == b'\n') {
+            Some(index) => {
+                if bytes.len() + index > limit {
+                    return Err("message too large".to_string());
+                }
+                bytes.extend_from_slice(&buffer[..=index]);
+                reader.consume(index + 1);
+                break;
+            }
+            None => {
+                if bytes.len() + buffer.len() > limit {
+                    return Err("message too large".to_string());
+                }
+                let take = buffer.len();
+                bytes.extend_from_slice(buffer);
+                reader.consume(take);
+            }
+        }
+    }
+    *line = String::from_utf8_lossy(&bytes).into_owned();
+    Ok(())
+}
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 const INITIALIZE_TIMEOUT: Duration = Duration::from_secs(60);
 const LOG_LINES: usize = 200;
@@ -1389,7 +1429,10 @@ fn handle_http_response(
         return Ok(());
     }
     for line in headers.lines() {
-        if let Some(value) = line.strip_prefix("Mcp-Session-Id:")
+        // Header names are case-insensitive, and HTTP/2 requires lower case;
+        // a case-sensitive match loses the session on half the servers.
+        if let Some((name, value)) = line.split_once(':')
+            && name.trim().eq_ignore_ascii_case("mcp-session-id")
             && let Ok(mut session) = session.lock()
         {
             *session = Some(value.trim().to_string());
@@ -1457,20 +1500,18 @@ fn spawn_server(name: &str, config: &McpServerConfig, root: &Path) -> Result<Ser
         let mut reader = BufReader::new(stdout);
         let mut line = String::new();
         loop {
-            line.clear();
-            match reader.read_line(&mut line) {
-                Ok(0) => break,
-                Ok(_) if line.len() > MAX_MESSAGE_BYTES => {
-                    let _ = stdout_tx.send(Incoming::ProtocolError("message too large".into()));
-                    break;
-                }
-                Ok(_) => {
-                    if stdout_tx.send(Incoming::Line(line.clone())).is_err() {
+            match read_bounded_line(&mut reader, &mut line, MAX_MESSAGE_BYTES) {
+                Ok(()) if line.is_empty() => break,
+                Ok(()) => {
+                    if stdout_tx
+                        .send(Incoming::Line(std::mem::take(&mut line)))
+                        .is_err()
+                    {
                         break;
                     }
                 }
-                Err(error) => {
-                    let _ = stdout_tx.send(Incoming::ProtocolError(error.to_string()));
+                Err(message) => {
+                    let _ = stdout_tx.send(Incoming::ProtocolError(message));
                     break;
                 }
             }
@@ -1479,9 +1520,21 @@ fn spawn_server(name: &str, config: &McpServerConfig, root: &Path) -> Result<Ser
     });
     let stderr_tx = tx.clone();
     std::thread::spawn(move || {
-        for line in BufReader::new(stderr).lines().map_while(Result::ok) {
-            if stderr_tx.send(Incoming::Stderr(line)).is_err() {
-                break;
+        let mut reader = BufReader::new(stderr);
+        let mut line = String::new();
+        loop {
+            match read_bounded_line(&mut reader, &mut line, MAX_DIAGNOSTIC_BYTES) {
+                Ok(()) if line.is_empty() => break,
+                Ok(()) => {
+                    if stderr_tx
+                        .send(Incoming::Stderr(std::mem::take(&mut line)))
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+                // A stderr flood is not a protocol error; stop reading it.
+                Err(_) => break,
             }
         }
     });

@@ -395,6 +395,72 @@ fn dragging_inside_a_pane_selects_text() {
 }
 
 #[test]
+fn switching_documents_resets_a_stale_viewport() {
+    let (mut app, dir) = fixture(&"line\n".repeat(200));
+    let pane_id = app.state.focused_pane_id().expect("pane");
+    let pane = app.state.panes.get_mut(&pane_id).expect("pane");
+    pane.scroll_top = 150;
+    pane.scroll_left = 3;
+    app.dispatch(Command::NewScratch).expect("scratch");
+    assert_eq!(app.state.panes[&pane_id].scroll_top, 0);
+    assert_eq!(app.state.panes[&pane_id].scroll_left, 0);
+
+    let pane = app.state.panes.get_mut(&pane_id).expect("pane");
+    pane.scroll_top = 7;
+    app.dispatch(Command::NextDocument).expect("next tab");
+    assert_eq!(app.state.panes[&pane_id].scroll_top, 0);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn dragging_a_split_separator_follows_the_pointer_once() {
+    use ratatui::crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+    use ratatui::layout::Rect;
+
+    let (mut app, dir) = fixture("x\n");
+    app.dispatch(Command::SplitLeftRight).expect("split");
+    crate::ui::compute_layout(&mut app.state, Rect::new(0, 0, 100, 30));
+    let area = app.state.ui.panes;
+    let mut separators = Vec::new();
+    app.state
+        .workspaces
+        .active()
+        .layout
+        .separators(area, &mut Vec::new(), &mut separators);
+    let separator = separators.first().expect("separator").clone();
+    let row = separator.span_start;
+    app.handle_mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: separator.at,
+        row,
+        modifiers: ratatui::crossterm::event::KeyModifiers::NONE,
+    });
+    assert!(app.drag.is_some(), "separator drag did not start");
+    for step in 1..=5u16 {
+        app.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Drag(MouseButton::Left),
+            column: separator.at - step,
+            row,
+            modifiers: ratatui::crossterm::event::KeyModifiers::NONE,
+        });
+    }
+    let mut after = Vec::new();
+    app.state
+        .workspaces
+        .active()
+        .layout
+        .separators(area, &mut Vec::new(), &mut after);
+    // One cell of slack for the weight rounding; compounding would land near
+    // `separator.at - 15`.
+    let moved = i32::from(separator.at) - i32::from(after[0].at);
+    assert!(
+        (4..=6).contains(&moved),
+        "a 5-cell drag moved the border {moved} cells"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn wheel_moves_the_prompt_selection() {
     let (mut app, dir) = fixture("x\n");
     app.dispatch(Command::Palette).expect("palette");

@@ -17,6 +17,12 @@ use crate::error::{Error, Result};
 /// Bytes of PTY output parsed per frame; keeps a flooding program responsive.
 const PUMP_BUDGET: usize = 256 * 1024;
 
+/// Bounded queue between the PTY reader and the parser. Without the bound a
+/// flooding child (`yes`, a noisy build) grows the queue faster than a frame
+/// drains it and the editor runs out of memory; with it the PTY blocks, which
+/// is the backpressure a terminal is supposed to apply.
+const OUTPUT_QUEUE: usize = 128;
+
 fn drain(output: &Receiver<Vec<u8>>, parser: &mut Parser, mut budget: usize) {
     while budget > 0 {
         let Ok(chunk) = output.try_recv() else { break };
@@ -98,7 +104,7 @@ impl ShellPanel {
             .take_writer()
             .map_err(|error| Error::Shell(format!("cannot write pty: {error}")))?;
 
-        let (sender, output) = mpsc::channel();
+        let (sender, output) = mpsc::sync_channel(OUTPUT_QUEUE);
         thread::spawn(move || {
             let mut buffer = [0u8; 8192];
             loop {

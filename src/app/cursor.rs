@@ -345,7 +345,10 @@ impl App {
         if wrap {
             let digits = document.line_count().to_string().len() as u16;
             let gutter = if show_numbers { digits + 2 } else { 0 };
-            let width = rect.width.saturating_sub(2 + gutter).max(1);
+            let width = rect
+                .width
+                .saturating_sub(2 + gutter + u16::from(document.line_count() > rows))
+                .max(1);
             let column = pane.cursor.saturating_sub(document.char_of_line(line));
             let visual =
                 textutil::visual_rows(document, pane.scroll_top, width, tab_width, rows + 1);
@@ -366,7 +369,10 @@ impl App {
 
         let digits = document.line_count().to_string().len() as u16;
         let gutter = if show_numbers { digits + 2 } else { 0 };
-        let width = rect.width.saturating_sub(2 + gutter).max(1);
+        let width = rect
+            .width
+            .saturating_sub(2 + gutter + u16::from(document.line_count() > rows))
+            .max(1);
         let line_start = document.char_of_line(line);
         let text = document.line_text(line);
         let column =

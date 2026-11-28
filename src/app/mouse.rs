@@ -736,7 +736,7 @@ impl App {
         })
     }
 
-    fn resize_to(&mut self, mut drag: Drag, column: u16, row: u16) {
+    fn resize_to(&mut self, drag: Drag, column: u16, row: u16) {
         let position = match drag.axis {
             SplitAxis::LeftRight => column,
             SplitAxis::TopBottom => row,
@@ -745,22 +745,24 @@ impl App {
         if index + 1 >= drag.cells.len() || index + 1 >= drag.mins.len() {
             return;
         }
+        // The stored cells and pointer stay at the drag origin, so every event
+        // applies its whole displacement once. Folding the result back in would
+        // re-apply each delta to the already-moved border and make it run away.
         let delta = i64::from(position) - i64::from(drag.start);
         let total = i64::from(drag.cells[index]) + i64::from(drag.cells[index + 1]);
         let min_left = i64::from(drag.mins[index]);
         let min_right = i64::from(drag.mins[index + 1]);
         let upper = (total - min_right).max(min_left);
         let left = (i64::from(drag.cells[index]) + delta).clamp(min_left, upper);
-        drag.cells[index] = left as u16;
-        drag.cells[index + 1] = (total - left) as u16;
+        let mut cells = drag.cells.clone();
+        cells[index] = left as u16;
+        cells[index + 1] = (total - left) as u16;
 
-        let path = drag.path.clone();
-        let cells = drag.cells.clone();
         self.state
             .workspaces
             .active_mut()
             .layout
-            .resize(&path, index, &cells);
+            .resize(&drag.path, index, &cells);
         self.drag = Some(drag);
     }
 }

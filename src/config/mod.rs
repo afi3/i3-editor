@@ -853,6 +853,8 @@ pub fn load_from(path: &Path) -> (AppConfig, Vec<String>) {
         config.git.binary = "git".to_string();
     }
     config.lua.time_budget_ms = config.lua.time_budget_ms.clamp(10, 5_000);
+    // Rendering casts this to `u16`; 65536 would wrap to 0 and divide by zero.
+    config.editor.tab_size = config.editor.tab_size.clamp(1, 32);
     config.explorer.width = config.explorer.width.clamp(5, 50);
     config.terminal.height = config.terminal.height.clamp(3, 60);
     config.terminal.scrollback = config.terminal.scrollback.clamp(100, 100_000);
@@ -1047,6 +1049,17 @@ mod tests {
         assert!(warnings.is_empty());
         assert_eq!(config.editor.tab_size, 2);
         assert!(config.editor.auto_indent);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn an_out_of_range_tab_size_is_clamped() {
+        let dir = std::env::temp_dir().join(format!("i3-config-tab-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let path = dir.join("config.toml");
+        std::fs::write(&path, "[editor]\ntab_size = 65536\n").expect("write");
+        let (config, _warnings) = load_from(&path);
+        assert_eq!(config.editor.tab_size, 32);
         std::fs::remove_dir_all(&dir).ok();
     }
 

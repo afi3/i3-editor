@@ -132,6 +132,12 @@ fn env_repo(root: &Path, value: Option<&std::ffi::OsStr>) -> bool {
     dir.join("HEAD").is_file()
 }
 
+/// A rename or copy entry in porcelain v1; in `-z` form it is followed by the
+/// original path as a separate NUL-terminated field.
+fn is_rename(code: &str) -> bool {
+    code.starts_with('R') || code.ends_with('R') || code.starts_with('C') || code.ends_with('C')
+}
+
 /// Per-line markers for every requested path in two `git` invocations: one
 /// status for untracked files and one diff for the whole worktree. Paths
 /// outside the repository, and paths without changes, map to no marks.
@@ -147,16 +153,24 @@ pub fn tree_marks(
     if wanted.is_empty() {
         return HashMap::new();
     }
-    let status = run(
-        binary,
-        repo,
-        &["-c", "core.quotePath=false", "status", "--porcelain"],
-    )
-    .unwrap_or_default();
-    let untracked: HashSet<&str> = status
-        .lines()
-        .filter_map(|line| line.strip_prefix("?? "))
-        .collect();
+    // `-z` so a name with a space or a non-ASCII byte matches the path the
+    // caller passed in; porcelain v1 would quote it.
+    let status = run(binary, repo, &["status", "--porcelain", "-z"]).unwrap_or_default();
+    let mut untracked: HashSet<&str> = HashSet::new();
+    let mut fields = status.split('\0');
+    while let Some(field) = fields.next() {
+        if field.len() < 4 {
+            continue;
+        }
+        let code = &field[..2];
+        if is_rename(code) {
+            // A rename carries the old path in the next field.
+            let _ = fields.next();
+        }
+        if code == "??" {
+            untracked.insert(&field[3..]);
+        }
+    }
     let diff = run(
         binary,
         repo,
@@ -313,22 +327,25 @@ fn is_untracked(binary: &str, repo: &Path, relative: &str) -> Result<bool, Strin
 
 /// Status entries, staged and unstaged. Renames report the new path.
 pub fn status(binary: &str, repo: &Path) -> Result<Vec<StatusEntry>, String> {
-    let output = run(binary, repo, &["status", "--porcelain"])?;
+    // `-z` prints paths verbatim. Porcelain v1 otherwise quotes a name with a
+    // space and escapes non-ASCII bytes, and every later `git` call on that
+    // quoted string fails with "pathspec did not match".
+    let output = run(binary, repo, &["status", "--porcelain", "-z"])?;
     let mut seen = HashSet::new();
     let mut entries = Vec::new();
-    for line in output.lines() {
-        if line.len() < 4 {
+    let mut fields = output.split('\0');
+    while let Some(field) = fields.next() {
+        if field.len() < 4 {
             continue;
         }
-        let code = line[..2].to_string();
-        let rest = line[3..].trim();
-        if rest.is_empty() {
+        let code = field[..2].to_string();
+        let relative = field[3..].to_string();
+        if is_rename(&code) && fields.next().is_none() {
+            break;
+        }
+        if relative.is_empty() {
             continue;
         }
-        let relative = rest
-            .rsplit_once(" -> ")
-            .map(|(_, new)| new.to_string())
-            .unwrap_or_else(|| rest.to_string());
         if !seen.insert(relative.clone()) {
             continue;
         }
@@ -596,6 +613,48 @@ mod tests {
             .status()
             .expect("git");
         assert!(status.success(), "git {args:?}");
+    }
+
+    #[test]
+    fn status_reports_names_with_spaces_and_accents_verbatim() {
+        let dir = repo("quoted");
+        std::fs::write(dir.join("a b.txt"), "one\n").expect("seed");
+        std::fs::write(dir.join("caf\u{e9}.txt"), "two\n").expect("seed");
+        let entries = status("git", &dir).expect("status");
+        let names: Vec<&str> = entries
+            .iter()
+            .map(|entry| entry.relative.as_str())
+            .collect();
+        assert!(names.contains(&"a b.txt"), "{names:?}");
+        assert!(names.contains(&"caf\u{e9}.txt"), "{names:?}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn status_reports_the_new_name_of_a_rename() {
+        let dir = repo("renamed");
+        std::fs::write(dir.join("a b.txt"), "one\n").expect("seed");
+        git(&dir, &["add", "."]);
+        git(&dir, &["commit", "-q", "-m", "base"]);
+        git(&dir, &["mv", "a b.txt", "c d.txt"]);
+        let entries = status("git", &dir).expect("status");
+        let names: Vec<&str> = entries
+            .iter()
+            .map(|entry| entry.relative.as_str())
+            .collect();
+        assert!(names.contains(&"c d.txt"), "{names:?}");
+        assert!(!names.iter().any(|name| name.contains('\0')), "{names:?}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn an_untracked_name_with_a_space_gets_added_marks() {
+        let dir = repo("untracked-spaced");
+        let path = dir.join("a b.txt");
+        std::fs::write(&path, "one\ntwo\n").expect("seed");
+        let marks = tree_marks("git", &dir, std::slice::from_ref(&path));
+        assert_eq!(marks.get(&path).map(Vec::len), Some(2), "{marks:?}");
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

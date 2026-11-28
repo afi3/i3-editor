@@ -319,10 +319,15 @@ impl App {
         let id = pane.tabs[next];
         pane.active = Some(id);
         pane.anchor = None;
+        // The viewport belongs to the document on screen: a scroll offset from
+        // a longer buffer would leave the shorter one entirely off-screen.
+        pane.scroll_top = 0;
+        pane.scroll_left = 0;
         if let Some(document) = documents.get(&id) {
             pane.cursor = pane.cursor.min(document.len_chars());
         }
         self.reveal_document_tab(pane_id, id);
+        self.ensure_cursor_visible();
         Ok(())
     }
 

@@ -120,6 +120,13 @@ impl App {
                     .mods
                     .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
             {
+                // The keymap folds an uppercase letter into lowercase plus
+                // SHIFT for binding lookup; prompts must keep the typed case.
+                let ch = if combo.mods.contains(KeyModifiers::SHIFT) {
+                    ch.to_ascii_uppercase()
+                } else {
+                    ch
+                };
                 prompt.insert_char(ch);
                 edited = true;
             }
