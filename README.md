@@ -33,7 +33,7 @@ curl -fsSL https://raw.githubusercontent.com/afi3/i3-editor/main/install.sh \
 
 # pinned version
 curl -fsSL https://raw.githubusercontent.com/afi3/i3-editor/main/install.sh \
-  | sh -s -- --version 0.2.2
+  | sh -s -- --version 0.2.3
 
 # update an existing install (installer or the binary itself)
 i3-editor --update
@@ -1211,13 +1211,13 @@ cargo test
 cargo clippy --all-targets --all-features
 
 # 2. commit, then tag the same commit
-git tag -a v0.2.2 -m "v0.2.2"
+git tag -a v0.2.3 -m "v0.2.3"
 git push origin main
-git push origin v0.2.2
+git push origin v0.2.3
 
 # 3. the release workflow builds four targets and publishes assets:
 #    i3-editor-<target>.tar.gz + .sha256
-gh release view v0.2.2
+gh release view v0.2.3
 
 # 4. verify the updater against the published release
 i3-editor --update
@@ -1249,7 +1249,9 @@ every check.
   fails closed when unavailable. MCP servers remain trusted code and are not
   sandboxed.
 - Lua plugins are synchronous on the UI thread and have no async or network
-  API; file/process access is off unless the matching capability is enabled.
+  API, and the `coroutine` library is not exposed: the instruction budget cannot
+  follow a Lua thread, so a coroutine could hang the editor; file/process access
+  is off unless the matching capability is enabled.
   The API is v1 only and config changes do not reload existing plugin code until
   the plugin directory changes or the editor restarts.
 - Soft wrap computes rows from the cursor's line and its neighbours instead of

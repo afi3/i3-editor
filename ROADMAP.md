@@ -1198,3 +1198,84 @@ cargo run -- --dump-keymap
 ```
 
 Last recorded run: `cargo test` → 492 passed (485 unit + 6 CLI process + 1 PTY smoke), `cargo clippy` → 0 warnings.
+
+## Phase 11 — Correctness and durability pass: complete (awaiting v0.2.3)
+
+Seven audit rounds over the existing subsystems, each fix covered by a test and
+followed by a review of the fixes themselves. No new subsystem, no new
+dependency, no supported-platform change.
+
+### Landed
+
+- **Data safety** (2026-11-28). Crash swaps are per-instance with a lock and
+  the newest copy wins; a save ends the coalescing run so edits typed right
+  after `Ctrl+S` stay unsaved; `write_atomic` fsyncs the rename; an unreadable
+  `config.toml` aborts a setting write instead of being replaced; the explorer
+  retargets open buffers, nested workspace roots and their watchers on rename;
+  the external-change guard covers Save all and Replace in Files; search history
+  and per-root sessions are written for every workspace root. Covered by
+  `typing_right_after_a_save_still_counts_as_unsaved`,
+  `the_newer_of_two_crash_copies_wins`,
+  `renaming_an_open_file_moves_the_buffer_with_it`,
+  `renaming_a_directory_moves_a_nested_workspace_root`, and
+  `save_replaces_atomically_and_keeps_permissions`.
+- **Protocol state machines** (2026-11-28). A failed, timed-out, or cancelled
+  MCP call now answers its `tool_call_id`; failures are scoped per server and
+  notices no longer abort a turn; interrupted replies are repaired on load; AI
+  replies are drained, stream terminators are required, and multi-line SSE data
+  is joined; LSP completion and definition replies carry document and revision.
+  Covered by `a_failed_mcp_tool_call_is_answered_in_the_conversation`,
+  `a_queued_question_is_resumed_when_a_server_failure_ends_tool_loading`,
+  `the_http_session_header_is_read_case_insensitively`,
+  `an_oversized_line_is_skipped_without_losing_the_next_one`, and
+  `a_large_reply_is_read_without_deadlocking`.
+- **Input and UI ownership** (2026-11-28). Overlay keys follow reverse draw
+  order; paste goes to the surface on screen or nowhere; the wheel no longer
+  takes focus; prompts keep the typed case; switching documents resets the
+  viewport; wrapped lines scroll by row and clicks follow the same offset; the
+  caret clamp runs only on resize. Covered by
+  `a_paste_does_not_reach_the_ai_composer_behind_a_modal`,
+  `the_rules_overlay_takes_keys_before_the_ai_panel_under_it`,
+  `prompt_typing_keeps_the_case_the_user_typed`,
+  `switching_documents_resets_a_stale_viewport`, and
+  `clicking_a_row_scrolled_by_wrap_offset_lands_on_the_drawn_row`.
+- **Bounded work** (2026-11-28). Every child process has a drained pipe, a
+  deadline, and a kill path (curl, tar, git, verify, cargo check, installers,
+  plugin processes); the PTY queue is bounded; MCP drains per frame; git stops
+  with SIGTERM so lock files survive; `process.run` output that exceeds 1 MiB is
+  an error, not a silent truncation. Covered by
+  `a_stalled_git_command_is_killed_at_the_deadline`,
+  `a_stalled_child_is_killed_at_the_deadline`,
+  `a_noisy_verify_command_is_not_mistaken_for_a_timeout`, and
+  `a_chatty_child_is_drained_before_it_exits`.
+- **Performance** (2026-11-28). The renderer reads a line's text and syntax
+  spans once per line instead of per wrapped row; wrap rows stream from the
+  string; the Find preview copies the buffer once per revision. Measured on a
+  1 MB single wrapped line: 131 ms -> 50 ms for twenty frames. Covered by
+  `the_find_preview_copies_the_buffer_once_per_revision`.
+- **Platform and plugin edges** (2026-11-28). Lua keeps an enforceable
+  instruction budget (no `coroutine`, no `dofile`/`loadfile` without file
+  access); the status cache invalidates on plugin callbacks; a failed terminal
+  init restores raw mode, paste and mouse capture; OSC 52 checks size before
+  encoding; `[ ai ]` and `["ai"]` headers are recognised. Covered by
+  `the_sandbox_hides_coroutines_so_no_runaway_can_escape_the_budget`,
+  `an_unchanged_snapshot_does_not_rerun_status_hooks`,
+  `a_spaced_or_quoted_ai_header_is_still_the_same_table`, and
+  `a_section_is_matched_by_its_new_path_not_a_lookalike`.
+
+### Delivery checklist
+
+- [x] Full suite, fmt, clippy, and MSRV 1.91 pass.
+- [x] README, ARCHITECTURE, and this roadmap updated for every slice.
+- [x] Self-review of the whole fix series with every regression fixed.
+- [ ] Version `0.2.3` and tag `v0.2.3` point at the release commit.
+- [ ] Release workflow publishes four assets plus checksums.
+
+### Acceptance
+
+- [x] `cargo test` -> 633 passed, 1 ignored.
+- [x] `cargo clippy --all-targets --all-features` -> 0 warnings.
+- [x] `cargo fmt --check` -> clean.
+- [x] The suite passes repeatedly; the watcher and recovery flakes are gone.
+- [x] A 1 MB wrapped line renders in 2.5 ms per frame instead of 6.5 ms.
+- [ ] The tagged release installs and reports `i3-editor 0.2.3`.
