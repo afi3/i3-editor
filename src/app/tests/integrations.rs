@@ -922,6 +922,87 @@ fn git_pull_refuses_unsaved_buffers_before_touching_git() {
 }
 
 #[test]
+fn renaming_an_open_file_moves_the_buffer_with_it() {
+    let (mut app, dir) = fixture("one\n");
+    let row = app
+        .state
+        .explorer
+        .rows
+        .iter()
+        .position(|row| row.name == "note.txt")
+        .expect("row");
+    app.state.explorer.selected = row;
+    app.dispatch(Command::RenameTo(std::path::PathBuf::from("renamed.txt")))
+        .expect("rename");
+
+    let path = app
+        .state
+        .active_document()
+        .and_then(|document| document.path.clone())
+        .expect("path");
+    assert_eq!(
+        path.canonicalize().expect("canonical path"),
+        dir.join("renamed.txt")
+            .canonicalize()
+            .expect("canonical file")
+    );
+
+    app.dispatch(Command::InsertText("x".to_string()))
+        .expect("edit");
+    app.dispatch(Command::Save).expect("save");
+    assert_eq!(
+        std::fs::read_to_string(dir.join("renamed.txt")).expect("renamed file"),
+        "xone\n"
+    );
+    assert!(
+        !dir.join("note.txt").exists(),
+        "a save must not recreate the old name"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn renaming_a_directory_moves_the_buffers_beneath_it() {
+    let (mut app, dir) = fixture("one\n");
+    std::fs::create_dir(dir.join("sub")).expect("sub");
+    std::fs::write(dir.join("sub").join("child.txt"), "two\n").expect("child");
+    app.open_document(dir.join("sub").join("child.txt"))
+        .expect("open child");
+    app.state.explorer.rebuild();
+    let row = app
+        .state
+        .explorer
+        .rows
+        .iter()
+        .position(|row| row.name == "sub" && row.is_dir)
+        .expect("directory row");
+    app.state.explorer.selected = row;
+    app.dispatch(Command::RenameTo(std::path::PathBuf::from("moved")))
+        .expect("rename");
+
+    let path = app
+        .state
+        .active_document()
+        .and_then(|document| document.path.clone())
+        .expect("path");
+    assert_eq!(
+        path.canonicalize().expect("canonical path"),
+        dir.join("moved")
+            .join("child.txt")
+            .canonicalize()
+            .expect("child")
+    );
+    app.dispatch(Command::InsertText("x".to_string()))
+        .expect("edit");
+    app.dispatch(Command::Save).expect("save");
+    assert_eq!(
+        std::fs::read_to_string(dir.join("moved").join("child.txt")).expect("child"),
+        "xtwo\n"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn a_commit_runs_off_the_ui_thread_and_reports_its_summary() {
     use std::process::Command as Process;
     use std::time::{Duration, Instant};

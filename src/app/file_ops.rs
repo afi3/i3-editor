@@ -7,6 +7,41 @@ use crate::state::Focus;
 
 use super::{App, same_path};
 
+/// The canonical form of a path whose tail may no longer exist: the nearest
+/// existing ancestor is resolved and the rest is re-appended. A rename makes
+/// the entry itself, and everything below it, unresolvable.
+fn resolve_entry(path: &Path) -> PathBuf {
+    let mut missing: Vec<std::ffi::OsString> = Vec::new();
+    let mut current = path;
+    loop {
+        if let Ok(canonical) = current.canonicalize() {
+            let mut resolved = canonical;
+            for part in missing.iter().rev() {
+                resolved.push(part);
+            }
+            return resolved;
+        }
+        let Some(name) = current.file_name() else {
+            break;
+        };
+        missing.push(name.to_os_string());
+        match current.parent() {
+            Some(parent) if !parent.as_os_str().is_empty() => current = parent,
+            _ => break,
+        }
+    }
+    path.to_path_buf()
+}
+
+/// `base.join("")` leaves a trailing separator; a buffer path must not have one.
+fn join_rest(base: &Path, rest: &Path) -> PathBuf {
+    if rest.as_os_str().is_empty() {
+        base.to_path_buf()
+    } else {
+        base.join(rest)
+    }
+}
+
 impl App {
     /// Path acted on by file operations. The explorer drives when it has focus;
     /// otherwise the active document wins, with the explorer row as a fallback.
@@ -51,6 +86,38 @@ impl App {
         let target = self.state.explorer.duplicate(&path)?;
         self.notify(format!("duplicated to {}", target.display()));
         Ok(())
+    }
+
+    /// Point open buffers at a renamed file or directory. Without this a save
+    /// would write the old name back and leave the renamed file untouched.
+    pub(crate) fn retarget_documents(&mut self, from: &Path, to: &Path) {
+        let from_resolved = resolve_entry(from);
+        let to_resolved = resolve_entry(to);
+        let mut moved = 0;
+        for document in self.state.documents.values_mut() {
+            let Some(path) = document.path.as_deref().map(Path::to_path_buf) else {
+                continue;
+            };
+            // Prefer the path as the buffer stored it, so the style stays
+            // consistent; fall back to the canonical comparison when the two
+            // differ (a symlinked temp root, for instance).
+            let target = match path.strip_prefix(from) {
+                Ok(rest) => Some(join_rest(to, rest)),
+                Err(_) => resolve_entry(&path)
+                    .strip_prefix(&from_resolved)
+                    .ok()
+                    .map(|rest| join_rest(&to_resolved, rest)),
+            };
+            let Some(target) = target else {
+                continue;
+            };
+            document.path = Some(target);
+            document.record_disk_state();
+            moved += 1;
+        }
+        if moved > 0 {
+            self.refresh_git_marks();
+        }
     }
 
     pub(crate) fn copy_path(&mut self) -> Result<()> {

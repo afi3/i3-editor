@@ -339,8 +339,16 @@ impl App {
                 self.state.explorer.create(&path, true)?;
             }
             Command::RenameTo(name) => {
+                let before = self
+                    .state
+                    .explorer
+                    .selected_row()
+                    .map(|row| row.path.clone());
                 let display = name.to_string_lossy().into_owned();
                 let path = self.state.explorer.rename(&display)?;
+                if let Some(before) = before {
+                    self.retarget_documents(&before, &path);
+                }
                 self.notify(format!("renamed to {}", path.display()));
             }
             Command::DeleteTarget(path) => {
