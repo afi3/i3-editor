@@ -13,6 +13,24 @@ use super::App;
 
 const REFRESH: Duration = Duration::from_secs(1);
 
+/// A git command that talks to a remote or a credential helper.
+#[derive(Clone, Debug)]
+pub(crate) enum GitJob {
+    Push,
+    Pull,
+    Commit(String),
+}
+
+impl GitJob {
+    fn label(&self) -> &'static str {
+        match self {
+            GitJob::Push => "push",
+            GitJob::Pull => "pull",
+            GitJob::Commit(_) => "commit",
+        }
+    }
+}
+
 impl App {
     pub(crate) fn refresh_git_if_due(&mut self) {
         if self.last_git.elapsed() < REFRESH {
@@ -159,13 +177,7 @@ impl App {
     }
 
     pub(crate) fn git_push(&mut self) -> Result<()> {
-        let binary = self.state.config.git.binary.clone();
-        let repo = git::discover(&binary, &self.state.explorer.root)
-            .ok_or_else(|| Error::Git("not a git repository".to_string()))?;
-        let summary = git::push(&binary, &repo).map_err(Error::Git)?;
-        self.notify(summary);
-        self.refresh_git_marks();
-        Ok(())
+        self.start_git_job(GitJob::Push)
     }
 
     pub(crate) fn git_pull(&mut self) -> Result<()> {
@@ -181,10 +193,61 @@ impl App {
             ));
             return Ok(());
         }
+        self.start_git_job(GitJob::Pull)
+    }
+
+    /// Run a network-facing git command on a worker; `pump_git_command`
+    /// reports the result. A stalled remote must not freeze the editor.
+    fn start_git_job(&mut self, job: GitJob) -> Result<()> {
+        if self.git_command.is_some() {
+            self.notify(format!("git {} is already running", job.label()));
+            return Ok(());
+        }
         let binary = self.state.config.git.binary.clone();
         let repo = git::discover(&binary, &self.state.explorer.root)
             .ok_or_else(|| Error::Git("not a git repository".to_string()))?;
-        let summary = git::pull(&binary, &repo).map_err(Error::Git)?;
+        let label = job.label();
+        let task = match job.clone() {
+            GitJob::Push => crate::git::CommandTask::push(binary, repo),
+            GitJob::Pull => crate::git::CommandTask::pull(binary, repo),
+            GitJob::Commit(message) => crate::git::CommandTask::commit(binary, repo, message),
+        };
+        self.notify(format!("git {label}…"));
+        self.git_command = Some((job, task));
+        Ok(())
+    }
+
+    pub(crate) fn pump_git_command(&mut self) {
+        let Some((job, task)) = self.git_command.as_ref() else {
+            return;
+        };
+        let Some(result) = task.try_recv() else {
+            return;
+        };
+        let job = job.clone();
+        self.git_command = None;
+        match result {
+            Ok(output) => {
+                let summary = match job {
+                    GitJob::Commit(_) => output
+                        .lines()
+                        .find(|line| !line.trim().is_empty())
+                        .unwrap_or("committed")
+                        .trim()
+                        .to_string(),
+                    _ => output,
+                };
+                if matches!(job, GitJob::Pull) {
+                    self.after_pull();
+                }
+                self.notify(summary);
+            }
+            Err(error) => self.notify(format!("git {}: {error}", job.label())),
+        }
+        self.refresh_git_marks();
+    }
+
+    fn after_pull(&mut self) {
         self.state.explorer.refresh();
         let reload: Vec<DocumentId> = self
             .state
@@ -198,9 +261,6 @@ impl App {
         for id in reload {
             let _ = self.reload_document(id);
         }
-        self.refresh_git_marks();
-        self.notify(summary);
-        Ok(())
     }
 
     pub(crate) fn git_conflicts(&mut self) -> Result<()> {
@@ -357,17 +417,9 @@ impl App {
             self.notify("empty commit message");
             return Ok(());
         }
-        let binary = self.state.config.git.binary.clone();
-        let repo = git::discover(&binary, &self.state.explorer.root)
-            .ok_or_else(|| Error::Git("not a git repository".to_string()))?;
-        let output = git::commit(&binary, &repo, message).map_err(Error::Git)?;
-        let summary = output
-            .lines()
-            .find(|line| !line.trim().is_empty())
-            .unwrap_or("committed");
-        self.notify(summary.trim().to_string());
-        self.refresh_git_marks();
-        Ok(())
+        // Signing hooks can open a pinentry dialog that blocks until answered,
+        // so the commit runs off the UI thread like push and pull.
+        self.start_git_job(GitJob::Commit(message.to_string()))
     }
 
     /// Open the diff for a file picked in the status prompt.

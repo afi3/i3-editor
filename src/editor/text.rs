@@ -156,23 +156,53 @@ pub struct VisualRow {
 /// the row; a word longer than the width breaks at the cell limit.
 pub fn wrap_ranges(text: &str, width: u16, tab_width: usize) -> Vec<(usize, usize)> {
     let chars: Vec<char> = text.chars().collect();
-    if chars.is_empty() {
-        return vec![(0, 0)];
+    WrapRows {
+        chars: &chars,
+        width,
+        tab_width,
+        start: 0,
+        done: false,
     }
-    let mut ranges = Vec::new();
-    let mut start = 0usize;
-    while start < chars.len() {
-        let (end, last_space) = scan_row(&chars, start, width, tab_width);
-        if end >= chars.len() {
-            ranges.push((start, chars.len()));
-            break;
+    .collect()
+}
+
+/// Wrapped char ranges for one line, produced one at a time. Rendering needs
+/// `height` rows, not every row of a megabyte-long line, so the ranges are not
+/// collected up front.
+pub struct WrapRows<'a> {
+    chars: &'a [char],
+    width: u16,
+    tab_width: usize,
+    start: usize,
+    done: bool,
+}
+
+impl Iterator for WrapRows<'_> {
+    type Item = (usize, usize);
+
+    fn next(&mut self) -> Option<(usize, usize)> {
+        if self.done {
+            return None;
         }
-        let cut = last_space.filter(|cut| *cut > start).unwrap_or(end);
-        let cut = cut.max(start + 1);
-        ranges.push((start, cut));
-        start = cut;
+        if self.chars.is_empty() {
+            self.done = true;
+            return Some((0, 0));
+        }
+        let (end, last_space) = scan_row(self.chars, self.start, self.width, self.tab_width);
+        if end >= self.chars.len() {
+            self.done = true;
+            return Some((self.start, self.chars.len()));
+        }
+        let cut = last_space.filter(|cut| *cut > self.start).unwrap_or(end);
+        let cut = cut.max(self.start + 1);
+        let row = (self.start, cut);
+        self.start = cut;
+        if cut >= self.chars.len() {
+            // The row ended the line; a further call would add an empty row.
+            self.done = true;
+        }
+        Some(row)
     }
-    ranges
 }
 
 fn scan_row(chars: &[char], start: usize, width: u16, tab_width: usize) -> (usize, Option<usize>) {
@@ -230,7 +260,15 @@ fn push_visual_rows(
     out: &mut Vec<VisualRow>,
 ) -> bool {
     let text = document.line_text(line);
-    for (start, end) in wrap_ranges(&text, width, tab_width) {
+    let chars: Vec<char> = text.chars().collect();
+    let rows = WrapRows {
+        chars: &chars,
+        width,
+        tab_width,
+        start: 0,
+        done: false,
+    };
+    for (start, end) in rows {
         out.push(VisualRow { line, start, end });
         if out.len() >= limit {
             return true;
@@ -299,8 +337,14 @@ pub fn clip(text: &str, skip: u16, width: u16, tab_width: usize) -> String {
                 for _ in cell.max(skip)..next.min(limit) {
                     out.push(' ');
                 }
-            } else {
+            } else if cell >= skip {
                 out.push(ch);
+            } else {
+                // Half of a wide glyph is scrolled off; pad its visible cells so
+                // the glyphs after it stay in their columns.
+                for _ in skip..next.min(limit) {
+                    out.push(' ');
+                }
             }
         }
         cell = next;
@@ -374,6 +418,43 @@ mod tests {
         assert_eq!(clip("abcdef", 2, 3, 4), "cde");
         assert_eq!(clip("\tab", 1, 2, 4), "  ");
         assert_eq!(clip("abc", 5, 3, 4), "");
+    }
+
+    #[test]
+    fn wrap_ranges_break_at_width_and_spaces() {
+        assert_eq!(wrap_ranges("abcdef", 3, 4), vec![(0, 3), (3, 6)]);
+        assert_eq!(wrap_ranges("", 3, 4), vec![(0, 0)]);
+        assert_eq!(wrap_ranges("ab cd", 3, 4), vec![(0, 3), (3, 5)]);
+    }
+
+    #[test]
+    fn wrap_rows_stream_the_same_ranges_as_wrap_ranges() {
+        for (text, width) in [
+            ("alpha beta gamma", 5),
+            ("", 5),
+            ("abcdefgh", 3),
+            ("abcdef", 3),
+            ("ab cd", 3),
+        ] {
+            let chars: Vec<char> = text.chars().collect();
+            let streamed: Vec<(usize, usize)> = WrapRows {
+                chars: &chars,
+                width,
+                tab_width: 4,
+                start: 0,
+                done: false,
+            }
+            .collect();
+            assert_eq!(streamed, wrap_ranges(text, width, 4), "{text:?}");
+        }
+    }
+
+    #[test]
+    fn clip_pads_a_wide_glyph_scrolled_off_at_its_first_cell() {
+        // "好" occupies cells 0..2; scrolling one cell hides its left half, and
+        // the rest of the line must stay in its columns.
+        assert_eq!(clip("\u{597d}x", 1, 4, 4), " x");
+        assert_eq!(clip("\u{597d}x", 2, 4, 4), "x");
     }
 
     #[test]

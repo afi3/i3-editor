@@ -91,6 +91,7 @@ impl App {
             block_anchor: None,
             git_status_entries: Vec::new(),
             git_marks_task: None,
+            git_command: None,
             last_git: std::time::Instant::now(),
             search_history: Default::default(),
             history_path: None,
@@ -234,6 +235,8 @@ pub struct App {
     pub(crate) git_status_entries: Vec<crate::git::StatusEntry>,
     /// Running per-line marker pass; `None` when idle.
     pub(crate) git_marks_task: Option<crate::git::MarksTask>,
+    /// Push, pull, or commit in flight; the UI thread never waits on git.
+    pub(crate) git_command: Option<(git_ops::GitJob, crate::git::CommandTask)>,
     /// Time of the last git marker refresh.
     pub(crate) last_git: std::time::Instant,
     /// Persistent search queries and options.
@@ -382,6 +385,7 @@ impl App {
             block_anchor: None,
             git_status_entries: Vec::new(),
             git_marks_task: None,
+            git_command: None,
             last_git: std::time::Instant::now(),
             search_history,
             history_path,
@@ -512,6 +516,7 @@ impl App {
             self.pump_lsp_install();
             self.refresh_git_if_due();
             self.pump_git_marks();
+            self.pump_git_command();
             self.autosave_swaps();
             if self.dirty {
                 self.draw()?;
@@ -601,6 +606,7 @@ impl App {
             || self.ai_stream.is_some()
             || self.sampling_task.is_some()
             || self.native_verify.is_some()
+            || self.git_command.is_some()
         {
             return Duration::from_millis(100);
         }

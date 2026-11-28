@@ -810,6 +810,12 @@ fn draw_text_line(
                 }
             } else if cell >= skip {
                 run.push(ch);
+            } else {
+                // A wide glyph straddles `skip`: its first half is scrolled off,
+                // so emit the visible half as blanks and keep columns aligned.
+                for _ in skip..next.min(limit) {
+                    run.push(' ');
+                }
             }
         }
 

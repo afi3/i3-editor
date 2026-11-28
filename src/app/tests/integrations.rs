@@ -922,6 +922,67 @@ fn git_pull_refuses_unsaved_buffers_before_touching_git() {
 }
 
 #[test]
+fn a_commit_runs_off_the_ui_thread_and_reports_its_summary() {
+    use std::process::Command as Process;
+    use std::time::{Duration, Instant};
+
+    if Process::new("git").arg("--version").output().is_err() {
+        return;
+    }
+    let (mut app, dir) = fixture("one\n");
+    for args in [
+        vec!["init", "-q"],
+        vec!["config", "user.email", "test@example.com"],
+        vec!["config", "user.name", "Test"],
+    ] {
+        assert!(
+            Process::new("git")
+                .args(&args)
+                .current_dir(&dir)
+                .status()
+                .expect("git")
+                .success(),
+            "{args:?}"
+        );
+    }
+    assert!(
+        Process::new("git")
+            .args(["add", "."])
+            .current_dir(&dir)
+            .status()
+            .expect("git")
+            .success()
+    );
+    app.submit_commit("first").expect("commit");
+    assert!(
+        app.git_command.is_some(),
+        "the commit must not run on the UI thread"
+    );
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while app.git_command.is_some() && Instant::now() < deadline {
+        app.pump_git_command();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(app.git_command.is_none(), "commit did not finish");
+    assert!(
+        app.state.ui.message.contains("first"),
+        "{}",
+        app.state.ui.message
+    );
+    let status = Process::new("git")
+        .args(["status", "--porcelain"])
+        .current_dir(&dir)
+        .output()
+        .expect("status");
+    assert!(
+        status.stdout.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&status.stdout)
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn resolve_conflict_ours_theirs_and_both_are_single_edits() {
     let source = "before\n<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> other\nafter\n";
     let (mut app, dir) = fixture(source);
@@ -1089,6 +1150,12 @@ fn git_markers_diff_staging_and_commit_work() {
         prompt.set_input("second commit");
     }
     app.submit_prompt().expect("commit");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    while app.git_command.is_some() && std::time::Instant::now() < deadline {
+        app.pump_git_command();
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(app.git_command.is_none(), "commit did not finish");
     assert_eq!(output(&["log", "-1", "--pretty=%s"]), "second commit");
     std::fs::remove_dir_all(&dir).ok();
 }

@@ -519,6 +519,38 @@ fn relative_path(repo: &Path, path: &Path) -> Option<String> {
         .map(|path| path.to_string_lossy().into_owned())
 }
 
+/// A git command that may block on the network or a credential helper, run on
+/// its own thread so the editor keeps drawing and handling keys.
+pub struct CommandTask {
+    result: mpsc::Receiver<Result<String, String>>,
+}
+
+impl CommandTask {
+    pub fn push(binary: String, repo: PathBuf) -> Self {
+        Self::start(move || push(&binary, &repo))
+    }
+
+    pub fn pull(binary: String, repo: PathBuf) -> Self {
+        Self::start(move || pull(&binary, &repo))
+    }
+
+    pub fn commit(binary: String, repo: PathBuf, message: String) -> Self {
+        Self::start(move || commit(&binary, &repo, &message))
+    }
+
+    fn start(job: impl FnOnce() -> Result<String, String> + Send + 'static) -> Self {
+        let (sender, result) = mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = sender.send(job());
+        });
+        Self { result }
+    }
+
+    pub fn try_recv(&self) -> Option<Result<String, String>> {
+        self.result.try_recv().ok()
+    }
+}
+
 /// Fast-forward the current branch from its upstream. Refuses a dirty index or
 /// worktree so a pull cannot create a merge/conflict state.
 pub fn pull(binary: &str, repo: &Path) -> Result<String, String> {
