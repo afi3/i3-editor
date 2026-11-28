@@ -22,15 +22,29 @@ pub struct Setup {
 }
 
 pub fn init() -> io::Result<Setup> {
-    let terminal = ratatui::try_init()?;
+    let terminal = match ratatui::try_init() {
+        Ok(terminal) => terminal,
+        Err(error) => {
+            // `try_init` may have entered raw mode before failing.
+            ratatui::restore();
+            return Err(error);
+        }
+    };
     let mut stdout = io::stdout();
-    execute!(stdout, EnableBracketedPaste, EnableMouseCapture)?;
+    if let Err(error) = execute!(stdout, EnableBracketedPaste, EnableMouseCapture) {
+        ratatui::restore();
+        return Err(error);
+    }
     let keyboard_enhancement = keyboard_enhancement_supported();
-    if keyboard_enhancement {
-        execute!(
+    if keyboard_enhancement
+        && let Err(error) = execute!(
             stdout,
             PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
-        )?;
+        )
+    {
+        let _ = execute!(stdout, DisableBracketedPaste, DisableMouseCapture);
+        ratatui::restore();
+        return Err(error);
     }
     install_panic_hook(keyboard_enhancement);
     Ok(Setup {

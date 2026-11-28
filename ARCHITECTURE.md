@@ -320,7 +320,8 @@ saves still write the rope verbatim, so untouched mixed endings survive.
 
 **Lua plugins share one sandboxed state and a registry.** `plugins::Plugins`
 loads the plugin directory into a `Lua` created with only the safe string/table/
-math/utf8/coroutine libraries; `io`/`os` are added only by capability, and
+math/utf8 libraries (`coroutine` is withheld because the instruction budget
+cannot follow a Lua thread); `io`/`os` are added only by capability, and
 `package` is never loaded. Each plugin gets API tables whose closures record
 command ids, key combos, event hooks, and statusline hooks in a shared
 `Registry`. Callbacks are Lua functions stored in a hidden table; invoking one

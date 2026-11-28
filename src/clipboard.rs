@@ -14,10 +14,13 @@ pub fn copy_osc52(text: &str) -> Option<&'static str> {
     if text.is_empty() {
         return None;
     }
-    let encoded = base64(text.as_bytes());
-    if let Some(warning) = oversize(encoded.len()) {
+    // The encoded size is exact, so an oversized payload is refused before the
+    // copy that encoding would perform.
+    let encoded_len = text.len().div_ceil(3) * 4;
+    if let Some(warning) = oversize(encoded_len) {
         return Some(warning);
     }
+    let encoded = base64(text.as_bytes());
     let mut stdout = std::io::stdout();
     let _ = write!(stdout, "\u{1b}]52;c;{encoded}\u{1b}\\");
     let _ = stdout.flush();

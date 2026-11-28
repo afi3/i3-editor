@@ -20,7 +20,7 @@ const MAX_DEPTH: usize = 4;
 const MAX_FAILURES: usize = 3;
 const INSTRUCTIONS_PER_HOOK: u32 = 10_000;
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Snapshot {
     pub path: Option<String>,
     pub language: String,
@@ -44,6 +44,8 @@ struct Hook {
 
 #[derive(Default)]
 struct Registry {
+    /// Bumped whenever the registered hooks change; the status cache keys on it.
+    revision: u64,
     commands: Vec<CommandEntry>,
     keymap: Vec<(KeyCombo, String, String)>,
     events: HashMap<String, Vec<Hook>>,
@@ -55,6 +57,7 @@ struct Registry {
 
 impl Registry {
     fn disable(&mut self, plugin: &str) {
+        self.revision += 1;
         self.disabled.insert(plugin.to_string());
         self.commands.retain(|entry| entry.plugin != plugin);
         self.keymap.retain(|(_, _, owner)| owner != plugin);
@@ -73,6 +76,9 @@ pub struct Plugins {
     allow_file: bool,
     allow_process: bool,
     depth: usize,
+    /// Last registry revision, snapshot and segments; status callbacks are
+    /// re-run only when the hooks or the state they can see changed.
+    last_status: Option<(u64, Snapshot, Vec<String>)>,
 }
 
 impl Plugins {
@@ -87,6 +93,7 @@ impl Plugins {
             lua,
             registry: Rc::new(RefCell::new(Registry::default())),
             budget: Duration::from_millis(config.time_budget_ms.max(10)),
+            last_status: None,
             allow_file: config.allow_file,
             allow_process: config.allow_process,
             depth: 0,
@@ -112,6 +119,7 @@ impl Plugins {
         }
         self.registry = Rc::new(RefCell::new(Registry::default()));
         self.depth = 0;
+        self.last_status = None;
         if let Err(error) = std::fs::create_dir_all(&self.dir) {
             self.warning(format!("cannot create {}: {error}", self.dir.display()));
             return;
@@ -159,7 +167,7 @@ impl Plugins {
         }
         let name = path.to_string_lossy().into_owned();
         let deadline = Instant::now() + self.budget;
-        let hook = self.lua.set_hook(
+        let hook = self.lua.set_global_hook(
             HookTriggers::new().every_nth_instruction(INSTRUCTIONS_PER_HOOK),
             move |_, _| {
                 if Instant::now() >= deadline {
@@ -173,7 +181,7 @@ impl Plugins {
             Ok(()) => self.lua.load(&source).set_name(name).exec(),
             Err(error) => Err(error),
         };
-        self.lua.remove_hook();
+        self.lua.remove_global_hook();
         if let Err(error) = result {
             self.record_error(&plugin, &error.to_string());
         }
@@ -240,6 +248,13 @@ impl Plugins {
     }
 
     pub fn status_segments(&mut self, snapshot: &Snapshot) -> Vec<String> {
+        let revision = self.registry.borrow().revision;
+        if let Some((cached_revision, cached, segments)) = &self.last_status
+            && *cached_revision == revision
+            && cached == snapshot
+        {
+            return segments.clone();
+        }
         let hooks: Vec<(String, usize)> = {
             let registry = self.registry.borrow();
             registry
@@ -265,6 +280,7 @@ impl Plugins {
             }
         }
         self.depth -= 1;
+        self.last_status = Some((revision, snapshot.clone(), segments.clone()));
         segments
     }
 
@@ -312,7 +328,7 @@ impl Plugins {
                 other => Some(other.to_string()?),
             })
         })();
-        self.lua.remove_hook();
+        self.lua.remove_global_hook();
         match result {
             Ok(value) => value,
             Err(error) => {
@@ -348,8 +364,87 @@ impl Plugins {
     }
 }
 
+/// A plugin child process is bounded in time and output: the instruction hook
+/// cannot fire while the editor waits for it.
+const PROCESS_TIMEOUT: Duration = Duration::from_secs(60);
+const PROCESS_OUTPUT_LIMIT: usize = 1 << 20;
+
+struct ProcessOutput {
+    success: bool,
+    stdout: String,
+    stderr: String,
+}
+
+fn run_process(mut command: std::process::Command) -> std::result::Result<ProcessOutput, String> {
+    use std::process::Stdio;
+
+    let mut child = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| error.to_string())?;
+    let stdout = child.stdout.take().map(collect_process_pipe);
+    let stderr = child.stderr.take().map(collect_process_pipe);
+    let deadline = Instant::now() + PROCESS_TIMEOUT;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!(
+                    "process timed out after {}s",
+                    PROCESS_TIMEOUT.as_secs()
+                ));
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(20)),
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(error.to_string());
+            }
+        }
+    };
+    Ok(ProcessOutput {
+        success: status.success(),
+        stdout: String::from_utf8_lossy(&join_process_pipe(stdout)).into_owned(),
+        stderr: String::from_utf8_lossy(&join_process_pipe(stderr)).into_owned(),
+    })
+}
+
+fn collect_process_pipe(
+    mut pipe: impl std::io::Read + Send + 'static,
+) -> std::thread::JoinHandle<Vec<u8>> {
+    std::thread::spawn(move || {
+        let mut kept = Vec::new();
+        let mut buffer = [0u8; 8192];
+        loop {
+            match pipe.read(&mut buffer) {
+                Ok(0) | Err(_) => break,
+                Ok(read) => {
+                    if kept.len() < PROCESS_OUTPUT_LIMIT {
+                        let take = read.min(PROCESS_OUTPUT_LIMIT - kept.len());
+                        kept.extend_from_slice(&buffer[..take]);
+                    }
+                }
+            }
+        }
+        kept
+    })
+}
+
+fn join_process_pipe(handle: Option<std::thread::JoinHandle<Vec<u8>>>) -> Vec<u8> {
+    handle
+        .and_then(|handle| handle.join().ok())
+        .unwrap_or_default()
+}
+
 fn new_lua(config: &LuaConfig) -> mlua::Result<Lua> {
-    let mut libs = StdLib::STRING | StdLib::TABLE | StdLib::MATH | StdLib::UTF8 | StdLib::COROUTINE;
+    // No `coroutine`: mlua's instruction budget does not reach a Lua thread
+    // created inside a callback, so a coroutine could run forever with the UI
+    // thread blocked and no error to report.
+    let mut libs = StdLib::STRING | StdLib::TABLE | StdLib::MATH | StdLib::UTF8;
     if config.allow_file {
         libs |= StdLib::IO;
     }
@@ -357,6 +452,11 @@ fn new_lua(config: &LuaConfig) -> mlua::Result<Lua> {
         libs |= StdLib::OS;
     }
     let lua = Lua::new_with(libs, LuaOptions::default())?;
+    if !config.allow_file {
+        // `luaopen_base` registers these regardless of the io library.
+        lua.globals().set("dofile", Value::Nil)?;
+        lua.globals().set("loadfile", Value::Nil)?;
+    }
     lua.globals().set("__i3_callbacks", lua.create_table()?)?;
     lua.globals().set("api_version", 1)?;
     set_context(&lua, &Snapshot::default())?;
@@ -406,6 +506,7 @@ fn install_api(
                         "command '{name}' already registered"
                     )));
                 }
+                registry.revision += 1;
                 registry.commands.push(CommandEntry {
                     name,
                     plugin: owner.clone(),
@@ -479,7 +580,9 @@ fn install_api(
                 let callbacks: Table = lua.globals().get("__i3_callbacks")?;
                 let id = callbacks.raw_len() + 1;
                 callbacks.set(id, function)?;
-                registry.borrow_mut().status.push(Hook {
+                let mut registry = registry.borrow_mut();
+                registry.revision += 1;
+                registry.status.push(Hook {
                     plugin: owner.clone(),
                     id,
                 });
@@ -542,15 +645,11 @@ fn install_api(
                         command.arg(value?);
                     }
                 }
-                let output = command
-                    .output()
-                    .map_err(|error| mlua::Error::runtime(error.to_string()))?;
-                if !output.status.success() {
-                    return Err(mlua::Error::runtime(
-                        String::from_utf8_lossy(&output.stderr).trim().to_string(),
-                    ));
+                let output = run_process(command).map_err(mlua::Error::runtime)?;
+                if !output.success {
+                    return Err(mlua::Error::runtime(output.stderr.trim().to_string()));
                 }
-                Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+                Ok(output.stdout)
             })?,
         )?;
         lua.globals().set("process", process)?;
@@ -613,6 +712,84 @@ end)
         assert_eq!(segments, vec!["S:2:rust"]);
         assert!(plugins.invoke_command("hello", &snapshot()));
         assert!(plugins.take_warnings().is_empty());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn the_sandbox_hides_coroutines_so_no_runaway_can_escape_the_budget() {
+        let dir = dir("coroutine");
+        std::fs::write(
+            dir.join("check.lua"),
+            "assert(coroutine == nil, 'coroutine leaked')\n",
+        )
+        .expect("write");
+        let mut plugins = Plugins::new(dir.clone(), &config(false)).expect("plugins");
+        let warnings = plugins.take_warnings();
+        assert!(warnings.is_empty(), "{warnings:?}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn the_time_budget_reaches_a_top_level_loop() {
+        let dir = dir("budget");
+        std::fs::write(
+            dir.join("spin.lua"),
+            r#"
+commands.register("spin", function()
+  local x = 0
+  for i = 1, 200000000 do x = x + i end
+end)
+"#,
+        )
+        .expect("write");
+        let mut plugins = Plugins::new(dir.clone(), &config(false)).expect("plugins");
+        let _ = plugins.invoke_command("spin", &snapshot());
+        let warnings = plugins.take_warnings();
+        assert!(
+            warnings.iter().any(|warning| warning.contains("budget")),
+            "a plain loop must hit the deadline: {warnings:?}"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn the_default_sandbox_hides_the_file_loaders() {
+        let dir = dir("loaders");
+        std::fs::write(
+            dir.join("check.lua"),
+            "assert(dofile == nil, 'dofile leaked')\nassert(loadfile == nil, 'loadfile leaked')\n",
+        )
+        .expect("write");
+        let mut plugins = Plugins::new(dir.clone(), &config(false)).expect("plugins");
+        let warnings = plugins.take_warnings();
+        assert!(warnings.is_empty(), "{warnings:?}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn an_unchanged_snapshot_does_not_rerun_status_hooks() {
+        let dir = dir("status-cache");
+        std::fs::write(
+            dir.join("status.lua"),
+            r#"
+calls = 0
+statusline.register(function()
+  calls = calls + 1
+  return tostring(calls)
+end)
+"#,
+        )
+        .expect("write");
+        let mut plugins = Plugins::new(dir.clone(), &config(false)).expect("plugins");
+        assert_eq!(plugins.status_segments(&snapshot()), vec!["1".to_string()]);
+        assert_eq!(
+            plugins.status_segments(&snapshot()),
+            vec!["1".to_string()],
+            "an unchanged snapshot reuses the segments"
+        );
+        let mut moved = snapshot();
+        moved.line = 3;
+        assert_eq!(plugins.status_segments(&moved), vec!["2".to_string()]);
         std::fs::remove_dir_all(&dir).ok();
     }
 

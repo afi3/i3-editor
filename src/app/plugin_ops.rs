@@ -44,12 +44,16 @@ impl App {
 
     /// Recompute statusline segments from every registered plugin.
     pub(crate) fn refresh_plugin_status(&mut self) {
-        let snapshot = self.plugin_snapshot();
-        let Some(plugins) = self.plugins.as_mut() else {
+        // Building the snapshot means formatting the path and copying the
+        // selections; without plugins there is nothing to feed it to.
+        if self.plugins.is_none() {
             self.state.plugin_status.clear();
             return;
-        };
-        self.state.plugin_status = plugins.status_segments(&snapshot);
+        }
+        let snapshot = self.plugin_snapshot();
+        if let Some(plugins) = self.plugins.as_mut() {
+            self.state.plugin_status = plugins.status_segments(&snapshot);
+        }
         self.drain_plugin_warnings();
     }
 
