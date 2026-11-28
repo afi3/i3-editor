@@ -184,7 +184,12 @@ pub fn parse_color(text: &str) -> Result<Color, String> {
         return Err("empty color".to_string());
     }
     if let Some(hex) = raw.strip_prefix('#') {
-        let expanded = match hex.chars().count() {
+        // Byte slicing below assumes ASCII; a multi-byte char would panic on a
+        // char boundary instead of warning about the bad field.
+        if !hex.is_ascii() {
+            return Err(format!("expected ascii hex digits, got {raw:?}"));
+        }
+        let expanded = match hex.len() {
             3 => hex.chars().flat_map(|ch| [ch, ch]).collect::<String>(),
             6 => hex.to_string(),
             _ => {
@@ -237,6 +242,12 @@ mod tests {
         ));
         std::fs::create_dir_all(&dir).expect("dir");
         dir
+    }
+
+    #[test]
+    fn a_multibyte_hex_value_is_an_error_not_a_panic() {
+        assert!(parse_color("#\u{2603}\u{2603}\u{2603}").is_err());
+        assert!(parse_color("#aaa\u{e9}aa").is_err());
     }
 
     #[test]

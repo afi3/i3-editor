@@ -367,7 +367,15 @@ fn status(tx: &mpsc::Sender<Event>, message: &str) {
 
 fn find_on_path(binary: &str) -> Option<PathBuf> {
     let path = std::env::var_os("PATH")?;
-    std::env::split_paths(&path)
+    find_in_path(&path, binary)
+}
+
+/// Look `binary` up in a PATH value. An empty entry means the current
+/// directory, which would run a server out of the open repository, so it is
+/// skipped.
+fn find_in_path(path: &std::ffi::OsStr, binary: &str) -> Option<PathBuf> {
+    std::env::split_paths(path)
+        .filter(|directory| !directory.as_os_str().is_empty())
         .map(|directory| directory.join(binary))
         .find(|candidate| is_executable(candidate))
 }
@@ -473,6 +481,14 @@ fn run_with_timeout(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn empty_path_entries_are_skipped() {
+        // An empty entry means the current directory: a file in the open
+        // repository must never be picked up as a language server.
+        assert!(find_in_path(std::ffi::OsStr::new(""), "i3-editor").is_none());
+        assert!(find_in_path(std::ffi::OsStr::new(":"), "i3-editor").is_none());
+    }
 
     #[test]
     #[cfg(unix)]

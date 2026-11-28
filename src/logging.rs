@@ -48,23 +48,26 @@ pub fn append(path: &Path, name: &str, data: Value) -> std::io::Result<()> {
         std::fs::create_dir_all(parent)?;
     }
     let metadata = std::fs::metadata(path).ok();
-    if metadata.as_ref().is_some_and(|meta| meta.len() > MAX_BYTES) {
+    let rotated = metadata.as_ref().is_some_and(|meta| meta.len() > MAX_BYTES);
+    if rotated {
         let _ = std::fs::rename(path, path.with_extension("jsonl.1"));
     }
     // Tighten a file that an older build, a copy, or a different umask left
-    // group-readable: entries contain tool names and paths.
-    let needs_private = metadata.as_ref().is_none_or(|meta| {
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            meta.permissions().mode() & 0o077 != 0
-        }
-        #[cfg(not(unix))]
-        {
-            let _ = meta;
-            false
-        }
-    });
+    // group-readable: entries contain tool names and paths. A rotation creates
+    // the file again under the umask, so it always needs the chmod.
+    let needs_private = rotated
+        || metadata.as_ref().is_none_or(|meta| {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                meta.permissions().mode() & 0o077 != 0
+            }
+            #[cfg(not(unix))]
+            {
+                let _ = meta;
+                false
+            }
+        });
     let mut record = json!({"ts_ms": now_ms(), "event": name});
     if let (Some(object), Value::Object(extra)) = (record.as_object_mut(), data) {
         for (key, value) in extra {
@@ -113,6 +116,31 @@ mod tests {
         assert!(first["ts_ms"].is_number());
         let second: Value = serde_json::from_str(lines[1]).expect("json");
         assert_eq!(second["b"], "x");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_rotated_log_keeps_its_private_mode() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = std::env::temp_dir().join(format!("i3-log-mode-rot-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("dir");
+        let path = dir.join("log.jsonl");
+        std::fs::write(&path, vec![b'x'; (MAX_BYTES + 1) as usize]).expect("seed");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).expect("chmod");
+
+        append(&path, "after", json!({})).expect("append");
+        let mode = std::fs::metadata(&path)
+            .expect("metadata")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(
+            mode, 0o600,
+            "the rotated log must not reopen world-readable"
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 

@@ -133,7 +133,6 @@ fn build_index(
     let mut last_error: Option<String> = None;
     for (file, text) in &files {
         let hash = hash_text(text);
-        hashes.insert(file.clone(), hash.clone());
         if let Some(previous) = &previous
             && previous.files.get(file) == Some(&hash)
         {
@@ -144,14 +143,17 @@ fn build_index(
                     .filter(|entry| &entry.chunk.path == file)
                     .cloned(),
             );
+            hashes.insert(file.clone(), hash.clone());
             reused += 1;
             continue;
         }
+        let mut dropped = 0usize;
         let chunks: Vec<crate::semantic::Chunk> = crate::semantic::chunk(file, text, 40)
             .into_iter()
             .filter(|chunk| {
                 let fits = chunk.text.chars().count() <= max_chars;
                 if !fits {
+                    dropped += 1;
                     too_large += 1;
                 }
                 fits
@@ -161,6 +163,7 @@ fn build_index(
             continue;
         }
         let before = entries.len();
+        let failed_before = failed;
         for batch in chunks.chunks(16) {
             let inputs: Vec<String> = batch.iter().map(|chunk| chunk.text.clone()).collect();
             match crate::ai::embed(config, model, &inputs) {
@@ -182,6 +185,11 @@ fn build_index(
         }
         if entries.len() > before {
             indexed += 1;
+        }
+        // Recording the hash claims the file is complete; a dropped chunk or a
+        // failed batch must be retried on the next run.
+        if dropped == 0 && failed == failed_before {
+            hashes.insert(file.clone(), hash.clone());
         }
     }
     if entries.is_empty() {
