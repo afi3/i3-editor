@@ -1199,7 +1199,7 @@ cargo run -- --dump-keymap
 
 Last recorded run: `cargo test` → 492 passed (485 unit + 6 CLI process + 1 PTY smoke), `cargo clippy` → 0 warnings.
 
-## Phase 11 — Correctness and durability pass: complete (awaiting v0.2.3)
+## Phase 11 — Correctness and durability pass: shipped as v0.2.3
 
 Seven audit rounds over the existing subsystems, each fix covered by a test and
 followed by a review of the fixes themselves. No new subsystem, no new
@@ -1263,15 +1263,19 @@ dependency, no supported-platform change.
   `a_spaced_or_quoted_ai_header_is_still_the_same_table`, and
   `a_section_is_matched_by_its_new_path_not_a_lookalike`.
 
+### Release
+
+Shipped as `v0.2.3` on 2026-11-28.
+
 ### Delivery checklist
 
 - [x] Full suite, fmt, clippy, and MSRV 1.91 pass.
 - [x] README, ARCHITECTURE, and this roadmap updated for every slice.
 - [x] Self-review of the whole fix series with every regression fixed.
 - [x] Pages workflow added and Pages enabled with GitHub Actions as the source.
-- [ ] Version `0.2.3` and tag `v0.2.3` point at the release commit.
-- [ ] Release workflow publishes four assets plus checksums.
-- [ ] First `pages` deployment runs after `main` is pushed.
+- [x] Version `0.2.3` and tag `v0.2.3` point at the release commit.
+- [x] Release workflow run `46105041824` published four assets plus checksums.
+- [x] First `pages` deployment ran and https://afi3.github.io/i3-editor/ is live.
 
 ### Acceptance
 
@@ -1280,4 +1284,5 @@ dependency, no supported-platform change.
 - [x] `cargo fmt --check` -> clean.
 - [x] The suite passes repeatedly; the watcher and recovery flakes are gone.
 - [x] A 1 MB wrapped line renders in 2.5 ms per frame instead of 6.5 ms.
-- [ ] The tagged release installs and reports `i3-editor 0.2.3`.
+- [x] The tagged release installs and reports `i3-editor 0.2.3`; the aarch64
+      macOS asset passes its SHA-256 and `install.sh --version 0.2.3` installs it.
