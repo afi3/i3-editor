@@ -12,8 +12,8 @@ implemented and verified before the next one started.
   sampling, and approval-gated background agents. `v0.2.2` completes the
   macOS/Linux harness with automatic context, hard budgets, non-Rust LSP
   verification, MCP subscriptions, and macOS/Linux keyring support. Maturity
-  work after `v0.2.2` ships as `v0.2.3`, `v0.2.4`, and so on; no `v0.3.0` is
-  planned. Supported run targets are macOS and Linux.
+  work after `v0.2.2` ships as `v0.2.3`, `v0.2.4`, and so on; `v0.2.4` is the
+  AI panel follow-up. No `v0.3.0` is planned. Supported run targets are macOS and Linux.
 
 ## Phase 1 — Terminal foundation and pane skeleton: done
 
@@ -1287,7 +1287,13 @@ Shipped as `v0.2.3` on 2026-11-28.
 - [x] The tagged release installs and reports `i3-editor 0.2.3`; the aarch64
       macOS asset passes its SHA-256 and `install.sh --version 0.2.3` installs it.
 
-### After v0.2.3 (unreleased)
+## Release v0.2.4 — shipped
+
+Shipped as `v0.2.4` on 2026-11-28. A small follow-up to `v0.2.3`: the AI panel
+becomes readable while it streams, and providers can be added or retuned without
+hand-editing `config.toml`. No new subsystem or dependency.
+
+### Shipped scope
 
 - **AI transcript scrolling** (2026-11-28). The wheel over the panel scrolls the
   transcript by three lines without taking focus, a horizontal wheel scrolls it
@@ -1304,3 +1310,18 @@ Shipped as `v0.2.3` on 2026-11-28.
   `a_provider_can_store_an_api_key_instead_of_an_environment_variable`,
   `adding_a_provider_writes_its_block_and_activates_it`, and
   `a_setting_update_lands_in_the_active_provider_block`.
+
+### Delivery checklist
+
+- [x] Full suite, fmt, clippy, and MSRV 1.91 pass.
+- [x] README, ROADMAP, and the docs page updated for this release.
+- [ ] Version `0.2.4` and tag `v0.2.4` point at the release commit.
+- [ ] Release workflow publishes four assets plus checksums.
+- [ ] Pages deployment for the updated docs page succeeds.
+
+### Acceptance
+
+- [x] `cargo test` -> 640 passed, 1 ignored.
+- [x] `cargo clippy --all-targets --all-features` -> 0 warnings.
+- [x] `cargo fmt --check` -> clean.
+- [ ] The tagged release installs and reports `i3-editor 0.2.4`.
