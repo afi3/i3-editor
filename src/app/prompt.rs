@@ -318,6 +318,15 @@ impl App {
             self.submit_ai_context_file(prompt);
             return Ok(());
         }
+        if prompt.kind == PromptKind::AiProviderAdd {
+            return self.submit_ai_provider_add(prompt);
+        }
+        if prompt.kind == PromptKind::AiModel {
+            return self.submit_ai_model(prompt);
+        }
+        if prompt.kind == PromptKind::AiKey {
+            return self.submit_ai_key(prompt);
+        }
         self.submit_regular_query(prompt)
     }
 
@@ -695,6 +704,17 @@ impl App {
             }
             PromptKind::SelectWorkspace => self.fill_workspace_candidates(prompt),
             PromptKind::AiProvider => self.fill_provider_candidates(prompt),
+            PromptKind::AiProviderAdd => {
+                prompt.fields = vec![
+                    String::new(),
+                    self.state.config.ai.base_url.clone(),
+                    self.state.config.ai.model.clone(),
+                    self.state.config.ai.api_key_env.clone(),
+                ];
+                prompt.active = 0;
+            }
+            PromptKind::AiModel => prompt.set_input(self.state.config.ai.model.clone()),
+            PromptKind::AiKey => prompt.set_input(self.state.config.ai.api_key_env.clone()),
             PromptKind::McpSubscriptions => self.fill_subscription_candidates(prompt),
             PromptKind::Messages => {
                 if self.state.warnings.is_empty() {

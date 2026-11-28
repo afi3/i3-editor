@@ -665,6 +665,12 @@ fn field_label(prompt: &PromptState, index: usize) -> String {
         (PromptKind::GoToLine, _) => "Line: ".to_string(),
         (PromptKind::WorkspaceRoot, _) => "Root: ".to_string(),
         (PromptKind::McpAddPath, _) => "Directory: ".to_string(),
+        (PromptKind::AiProviderAdd, 0) => "Name: ".to_string(),
+        (PromptKind::AiProviderAdd, 1) => "Base URL: ".to_string(),
+        (PromptKind::AiProviderAdd, 2) => "Model: ".to_string(),
+        (PromptKind::AiProviderAdd, 3) => "API key env: ".to_string(),
+        (PromptKind::AiModel, _) => "Model: ".to_string(),
+        (PromptKind::AiKey, _) => "Env var: ".to_string(),
         (PromptKind::McpPromptArgs, index) => format!(
             "{}: ",
             prompt

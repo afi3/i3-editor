@@ -86,7 +86,10 @@ impl App {
             | Command::AiIndexProject
             | Command::AiContextFiles
             | Command::AiRules
-            | Command::AiTrace => {
+            | Command::AiTrace
+            | Command::AiAddProvider
+            | Command::AiSetModel
+            | Command::AiSetKey => {
                 self.dispatch_ai(command);
                 return Ok(None);
             }
@@ -131,6 +134,9 @@ impl App {
             Command::AiIndexProject => self.index_ai_context(),
             Command::AiContextFiles => self.open_ai_context_files(),
             Command::AiRules => self.open_ai_rules(),
+            Command::AiAddProvider => self.open_ai_provider_add(),
+            Command::AiSetModel => self.open_ai_model_prompt(),
+            Command::AiSetKey => self.open_ai_key_prompt(),
             Command::AiTrace => self.open_ai_trace(),
             _ => {}
         }

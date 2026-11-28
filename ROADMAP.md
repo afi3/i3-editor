@@ -1286,3 +1286,19 @@ Shipped as `v0.2.3` on 2026-11-28.
 - [x] A 1 MB wrapped line renders in 2.5 ms per frame instead of 6.5 ms.
 - [x] The tagged release installs and reports `i3-editor 0.2.3`; the aarch64
       macOS asset passes its SHA-256 and `install.sh --version 0.2.3` installs it.
+
+### After v0.2.3 (unreleased)
+
+- **AI transcript scrolling** (2026-11-28). The wheel over the panel scrolls the
+  transcript by three lines without taking focus, a horizontal wheel scrolls it
+  sideways, and new output follows the newest line until a manual scroll; `End`
+  resumes. Covered by `the_wheel_scrolls_the_ai_transcript_without_taking_focus`
+  and `the_transcript_follows_output_until_the_user_scrolls`.
+- **Provider and model flow** (2026-11-28). `ai_add_provider` writes and
+  activates a `[ai.providers.*]` block from a four-field prompt, `ai_set_model`
+  and `ai_set_key` update the active provider in place, and every write applies
+  immediately through the existing config reload. Covered by
+  `the_palette_adds_an_ai_provider_and_changes_its_model_and_key_env`,
+  `an_invalid_provider_name_is_refused_without_writing`,
+  `adding_a_provider_writes_its_block_and_activates_it`, and
+  `a_setting_update_lands_in_the_active_provider_block`.

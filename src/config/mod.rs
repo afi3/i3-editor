@@ -1199,6 +1199,69 @@ mod tests {
     }
 
     #[test]
+    fn adding_a_provider_writes_its_block_and_activates_it() {
+        let dir = std::env::temp_dir().join(format!("i3-config-provider-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let path = dir.join("config.toml");
+        std::fs::write(&path, "[ai]\nmodel = \"old\"\n").expect("write");
+
+        persist_provider_at(
+            &path,
+            "local",
+            "http://127.0.0.1:11434/v1",
+            "qwen2.5-coder",
+            "OLLAMA",
+        )
+        .expect("persist");
+        let text = std::fs::read_to_string(&path).expect("read");
+        let value: toml::Value = toml::from_str(&text).expect("valid toml");
+        assert_eq!(
+            value["ai"]["providers"]["local"]["model"].as_str(),
+            Some("qwen2.5-coder")
+        );
+        assert_eq!(
+            value["ai"]["providers"]["local"]["api_key_env"].as_str(),
+            Some("OLLAMA")
+        );
+        assert_eq!(value["ai"]["active_provider"].as_str(), Some("local"));
+        assert_eq!(value["ai"]["model"].as_str(), Some("old"));
+
+        // A second save updates the block instead of appending another one.
+        persist_provider_at(&path, "local", "http://127.0.0.1:11434/v1", "new-model", "")
+            .expect("update");
+        let text = std::fs::read_to_string(&path).expect("read");
+        assert_eq!(text.matches("[ai.providers.local]").count(), 1, "{text}");
+        let value: toml::Value = toml::from_str(&text).expect("valid toml");
+        assert_eq!(
+            value["ai"]["providers"]["local"]["model"].as_str(),
+            Some("new-model")
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_setting_update_lands_in_the_active_provider_block() {
+        let dir = std::env::temp_dir().join(format!("i3-config-aiset-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let path = dir.join("config.toml");
+        std::fs::write(
+            &path,
+            "[ai]\nactive_provider = \"local\"\nmodel = \"old\"\n\n[ai.providers.local]\nmodel = \"old\"\n",
+        )
+        .expect("write");
+
+        persist_ai_value_at(&path, "model", "new").expect("persist");
+        let text = std::fs::read_to_string(&path).expect("read");
+        let value: toml::Value = toml::from_str(&text).expect("valid toml");
+        assert_eq!(
+            value["ai"]["providers"]["local"]["model"].as_str(),
+            Some("new")
+        );
+        assert_eq!(value["ai"]["model"].as_str(), Some("old"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
     fn a_spaced_or_quoted_ai_header_is_still_the_same_table() {
         for text in [
             "[ ai ]\nactive_provider = \"a\"\n",
@@ -1270,6 +1333,118 @@ fn read_for_update(path: &Path) -> std::io::Result<String> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
         Err(error) => Err(error),
     }
+}
+
+/// Quote a TOML basic string.
+fn toml_string(value: &str) -> String {
+    let escaped = value.replace('\\', "\\\\").replace('"', "\\\"");
+    format!("\"{escaped}\"")
+}
+
+/// Header text of a table line, without its comment.
+fn table_header(line: &str) -> Option<&str> {
+    let trimmed = line.trim_start();
+    if !trimmed.starts_with('[') {
+        return None;
+    }
+    let without_comment = trimmed.split('#').next().unwrap_or("").trim();
+    without_comment.ends_with(']').then_some(without_comment)
+}
+
+fn section_bounds(lines: &[String], header: &str) -> Option<(usize, usize)> {
+    let start = lines
+        .iter()
+        .position(|line| table_header(line) == Some(header))?;
+    let end = lines[start + 1..]
+        .iter()
+        .position(|line| table_header(line).is_some())
+        .map(|offset| start + 1 + offset)
+        .unwrap_or(lines.len());
+    Some((start, end))
+}
+
+fn is_table_key(line: &str, key: &str) -> bool {
+    let trimmed = line.split('#').next().unwrap_or("").trim_start();
+    let Some((name, _)) = trimmed.split_once('=') else {
+        return false;
+    };
+    unquote_key(name.trim()) == key
+}
+
+/// Set `key = "value"` inside `header`, appending the table at the end when the
+/// file does not have it yet. Comments and other keys are left alone.
+fn set_table_value(text: &str, header: &str, key: &str, value: &str) -> String {
+    let line = format!("{key} = {}", toml_string(value));
+    let mut lines: Vec<String> = text.lines().map(str::to_string).collect();
+    match section_bounds(&lines, header) {
+        Some((start, end)) => {
+            match (start + 1..end).find(|index| is_table_key(&lines[*index], key)) {
+                Some(index) => lines[index] = line,
+                None => lines.insert(start + 1, line),
+            }
+        }
+        None => {
+            if lines.last().is_some_and(|last| !last.trim().is_empty()) {
+                lines.push(String::new());
+            }
+            lines.push(header.to_string());
+            lines.push(line);
+        }
+    }
+    let mut out = lines.join("\n");
+    out.push('\n');
+    out
+}
+
+/// The provider named by `active_provider` in `[ai]`, if any.
+fn active_provider_name(text: &str) -> Option<String> {
+    let lines: Vec<&str> = text.lines().collect();
+    let start = lines.iter().position(|line| is_ai_header(line))?;
+    let end = lines[start + 1..]
+        .iter()
+        .position(|line| line.trim_start().starts_with('['))
+        .map(|offset| start + 1 + offset)
+        .unwrap_or(lines.len());
+    for line in &lines[start + 1..end] {
+        let trimmed = line.split('#').next().unwrap_or("").trim();
+        let Some((key, value)) = trimmed.split_once('=') else {
+            continue;
+        };
+        if unquote_key(key.trim()) != "active_provider" {
+            continue;
+        }
+        let value = value.trim().trim_matches('"');
+        if !value.is_empty() {
+            return Some(value.to_string());
+        }
+    }
+    None
+}
+
+/// Write one `[ai]` key. With a named provider active, its block is updated so
+/// the value survives the copy `activate` performs on the next load.
+pub fn persist_ai_value_at(path: &Path, key: &str, value: &str) -> std::io::Result<()> {
+    let text = read_for_update(path)?;
+    let header = active_provider_name(&text)
+        .map(|name| format!("[ai.providers.{name}]"))
+        .unwrap_or_else(|| "[ai]".to_string());
+    write_private(path, &set_table_value(&text, &header, key, value))
+}
+
+/// Add or update `[ai.providers.<name>]` and make it the active provider.
+pub fn persist_provider_at(
+    path: &Path,
+    name: &str,
+    base_url: &str,
+    model: &str,
+    api_key_env: &str,
+) -> std::io::Result<()> {
+    let text = read_for_update(path)?;
+    let header = format!("[ai.providers.{name}]");
+    let text = set_table_value(&text, &header, "base_url", base_url);
+    let text = set_table_value(&text, &header, "model", model);
+    let text = set_table_value(&text, &header, "api_key_env", api_key_env);
+    write_private(path, &set_active_provider(&text, name))
 }
 
 fn set_active_provider(text: &str, name: &str) -> String {

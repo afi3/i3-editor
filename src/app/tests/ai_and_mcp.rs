@@ -476,6 +476,90 @@ fn a_failure_on_another_server_leaves_the_waiting_call_alone() {
 }
 
 #[test]
+fn the_palette_adds_an_ai_provider_and_changes_its_model_and_key_env() {
+    let (mut app, dir) = fixture("x\n");
+    let path = dir.join("config.toml");
+    std::fs::write(&path, "[ai]\nmodel = \"old\"\n").expect("write");
+    app.state.config_path = Some(path.clone());
+
+    app.dispatch(Command::AiAddProvider)
+        .expect("provider prompt");
+    let InputMode::Prompt(prompt) = &mut app.state.mode else {
+        panic!("add-provider prompt missing")
+    };
+    assert_eq!(prompt.fields.len(), 4, "name, url, model, key env");
+    prompt.fields[0] = "local".to_string();
+    prompt.fields[1] = "http://127.0.0.1:9/v1".to_string();
+    prompt.fields[2] = "qwen".to_string();
+    prompt.fields[3] = "OLLAMA_KEY".to_string();
+    app.submit_prompt().expect("add provider");
+
+    assert_eq!(app.state.config.ai.active_provider, "local");
+    assert_eq!(app.state.config.ai.model, "qwen");
+    assert_eq!(app.state.config.ai.api_key_env, "OLLAMA_KEY");
+    let text = std::fs::read_to_string(&path).expect("read");
+    let toml: toml::Value = toml::from_str(&text).expect("valid toml");
+    assert_eq!(toml["ai"]["active_provider"].as_str(), Some("local"));
+    assert_eq!(
+        toml["ai"]["providers"]["local"]["base_url"].as_str(),
+        Some("http://127.0.0.1:9/v1")
+    );
+
+    app.dispatch(Command::AiSetModel).expect("model prompt");
+    let InputMode::Prompt(prompt) = &mut app.state.mode else {
+        panic!("model prompt missing")
+    };
+    assert_eq!(prompt.fields[0], "qwen", "prefilled with the current model");
+    prompt.fields[0] = "qwen2.5-coder".to_string();
+    app.submit_prompt().expect("set model");
+    assert_eq!(app.state.config.ai.model, "qwen2.5-coder");
+    let text = std::fs::read_to_string(&path).expect("read");
+    let toml: toml::Value = toml::from_str(&text).expect("valid toml");
+    assert_eq!(
+        toml["ai"]["providers"]["local"]["model"].as_str(),
+        Some("qwen2.5-coder")
+    );
+    assert_eq!(toml["ai"]["model"].as_str(), Some("old"));
+
+    app.dispatch(Command::AiSetKey).expect("key prompt");
+    let InputMode::Prompt(prompt) = &mut app.state.mode else {
+        panic!("key prompt missing")
+    };
+    prompt.fields[0] = "LOCAL_KEY".to_string();
+    app.submit_prompt().expect("set key");
+    let text = std::fs::read_to_string(&path).expect("read");
+    let toml: toml::Value = toml::from_str(&text).expect("valid toml");
+    assert_eq!(
+        toml["ai"]["providers"]["local"]["api_key_env"].as_str(),
+        Some("LOCAL_KEY")
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn an_invalid_provider_name_is_refused_without_writing() {
+    let (mut app, dir) = fixture("x\n");
+    let path = dir.join("config.toml");
+    std::fs::write(&path, "[ai]\n").expect("write");
+    let before = std::fs::read_to_string(&path).expect("read");
+    app.state.config_path = Some(path.clone());
+    app.dispatch(Command::AiAddProvider).expect("prompt");
+    if let InputMode::Prompt(prompt) = &mut app.state.mode {
+        prompt.fields[0] = "my provider".to_string();
+        prompt.fields[1] = "http://127.0.0.1:9/v1".to_string();
+        prompt.fields[2] = "model".to_string();
+    }
+    app.submit_prompt().expect("submit");
+    assert!(
+        app.state.ui.message.contains("letters, digits"),
+        "{}",
+        app.state.ui.message
+    );
+    assert_eq!(std::fs::read_to_string(&path).expect("read"), before);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn the_wheel_scrolls_the_ai_transcript_without_taking_focus() {
     use ratatui::crossterm::event::{MouseEvent, MouseEventKind};
     use ratatui::layout::Rect;

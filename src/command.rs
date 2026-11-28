@@ -101,6 +101,9 @@ pub enum Command {
     AiContextFiles,
     AiRules,
     AiTrace,
+    AiAddProvider,
+    AiSetModel,
+    AiSetKey,
     GitStatus,
     GitDiff,
     GitLog,
@@ -327,6 +330,15 @@ impl Command {
             }
             Command::AiRules => ("ai_rules", "Show the workspace AI rules file"),
             Command::AiTrace => ("ai_trace", "Show recent model request traces"),
+            Command::AiAddProvider => (
+                "ai_add_provider",
+                "Add an OpenAI-compatible provider and activate it",
+            ),
+            Command::AiSetModel => ("ai_set_model", "Change the active provider's model"),
+            Command::AiSetKey => (
+                "ai_set_key",
+                "Set which environment variable holds the provider API key",
+            ),
             _ => return None,
         })
     }
@@ -369,7 +381,10 @@ impl Command {
             | Command::AiIndexProject
             | Command::AiContextFiles
             | Command::AiRules
-            | Command::AiTrace => return self.ai_spec(),
+            | Command::AiTrace
+            | Command::AiAddProvider
+            | Command::AiSetModel
+            | Command::AiSetKey => return self.ai_spec(),
             Command::LspUninstall => (
                 "lsp_uninstall",
                 "Remove the installed language server for the active file",
@@ -629,6 +644,9 @@ impl Command {
             Command::AiContextFiles,
             Command::AiRules,
             Command::AiTrace,
+            Command::AiAddProvider,
+            Command::AiSetModel,
+            Command::AiSetKey,
             Command::GitStatus,
             Command::GitDiff,
             Command::GitLog,
@@ -804,6 +822,9 @@ mod tests {
             Command::AiContextFiles,
             Command::AiRules,
             Command::AiTrace,
+            Command::AiAddProvider,
+            Command::AiSetModel,
+            Command::AiSetKey,
             Command::GitStatus,
             Command::GitDiff,
             Command::GitLog,

@@ -61,6 +61,9 @@ pub enum PromptKind {
     AiObjectives,
     AiObjectiveLink,
     AiContextFiles,
+    AiProviderAdd,
+    AiModel,
+    AiKey,
 }
 
 /// Grouping used by the prompt setup and submit code, so neither needs one
@@ -128,6 +131,9 @@ impl PromptKind {
                 | PromptKind::AiObjectives
                 | PromptKind::AiObjectiveLink
                 | PromptKind::AiContextFiles
+                | PromptKind::AiProviderAdd
+                | PromptKind::AiModel
+                | PromptKind::AiKey
         )
     }
 
@@ -205,6 +211,9 @@ impl PromptKind {
 
     fn ai_query_title(self) -> Option<&'static str> {
         Some(match self {
+            PromptKind::AiProviderAdd => "Add AI Provider",
+            PromptKind::AiModel => "AI Model",
+            PromptKind::AiKey => "AI API Key Environment",
             PromptKind::AiBackground => "Background Agent Task",
             PromptKind::AiObjectiveAdd => "Add Agent Objective",
             PromptKind::AiObjectives => "Agent Objectives",
