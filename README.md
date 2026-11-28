@@ -896,7 +896,7 @@ names in the status bar.
 | `default` | Terminal colors; no background override, blue selection |
 | `dark` | Dark background, muted gutter, cyan accent, VS Code-like tokens |
 | `light` | Light background, dark text, classic light token colors |
-| `high-contrast` | Black on white with yellow cursor line, border, and selection |
+| `high-contrast` | White on black with yellow selection, borders, active tab, and directory names |
 
 ### Theme files
 
@@ -985,8 +985,10 @@ quickest way to confirm a config and theme file were read.
   `F2` saves it through Save As; scratch buffers are not written to
   `session.toml` or crash recovery.
 - `F2` Save As asks for confirmation before replacing a different existing file.
-- The workspace root, expanded explorer directories, and parent directories of
-  open documents are watched without recursion. A clean buffer reloads when
+- Each workspace root is watched recursively. If the OS refuses a recursive
+  watch, the editor falls back to the root plus expanded explorer directories
+  and says so in the status bar; events for ignored paths are filtered when the
+  tree is rebuilt. A clean buffer reloads when
   another program writes its file; a modified buffer is left alone and the status
   bar reports the change, so `Ctrl+S` still asks before anything is written.
   Explorer rows refresh on create, rename, and delete without pressing refresh.
@@ -997,7 +999,7 @@ quickest way to confirm a config and theme file were read.
 ### Sessions
 
 On exit and at most once every five seconds while running, the editor writes
-`<config>/i3-editor/session.toml`: workspaces, layout trees, pane tabs (saved
+`<config>/i3-editor/session-<hash>.toml` (one file per workspace root): workspaces, layout trees, pane tabs (saved
 files only), cursor, and scroll. Launching without a path argument in the same
 directory restores it; launching with a path starts fresh. Untitled buffers are
 not persisted, files that no longer exist are skipped with a status-bar warning,
@@ -1182,8 +1184,8 @@ and `tab_width`; later matching sections win. Go and Makefile files default to
 tabs with width 8. Tab insertion, tab rendering, cursor movement, and mouse
 hit-testing all use the document's resolved width.
 
-Files above **16 MiB** are refused when opened or reloaded, with the path and
-limit in the status bar.
+Files above **16 MiB** ask for confirmation and then open read-only, with the
+path and limit in the status bar; files above 256 MiB are refused.
 
 ## Verify
 

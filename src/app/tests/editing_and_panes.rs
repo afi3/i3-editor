@@ -429,6 +429,30 @@ fn dragging_inside_a_pane_selects_text() {
 }
 
 #[test]
+fn ctrl_b_focuses_a_visible_explorer_before_hiding_it() {
+    let (mut app, dir) = fixture("x\n");
+    let pane = app.state.focused_pane_id().expect("pane");
+
+    app.state.explorer.visible = false;
+    app.dispatch(Command::ToggleExplorer).expect("show");
+    assert!(app.state.explorer.visible);
+    assert_eq!(app.state.focus, Focus::Explorer);
+
+    app.state.focus = Focus::Pane(pane);
+    app.dispatch(Command::ToggleExplorer).expect("focus");
+    assert!(
+        app.state.explorer.visible,
+        "a visible tree is focused, not hidden"
+    );
+    assert_eq!(app.state.focus, Focus::Explorer);
+
+    app.dispatch(Command::ToggleExplorer).expect("hide");
+    assert!(!app.state.explorer.visible);
+    assert!(matches!(app.state.focus, Focus::Pane(_)));
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn switching_documents_resets_a_stale_viewport() {
     let (mut app, dir) = fixture(&"line\n".repeat(200));
     let pane_id = app.state.focused_pane_id().expect("pane");

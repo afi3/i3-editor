@@ -188,7 +188,13 @@ pub fn tree_marks(
     .unwrap_or_default();
     let mut marks = HashMap::new();
     for (path, relative) in wanted {
-        let lines = if untracked.contains(relative.as_str()) {
+        // `git status` collapses a new directory to one `dir/` entry, so a file
+        // inside it is untracked without appearing under its own name.
+        let is_new = untracked.contains(relative.as_str())
+            || untracked
+                .iter()
+                .any(|entry| entry.ends_with('/') && relative.starts_with(entry));
+        let lines = if is_new {
             let count = std::fs::read_to_string(&path)
                 .map(|text| text.lines().count())
                 .unwrap_or(0)
@@ -231,7 +237,6 @@ impl MarksTask {
 
 /// The `diff --git` section that belongs to one repository-relative path.
 fn section<'a>(diff: &'a str, relative: &str) -> Option<&'a str> {
-    let expected = format!("a/{relative} b/{relative}");
     let mut start = None;
     let mut end = diff.len();
     let mut offset = 0;
@@ -241,7 +246,13 @@ fn section<'a>(diff: &'a str, relative: &str) -> Option<&'a str> {
                 end = offset;
                 break;
             }
-            if rest.trim_end() == expected {
+            // The old side differs for a rename, so only the new path is compared.
+            let new_path = rest
+                .trim_end()
+                .rsplit_once(" b/")
+                .map(|(_, path)| path)
+                .unwrap_or("");
+            if new_path == relative {
                 start = Some(offset);
             }
         }
@@ -802,6 +813,37 @@ mod tests {
             .collect();
         assert!(names.contains(&"c d.txt"), "{names:?}");
         assert!(!names.iter().any(|name| name.contains('\0')), "{names:?}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_renamed_file_still_gets_marks_for_its_edits() {
+        let dir = repo("renamed-marks");
+        let old = dir.join("old.txt");
+        std::fs::write(&old, "one\ntwo\n").expect("seed");
+        git(&dir, &["add", "."]);
+        git(&dir, &["commit", "-q", "-m", "base"]);
+        git(&dir, &["mv", "old.txt", "new.txt"]);
+        let new = dir.join("new.txt");
+        std::fs::write(&new, "one\ntwo\nthree\n").expect("edit");
+
+        let marks = tree_marks("git", &dir, std::slice::from_ref(&new));
+        let marks = marks.get(&new).expect("marks");
+        assert!(
+            marks.iter().any(Option::is_some),
+            "a renamed, edited file must keep its gutter marks: {marks:?}"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_file_inside_a_new_directory_gets_added_marks() {
+        let dir = repo("untracked-dir");
+        std::fs::create_dir(dir.join("newdir")).expect("dir");
+        let path = dir.join("newdir").join("a.txt");
+        std::fs::write(&path, "one\ntwo\n").expect("seed");
+        let marks = tree_marks("git", &dir, std::slice::from_ref(&path));
+        assert_eq!(marks.get(&path).map(Vec::len), Some(2), "{marks:?}");
         std::fs::remove_dir_all(&dir).ok();
     }
 

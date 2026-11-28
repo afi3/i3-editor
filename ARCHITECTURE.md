@@ -231,19 +231,19 @@ bonuses); `keep_selection` preserves an arrow-key choice while the query narrows
 While a prompt is active it consumes every key except the quit binding, so a
 dialog cannot leak input into a document.
 
-**Watching is non-recursive and follows the active surface.** `watch::Watcher`
-owns the recommended backend, a channel, and the set of directories it tracks.
-Workspace watchers follow the canonical root, the active explorer's expanded
-directories, and parent directories of open documents; `sync_workspace_watchers`
-compares a hash of roots, the explorer revision, and open paths before adding or
-removing watches. The event loop drains each channel once per frame, drops
-`Access` events, and coalesces the rest: a visible path rebuilds the explorer
-with its selection preserved by path, and each open document whose file appears
-in the batch is checked with `disk_changed` — clean buffers reload, dirty buffers
-only get a status message. The same batch clears the quick-open cache, so the
-project is scanned once instead of once per prompt. Ignored paths are not watched
-unless the explorer reaches them, so build output cannot create watches or churn
-the tree.
+**Watching is recursive per workspace root.** `watch::Watcher` owns the
+recommended backend, a channel, and the set of paths it tracks. Each workspace
+root is watched with `RecursiveMode::Recursive`; when the OS refuses that, the
+watcher falls back to a non-recursive root watch and reports it once, and
+`sync_dirs` then adds expanded directories. The config file's parent is watched
+non-recursively so atomic config saves are seen. The event loop drains each
+channel once per frame, drops `Access` events, and coalesces the rest: a visible
+path rebuilds the explorer with its selection preserved by path, and each open
+document whose file appears in the batch is checked with `disk_changed` — clean
+buffers reload, dirty buffers only get a status message. The same batch clears
+the quick-open cache, so the project is scanned once instead of once per prompt.
+Events for ignored paths do arrive, because the root watch is recursive, and are
+filtered when the tree is rebuilt rather than at watch registration.
 
 **Find in Files is one worker per query.** `project_search::Task` receives the
 cached quick-open list, reads each file, and streams `Message::Matches` batches
@@ -590,9 +590,9 @@ listed in `MASTER.md`; it exists because a signal-killed editor otherwise leaves
 the terminal unusable.
 
 **Dirty documents are never dropped implicitly.** Closing a dirty document opens
-a discard prompt. Closing a pane keeps its dirty documents registered (orphaned)
-until the user saves or discards them, and closing a workspace with unsaved
-changes is refused with a message. Quit always opens a confirmation prompt:
+a discard prompt. Closing a pane whose tabs include modified documents is
+refused with a message, so no buffer becomes unreachable, and closing a
+workspace with unsaved changes is refused the same way. Quit always opens a confirmation prompt:
 clean sessions offer Quit/Cancel, dirty sessions add Save all/Discard all.
 
 **Supported run targets are macOS and Linux.** Windows is not built or released:

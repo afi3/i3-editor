@@ -1199,6 +1199,34 @@ mod tests {
     }
 
     #[test]
+    fn a_spaced_or_quoted_ai_header_is_still_the_same_table() {
+        for text in [
+            "[ ai ]\nactive_provider = \"a\"\n",
+            "[\"ai\"]\nactive_provider = \"a\"\n",
+        ] {
+            let updated = set_active_provider(text, "b");
+            let value: toml::Value = toml::from_str(&updated).expect("valid toml");
+            assert_eq!(
+                value["ai"]["active_provider"].as_str(),
+                Some("b"),
+                "{updated}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_lookalike_key_is_not_replaced() {
+        let text = "[ai]\nactive_provider_fallback = \"anthropic\"\n";
+        let updated = set_active_provider(text, "b");
+        let value: toml::Value = toml::from_str(&updated).expect("valid toml");
+        assert_eq!(
+            value["ai"]["active_provider_fallback"].as_str(),
+            Some("anthropic")
+        );
+        assert_eq!(value["ai"]["active_provider"].as_str(), Some("b"));
+    }
+
+    #[test]
     fn a_comment_after_the_ai_header_does_not_duplicate_the_table() {
         let text = "[ai] # provider settings\nactive_provider = \"a\"\n\n[explorer]\nwidth = 20\n";
         let updated = set_active_provider(text, "b");
@@ -1240,15 +1268,13 @@ fn set_active_provider(text: &str, name: &str) -> String {
     let mut start = None;
     let mut end = lines.len();
     for (index, current) in lines.iter().enumerate() {
-        // A trailing comment or padding must not hide the header: appending a
-        // second `[ai]` table would make the file invalid TOML.
-        let trimmed = current.trim_start();
-        if !trimmed.starts_with('[') {
+        // Spacing, quotes and trailing comments are all legal TOML; missing the
+        // header here would append a second table and corrupt the file.
+        if !current.trim_start().starts_with('[') {
             continue;
         }
-        let header = trimmed.split('#').next().unwrap_or("").trim();
         if start.is_none() {
-            if header == "[ai]" {
+            if is_ai_header(current) {
                 start = Some(index);
             }
         } else {
@@ -1258,10 +1284,7 @@ fn set_active_provider(text: &str, name: &str) -> String {
     }
     match start {
         Some(start) => {
-            let existing = (start + 1..end).find(|index| {
-                lines[*index].trim_start().starts_with("active_provider")
-                    && lines[*index].contains('=')
-            });
+            let existing = (start + 1..end).find(|index| is_active_provider_key(&lines[*index]));
             match existing {
                 Some(index) => lines[index] = line,
                 None => lines.insert(start + 1, line),
@@ -1278,6 +1301,41 @@ fn set_active_provider(text: &str, name: &str) -> String {
     let mut out = lines.join("\n");
     out.push('\n');
     out
+}
+
+/// True for a table header that opens the `[ai]` table itself, in any legal
+/// TOML spelling (`[ai]`, `[ ai ]`, `["ai"]`, with or without a comment).
+fn is_ai_header(line: &str) -> bool {
+    let trimmed = line.trim_start();
+    let Some(rest) = trimmed.strip_prefix('[') else {
+        return false;
+    };
+    let rest = rest.split('#').next().unwrap_or("").trim_end();
+    let Some(inner) = rest.strip_suffix(']') else {
+        return false;
+    };
+    let inner = unquote_key(inner.trim());
+    inner == "ai"
+}
+
+/// True for a line assigning the `active_provider` key, and only that key:
+/// `active_provider_fallback` must survive.
+fn is_active_provider_key(line: &str) -> bool {
+    let trimmed = line.split('#').next().unwrap_or("").trim_start();
+    let Some((key, _)) = trimmed.split_once('=') else {
+        return false;
+    };
+    unquote_key(key.trim()) == "active_provider"
+}
+
+fn unquote_key(key: &str) -> &str {
+    key.strip_prefix('"')
+        .and_then(|rest| rest.strip_suffix('"'))
+        .or_else(|| {
+            key.strip_prefix('\'')
+                .and_then(|rest| rest.strip_suffix('\''))
+        })
+        .unwrap_or(key)
 }
 
 fn set_theme_value(text: &str, name: &str) -> String {

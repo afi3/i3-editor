@@ -280,12 +280,19 @@ impl App {
     }
 
     pub(crate) fn toggle_explorer(&mut self) {
-        self.state.explorer.visible = !self.state.explorer.visible;
-        if self.state.explorer.visible {
+        // The documented key both toggles and focuses: hiding a tree the user
+        // just asked to reach would be the opposite of that.
+        if !self.state.explorer.visible {
+            self.state.explorer.visible = true;
             self.state.focus = Focus::Explorer;
-        } else if matches!(self.state.focus, Focus::Explorer)
-            && let Ok(id) = self.focused_or_first_pane()
-        {
+            return;
+        }
+        if !matches!(self.state.focus, Focus::Explorer) {
+            self.state.focus = Focus::Explorer;
+            return;
+        }
+        self.state.explorer.visible = false;
+        if let Ok(id) = self.focused_or_first_pane() {
             self.state.focus = Focus::Pane(id);
         }
     }
