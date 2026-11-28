@@ -299,6 +299,11 @@ impl LayoutNode {
         let Some(index) = children.iter().position(|child| child.contains(target)) else {
             return false;
         };
+        // Tiling more than `MAX_CHILDREN` panes would hand each less than the
+        // documented minimum area, so a wide tabbed container stays tabbed.
+        if *mode == SplitMode::Tabbed && children.len() > MAX_CHILDREN {
+            return false;
+        }
         *mode = match mode {
             SplitMode::Tiled => SplitMode::Tabbed,
             SplitMode::Tabbed => SplitMode::Tiled,
@@ -819,6 +824,19 @@ mod tests {
             panic!("nested split");
         };
         assert_eq!(*mode, SplitMode::Tiled);
+    }
+
+    #[test]
+    fn a_tabbed_split_with_too_many_children_stays_tabbed() {
+        let children: Vec<LayoutNode> = (0..5)
+            .map(|index| LayoutNode::Pane(PaneId(index)))
+            .collect();
+        let mut tree = split(SplitAxis::LeftRight, &[1, 1, 1, 1, 1], children);
+        assert!(tree.toggle_tabbed(PaneId(0)), "tiling is allowed");
+        assert!(
+            !tree.toggle_tabbed(PaneId(0)),
+            "five children cannot be tiled"
+        );
     }
 
     #[test]

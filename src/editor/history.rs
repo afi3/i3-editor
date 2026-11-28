@@ -8,6 +8,8 @@ use std::time::{Duration, Instant};
 
 use ropey::Rope;
 
+use crate::editor::document::Eol;
+
 /// Typing inside this window merges into one undo step.
 pub const COALESCE: Duration = Duration::from_millis(300);
 
@@ -51,6 +53,10 @@ impl Edit {
     }
 }
 
+/// Cursor and scroll to restore on undo/redo, plus the EOL mode to restore when
+/// the batch changed it.
+pub type Restore = ((usize, (usize, u16)), Option<Eol>);
+
 #[derive(Clone, Debug)]
 pub struct Batch {
     pub edits: Vec<Edit>,
@@ -61,6 +67,8 @@ pub struct Batch {
     pub id: u64,
     /// Revision this batch started from; restored on undo.
     pub parent: u64,
+    /// End-of-line mode this batch changed, as `(before, after)`.
+    pub eol: Option<(Eol, Eol)>,
 }
 
 #[derive(Debug)]
@@ -125,6 +133,7 @@ impl History {
                 scroll_before,
                 id: self.next_id,
                 parent: self.current,
+                eol: None,
             });
         }
         self.last_edit = Some(Instant::now());
@@ -156,6 +165,7 @@ impl History {
             scroll_before,
             id: self.next_id,
             parent: self.current,
+            eol: None,
         });
         self.last_edit = None;
     }
@@ -177,6 +187,7 @@ impl History {
             scroll_before,
             id: self.next_id,
             parent: self.current,
+            eol: None,
         });
         self.last_edit = None;
     }
@@ -199,6 +210,7 @@ impl History {
             scroll_before,
             id: self.next_id,
             parent: self.current,
+            eol: None,
         });
         self.last_edit = None;
     }
@@ -213,32 +225,42 @@ impl History {
         self.redo.clear();
     }
 
-    /// Returns the cursor and scroll to restore on the pane that issued the edit.
-    pub fn undo(&mut self, rope: &mut Rope) -> Option<(usize, (usize, u16))> {
+    /// Returns the cursor and scroll to restore on the pane that issued the
+    /// edit, plus the end-of-line mode to restore when the batch changed it.
+    pub fn undo(&mut self, rope: &mut Rope) -> Option<Restore> {
         let batch = self.undo.pop_back()?;
         for edit in batch.edits.iter().rev() {
             edit.revert(rope);
         }
         let restore = (batch.cursor_before, batch.scroll_before);
+        let eol = batch.eol.map(|(before, _)| before);
         self.current = batch.parent;
         self.redo.push_back(batch);
         self.last_edit = None;
-        Some(restore)
+        Some((restore, eol))
     }
 
-    pub fn redo(&mut self, rope: &mut Rope) -> Option<(usize, (usize, u16))> {
+    pub fn redo(&mut self, rope: &mut Rope) -> Option<Restore> {
         let batch = self.redo.pop_back()?;
         for edit in &batch.edits {
             edit.apply(rope);
         }
         let restore = (batch.cursor_after, batch.scroll_before);
+        let eol = batch.eol.map(|(_, after)| after);
         self.current = batch.id;
         self.undo.push_back(batch);
         while self.undo.len() > MAX_BATCHES {
             self.undo.pop_front();
         }
         self.last_edit = None;
-        Some(restore)
+        Some((restore, eol))
+    }
+
+    /// Tag the batch just recorded as one that changed the end-of-line mode.
+    pub fn tag_eol(&mut self, before: Eol, after: Eol) {
+        if let Some(batch) = self.undo.back_mut() {
+            batch.eol = Some((before, after));
+        }
     }
 
     /// Mark the current revision as the saved one.

@@ -38,7 +38,8 @@ impl SearchHistory {
             std::fs::create_dir_all(parent)?;
         }
         let text = toml::to_string(self).map_err(std::io::Error::other)?;
-        std::fs::write(path, text)
+        // `fs::write` truncates first; a crash mid-save would lose the history.
+        crate::editor::document::write_atomic(path, text.as_bytes())
     }
 
     pub fn list(&self, kind: PromptKind) -> &[String] {

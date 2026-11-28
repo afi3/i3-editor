@@ -245,12 +245,13 @@ pub fn cells(text: &str, tab_width: usize, start_cell: u16) -> u16 {
     for ch in text.chars() {
         if ch == '\t' {
             let tab = tab_width.max(1) as u16;
-            cell += tab - (cell % tab);
+            cell = cell.saturating_add(tab - (cell % tab));
         } else {
-            cell += UnicodeWidthStr::width(ch.encode_utf8(&mut [0u8; 4])) as u16;
+            cell =
+                cell.saturating_add(UnicodeWidthStr::width(ch.encode_utf8(&mut [0u8; 4])) as u16);
         }
     }
-    cell - start_cell
+    cell.saturating_sub(start_cell)
 }
 
 /// Cells occupied by the first `char_count` chars of `text`.
@@ -292,7 +293,7 @@ pub fn clip(text: &str, skip: u16, width: u16, tab_width: usize) -> String {
         } else {
             UnicodeWidthStr::width(ch.encode_utf8(&mut [0u8; 4])) as u16
         };
-        let next = cell + advance;
+        let next = cell.saturating_add(advance);
         if next > skip && cell < limit {
             if ch == '\t' {
                 for _ in cell.max(skip)..next.min(limit) {

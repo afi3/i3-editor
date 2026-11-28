@@ -515,12 +515,18 @@ fn validate_node(
             seen[*index] = true;
         }
         Node::Split {
+            mode,
             active,
             weights,
             children,
             ..
         } => {
-            if children.len() < 2 || children.len() > MAX_CHILDREN {
+            // A tabbed container holds tabs, not panes; `MAX_TABS` is its limit.
+            let limit = match mode {
+                Mode::Tabbed => MAX_TABS,
+                Mode::Tiled => MAX_CHILDREN,
+            };
+            if children.len() < 2 || children.len() > limit {
                 return Err("split has an invalid child count".to_string());
             }
             if weights.len() != children.len() {
@@ -553,6 +559,36 @@ mod tests {
     use crate::theme::Theme;
     use crate::ui::UiState;
     use crate::workspace::WorkspaceManager;
+
+    #[test]
+    fn a_tabbed_split_may_hold_more_than_four_tabs() {
+        let children: Vec<Node> = (0..5).map(|index| Node::Pane { index }).collect();
+        let node = Node::Split {
+            axis: Axis::LeftRight,
+            mode: Mode::Tabbed,
+            active: 0,
+            weights: vec![1; 5],
+            children,
+        };
+        let mut seen = vec![false; 5];
+        assert!(
+            validate_node(&node, 5, &mut seen, 0).is_ok(),
+            "a five-tab container must survive a save/restore"
+        );
+
+        let tiled = Node::Split {
+            axis: Axis::LeftRight,
+            mode: Mode::Tiled,
+            active: 0,
+            weights: vec![1; 5],
+            children: (0..5).map(|index| Node::Pane { index }).collect(),
+        };
+        let mut seen = vec![false; 5];
+        assert!(
+            validate_node(&tiled, 5, &mut seen, 0).is_err(),
+            "a tiled split still caps at MAX_CHILDREN"
+        );
+    }
 
     fn temp_dir(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("i3-session-{}-{name}", std::process::id()));

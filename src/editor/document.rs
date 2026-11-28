@@ -591,7 +591,10 @@ impl Document {
         if self.read_only {
             return None;
         }
-        let restore = self.history.undo(&mut self.rope)?;
+        let (restore, eol) = self.history.undo(&mut self.rope)?;
+        if let Some(eol) = eol {
+            self.eol = eol;
+        }
         self.dirty = self.history.is_modified();
         self.folded.clear();
         self.reset_syntax();
@@ -603,7 +606,10 @@ impl Document {
         if self.read_only {
             return None;
         }
-        let restore = self.history.redo(&mut self.rope)?;
+        let (restore, eol) = self.history.redo(&mut self.rope)?;
+        if let Some(eol) = eol {
+            self.eol = eol;
+        }
         self.dirty = self.history.is_modified();
         self.folded.clear();
         self.reset_syntax();
@@ -631,6 +637,10 @@ impl Document {
         let text = self.rope.to_string();
         write_atomic(&path, text.as_bytes()).map_err(|error| Error::io("write", &path, error))?;
         self.path = Some(path);
+        // Typing that lands within the coalescing window after a save would
+        // merge into the batch just marked as saved, leaving the buffer clean
+        // with unsaved text in it.
+        self.history.break_run();
         self.history.mark_saved();
         self.dirty = false;
         self.record_disk_state();
@@ -731,6 +741,7 @@ impl Document {
             Eol::Lf => lf,
             Eol::Crlf => lf.replace('\n', "\r\n"),
         };
+        let before = self.eol;
         self.eol = target;
         if converted == text {
             return false;
@@ -738,6 +749,7 @@ impl Document {
         let end = self.len_chars();
         let range = 0..end;
         self.replace_ranges(std::slice::from_ref(&range), &converted, 0, 0, (0, 0));
+        self.history.tag_eol(before, target);
         true
     }
 
@@ -965,6 +977,35 @@ mod tests {
             b"Xprogress 10%\rprogress 100%\n"
         );
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn typing_right_after_a_save_still_counts_as_unsaved() {
+        let dir = std::env::temp_dir().join(format!("i3-editor-aftersave-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join("note.txt");
+        std::fs::write(&path, "one\n").expect("seed");
+
+        let mut document = Document::open(DocumentId(1), path.clone()).expect("open");
+        document.insert(0, "a", 0, (0, 0));
+        document.save().expect("save");
+        assert!(!document.dirty, "just saved");
+        // Same coalescing window as the saved batch: this must not merge with it.
+        document.insert(1, "b", 1, (0, 0));
+        assert!(document.dirty, "the edit after the save is unsaved");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn undoing_an_eol_conversion_restores_the_old_mode() {
+        let mut document = Document::from_text(DocumentId(1), "a\nb\n", None);
+        assert_eq!(document.eol, Eol::Lf);
+        assert!(document.convert_eol(Eol::Crlf));
+        assert_eq!(document.eol, Eol::Crlf);
+        assert!(document.undo().is_some());
+        assert_eq!(document.eol, Eol::Lf);
+        assert_eq!(document.rope.to_string(), "a\nb\n");
+        std::fs::remove_dir_all(std::env::temp_dir()).ok();
     }
 
     #[test]
