@@ -170,7 +170,12 @@ fn run(
         return;
     }
     if body.status != 0 && !(200..300).contains(&body.status) {
-        let message = error_message(&body.raw);
+        // Providers often put the reason inside the stream, which never lands
+        // in `raw`; prefer it over an empty body.
+        let message = body
+            .sse_error
+            .clone()
+            .unwrap_or_else(|| error_message(&body.raw));
         let retryable = body.status == 408
             || body.status == 425
             || body.status == 429
@@ -199,6 +204,28 @@ fn run(
             "AI request failed ({}): {message}",
             body.status
         )));
+        return;
+    }
+    if body.saw_sse && !body.done {
+        // A clean close without `[DONE]` means the reply was cut short; taking
+        // it as final would persist a truncated answer.
+        let empty = body.accumulator.content.is_empty();
+        if retry_stream(config, attempt, cancel, true, empty, || {
+            run(
+                config,
+                messages,
+                tools,
+                sender,
+                cancel,
+                child_slot,
+                attempt + 1,
+            )
+        }) {
+            return;
+        }
+        let _ = sender.send(StreamEvent::Error(
+            "AI stream ended before [DONE]; the reply may be incomplete".to_string(),
+        ));
         return;
     }
     let reply = if body.saw_sse {
@@ -294,6 +321,48 @@ struct StreamBody {
     raw: String,
     saw_sse: bool,
     status: u16,
+    /// `[DONE]` arrived; without it the stream was cut short.
+    done: bool,
+    /// Error reported inside the stream, which the raw body never sees.
+    sse_error: Option<String>,
+}
+
+/// One stream line may not exceed this. Without a bound a hostile or broken
+/// endpoint can send a single enormous line and exhaust the process.
+const MAX_LINE: usize = 8 << 20;
+
+/// Read one `\n`-terminated line into `line`, refusing anything past `limit`.
+/// Returns false at end of input.
+fn read_line_bounded(
+    reader: &mut impl BufRead,
+    line: &mut Vec<u8>,
+    limit: usize,
+) -> Result<bool, String> {
+    line.clear();
+    loop {
+        let buffer = reader.fill_buf().map_err(|error| error.to_string())?;
+        if buffer.is_empty() {
+            return Ok(!line.is_empty());
+        }
+        match buffer.iter().position(|byte| *byte == b'\n') {
+            Some(index) => {
+                if line.len() + index > limit {
+                    return Err(format!("stream line exceeds {limit} bytes"));
+                }
+                line.extend_from_slice(&buffer[..index]);
+                reader.consume(index + 1);
+                return Ok(true);
+            }
+            None => {
+                if line.len() + buffer.len() > limit {
+                    return Err(format!("stream line exceeds {limit} bytes"));
+                }
+                let len = buffer.len();
+                line.extend_from_slice(buffer);
+                reader.consume(len);
+            }
+        }
+    }
 }
 
 fn consume_stream(
@@ -305,8 +374,12 @@ fn consume_stream(
     let mut accumulator = Accumulator::default();
     let mut raw = String::new();
     let mut saw_sse = false;
+    let mut done = false;
+    let mut sse_error: Option<String> = None;
     let mut status = 0u16;
-    for line in BufReader::new(stdout).lines() {
+    let mut reader = BufReader::new(stdout);
+    let mut bytes = Vec::new();
+    loop {
         if cancel.load(Ordering::Relaxed) {
             if let Ok(mut slot) = child_slot.lock()
                 && let Some(child) = slot.as_mut()
@@ -315,9 +388,10 @@ fn consume_stream(
             }
             return Err("AI request cancelled".to_string());
         }
-        let Ok(line) = line else {
+        if !read_line_bounded(&mut reader, &mut bytes, MAX_LINE)? {
             break;
-        };
+        }
+        let line = String::from_utf8_lossy(&bytes);
         if let Some(code) = line.strip_prefix("__I3_AI_STATUS__") {
             status = code.trim().parse().unwrap_or(0);
             continue;
@@ -332,11 +406,17 @@ fn consume_stream(
         saw_sse = true;
         let data = data.trim();
         if data == "[DONE]" {
+            done = true;
             continue;
         }
         let Ok(value) = serde_json::from_str::<Value>(data) else {
             continue;
         };
+        if sse_error.is_none()
+            && let Some(message) = value.pointer("/error/message").and_then(Value::as_str)
+        {
+            sse_error = Some(message.to_string());
+        }
         if let Some(delta) = accumulator.push(&value)
             && sender.send(StreamEvent::Delta(delta)).is_err()
         {
@@ -348,6 +428,8 @@ fn consume_stream(
         raw,
         saw_sse,
         status,
+        done,
+        sse_error,
     })
 }
 
@@ -449,5 +531,55 @@ impl Accumulator {
             prompt_tokens: self.prompt_tokens,
             completion_tokens: self.completion_tokens,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Cursor;
+
+    fn consume(raw: &str) -> StreamBody {
+        let (sender, _receiver) = mpsc::channel::<StreamEvent>();
+        consume_stream(
+            Cursor::new(raw.as_bytes().to_vec()),
+            &AtomicBool::new(false),
+            &Mutex::new(None),
+            &sender,
+        )
+        .expect("stream body")
+    }
+
+    #[test]
+    fn a_stream_without_done_is_marked_truncated() {
+        let body = consume("data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n");
+        assert!(body.saw_sse);
+        assert!(!body.done, "a missing [DONE] must be visible");
+        assert_eq!(body.accumulator.content, "hi");
+    }
+
+    #[test]
+    fn a_completed_stream_is_marked_done() {
+        let body =
+            consume("data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\ndata: [DONE]\n");
+        assert!(body.done);
+    }
+
+    #[test]
+    fn an_error_payload_is_captured_from_the_stream() {
+        let body = consume("data: {\"error\":{\"message\":\"quota exhausted\"}}\n");
+        assert_eq!(body.sse_error.as_deref(), Some("quota exhausted"));
+    }
+
+    #[test]
+    fn a_line_past_the_limit_is_refused() {
+        let mut line = Vec::new();
+        let mut reader = Cursor::new(b"1234567890\n".to_vec());
+        let error = read_line_bounded(&mut reader, &mut line, 4).expect_err("too long");
+        assert!(error.contains("exceeds"), "{error}");
+
+        let mut reader = Cursor::new(b"abc\ndef\n".to_vec());
+        assert!(read_line_bounded(&mut reader, &mut line, 8).expect("line"));
+        assert_eq!(line, b"abc");
     }
 }
