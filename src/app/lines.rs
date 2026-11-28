@@ -121,7 +121,12 @@ impl App {
             let range = if end_line + 1 < line_count {
                 line_start..document.char_of_line(end_line + 1)
             } else if line_start == document.len_chars() {
-                line_start.saturating_sub(1)..document.len_chars()
+                let mut start = line_start.saturating_sub(1);
+                // CRLF: the line feed alone would leave a stray carriage return.
+                if start > 0 && document.rope().char(start - 1) == '\r' {
+                    start -= 1;
+                }
+                start..document.len_chars()
             } else {
                 line_start..document.len_chars()
             };

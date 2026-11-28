@@ -35,10 +35,11 @@ pub fn resolve(root: &Path, path: &Path, base: IndentSettings) -> IndentSettings
         .to_string_lossy()
         .replace('\\', "/");
     for section in parse(&text) {
+        // A section whose glob did not compile must not apply to every file.
         if section
             .matcher
             .as_ref()
-            .is_none_or(|matcher| matcher.is_match(&relative))
+            .is_some_and(|matcher| matcher.is_match(&relative))
         {
             section.props.apply(&mut settings);
         }
@@ -158,6 +159,19 @@ fn parse(text: &str) -> Vec<Section> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_section_with_a_broken_glob_applies_to_nothing() {
+        let settings = parse("[*.{rs,ts]\nindent_size = 8\n\n[*.md]\nindent_size = 2\n");
+        let caps = settings
+            .iter()
+            .find(|section| section.props.indent_size.is_some())
+            .expect("section");
+        assert!(
+            caps.matcher.is_none() || !caps.matcher.as_ref().expect("matcher").is_match("a.rs"),
+            "the unbuildable section must not match"
+        );
+    }
     use std::path::PathBuf;
 
     fn temp_dir(name: &str) -> PathBuf {

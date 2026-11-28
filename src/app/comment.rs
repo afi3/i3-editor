@@ -91,8 +91,8 @@ fn toggle_line_comments(
     } else {
         document.len_chars()
     };
-    let trailing =
-        document.rope().char(block_end.saturating_sub(1)) == '\n' && block_end > block_start;
+    // The guard comes first: `char(0)` panics on an empty rope.
+    let trailing = block_end > block_start && document.rope().char(block_end - 1) == '\n';
     let eol = document.line_ending();
     let mut text = lines.join(eol);
     if trailing {
@@ -121,8 +121,10 @@ fn toggle_block_comment(
         None => {
             let line = document.line_of_char(pane.cursor);
             let text = document.line_text(line);
-            let start = text.len() - text.trim_start().len();
-            let end = text.trim_end().len();
+            // Char counts, not byte lengths: non-ASCII text would shift the
+            // range and could run past the end of the buffer.
+            let start = text.chars().count() - text.trim_start().chars().count();
+            let end = text.trim_end().chars().count();
             let line_start = document.char_of_line(line);
             (line_start + start)..(line_start + end.max(start))
         }

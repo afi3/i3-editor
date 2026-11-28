@@ -218,8 +218,7 @@ impl App {
                 return Ok(());
             }
             let text = document.rope().to_string();
-            let (matches, _) = matcher.find(&text);
-            count = matches.len();
+            count = matcher.replacement_count(&text);
             if count == 0 {
                 self.notify(format!("{}: nothing replaced", group.relative));
                 return Ok(());
@@ -240,8 +239,7 @@ impl App {
                 .map_err(|error| crate::error::Error::io("read", &path, error))?;
             let text = String::from_utf8(bytes)
                 .map_err(|_| crate::error::Error::InvalidUtf8 { path: path.clone() })?;
-            let (matches, _) = matcher.find(&text);
-            count = matches.len();
+            count = matcher.replacement_count(&text);
             if count == 0 {
                 self.notify(format!("{}: nothing replaced", group.relative));
                 return Ok(());

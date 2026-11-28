@@ -311,6 +311,40 @@ fn toggle_comment_uses_the_block_form_for_markdown() {
 }
 
 #[test]
+fn block_comment_on_non_ascii_text_keeps_the_line_count() {
+    let (mut app, dir) = fixture("h\u{e9}llo \u{2603}\nsecond\n");
+    set_document_path(&mut app, "note.md");
+    app.dispatch(Command::ToggleComment).expect("comment");
+    assert_eq!(text(&app), "<!-- h\u{e9}llo \u{2603} -->\nsecond\n");
+    app.dispatch(Command::ToggleComment).expect("uncomment");
+    assert_eq!(text(&app), "h\u{e9}llo \u{2603}\nsecond\n");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn toggling_a_comment_in_an_empty_file_does_not_panic() {
+    let (mut app, dir) = fixture("");
+    set_document_path(&mut app, "empty.rs");
+    app.dispatch(Command::ToggleComment).expect("comment");
+    assert_eq!(text(&app), "//");
+    app.dispatch(Command::ToggleComment).expect("uncomment");
+    assert_eq!(text(&app), "");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn deleting_the_last_empty_line_of_a_crlf_file_drops_the_carriage_return() {
+    use crate::command::Move;
+
+    let (mut app, dir) = fixture("a\r\n");
+    app.dispatch(Command::MoveCursor(Move::DocEnd))
+        .expect("end");
+    app.dispatch(Command::DeleteLine).expect("delete");
+    assert_eq!(text(&app), "a");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn toggle_comment_reports_languages_without_comments() {
     let (mut app, dir) = fixture("{\"a\": 1}\n");
     set_document_path(&mut app, "note.json");

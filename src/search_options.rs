@@ -101,6 +101,12 @@ impl Matcher {
         (out, truncated)
     }
 
+    /// Replacements `replace_all` will perform, counting empty matches that
+    /// `find` drops: `$` or `^` rewrite text without a highlight.
+    pub fn replacement_count(&self, text: &str) -> usize {
+        self.regex.find_iter(text).count()
+    }
+
     /// Replace every match. Literal replacements keep `$` literal.
     pub fn replace_all(&self, text: &str, replacement: &str) -> String {
         let replacement = if self.literal {
@@ -117,6 +123,25 @@ impl Matcher {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn replacement_count_matches_what_replace_all_writes() {
+        let options = Options {
+            regex: true,
+            ..Options::default()
+        };
+        let matcher = Matcher::new("$", options).expect("regex");
+        let text = "abc";
+        assert_eq!(
+            matcher.find(text).0.len(),
+            0,
+            "empty matches are not highlighted"
+        );
+        assert_eq!(
+            matcher.replacement_count(text),
+            matcher.replace_all(text, "!").matches('!').count()
+        );
+    }
 
     #[test]
     fn find_reports_truncation_past_the_cap() {

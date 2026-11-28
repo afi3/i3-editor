@@ -247,7 +247,7 @@ impl App {
             };
             let haystack = document.rope().to_string();
             let (matches, _) = matcher.find(&haystack);
-            count = matches.len();
+            count = matcher.replacement_count(&haystack);
             if count == 0 {
                 self.state.ui.message = "nothing replaced".to_string();
                 return Ok(());
