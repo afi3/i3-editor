@@ -1268,8 +1268,10 @@ dependency, no supported-platform change.
 - [x] Full suite, fmt, clippy, and MSRV 1.91 pass.
 - [x] README, ARCHITECTURE, and this roadmap updated for every slice.
 - [x] Self-review of the whole fix series with every regression fixed.
+- [x] Pages workflow added and Pages enabled with GitHub Actions as the source.
 - [ ] Version `0.2.3` and tag `v0.2.3` point at the release commit.
 - [ ] Release workflow publishes four assets plus checksums.
+- [ ] First `pages` deployment runs after `main` is pushed.
 
 ### Acceptance
 

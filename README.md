@@ -1219,7 +1219,12 @@ git push origin v0.2.3
 #    i3-editor-<target>.tar.gz + .sha256
 gh release view v0.2.3
 
-# 4. verify the updater against the published release
+# 4. the docs page is deployed by .github/workflows/pages.yml whenever a push
+#    touches docs/. Pages uses GitHub Actions as its source (already enabled for
+#    this repository); the URL is https://afi3.github.io/i3-editor/
+gh run list --workflow pages.yml -L 1
+
+# 5. verify the updater against the published release
 i3-editor --update
 ```
 
