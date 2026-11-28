@@ -118,15 +118,12 @@ impl Task {
                 if flag.load(Ordering::Relaxed) {
                     return;
                 }
-                let found = scan_file(
-                    &text,
-                    &matcher,
-                    &path,
-                    &relative,
-                    MAX_RESULTS.saturating_sub(total),
-                );
+                let budget = MAX_RESULTS.saturating_sub(total);
+                // One match past the budget is what proves more existed.
+                let mut found = scan_file(&text, &matcher, &path, &relative, budget + 1);
+                truncated = found.len() > budget;
+                found.truncate(budget);
                 total += found.len();
-                truncated = total >= MAX_RESULTS;
                 if !found.is_empty() && sender.send(Message::Matches(found)).is_err() {
                     return;
                 }
@@ -149,6 +146,35 @@ impl Task {
     }
 }
 
+/// Split text on the same break set ropey uses for `Document` lines, so a
+/// reported `path:line:column` lands where the editor's gutter says it does.
+fn unicode_lines(text: &str) -> (Vec<usize>, Vec<&str>) {
+    let mut starts = vec![0usize];
+    let mut lines = Vec::new();
+    let mut chars = text.char_indices().peekable();
+    let mut start = 0usize;
+    let mut seen = 0usize;
+    while let Some((offset, ch)) = chars.next() {
+        seen += 1;
+        let width = match ch {
+            '\r' if matches!(chars.peek(), Some((_, '\n'))) => {
+                chars.next();
+                seen += 1;
+                2
+            }
+            '\r' | '\n' | '\u{0B}' | '\u{0C}' | '\u{85}' | '\u{2028}' | '\u{2029}' => ch.len_utf8(),
+            _ => 0,
+        };
+        if width > 0 {
+            lines.push(&text[start..offset]);
+            start = offset + width;
+            starts.push(seen);
+        }
+    }
+    lines.push(&text[start..]);
+    (starts, lines)
+}
+
 fn scan_file(
     text: &str,
     matcher: &Matcher,
@@ -156,13 +182,7 @@ fn scan_file(
     relative: &str,
     budget: usize,
 ) -> Vec<Match> {
-    let mut line_starts = vec![0usize];
-    for (index, ch) in text.chars().enumerate() {
-        if ch == '\n' {
-            line_starts.push(index + 1);
-        }
-    }
-    let lines: Vec<&str> = text.lines().collect();
+    let (line_starts, lines) = unicode_lines(text);
     let (ranges, _) = matcher.find(text);
     let mut cache: Option<(usize, Vec<char>)> = None;
     let mut found = Vec::new();
@@ -218,6 +238,31 @@ mod tests {
             std::thread::sleep(Duration::from_millis(5));
         }
         (matches, false, false)
+    }
+
+    #[test]
+    fn a_form_feed_starts_a_new_line_like_the_editor_does() {
+        let matcher = Matcher::new("needle", Default::default()).expect("matcher");
+        let text = "a\u{0C}b needle\n";
+        let found = scan_file(text, &matcher, std::path::Path::new("x.txt"), "x.txt", 10);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].line, 1, "the form feed breaks the line");
+        assert_eq!(found[0].column, 2);
+    }
+
+    #[test]
+    fn exactly_at_the_cap_is_not_truncated() {
+        let dir = fixture("cap");
+        let text = "needle\n".repeat(MAX_RESULTS);
+        std::fs::write(dir.join("exact.txt"), &text).expect("write");
+        let files = vec!["exact.txt".to_string()];
+        let task =
+            Task::spawn(&dir, files, "needle".to_string(), Default::default()).expect("task");
+        let (matches, truncated, done) = drain(&task);
+        assert!(done);
+        assert_eq!(matches.len(), MAX_RESULTS);
+        assert!(!truncated, "a complete scan must not look truncated");
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     fn fixture(name: &str) -> PathBuf {

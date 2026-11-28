@@ -111,7 +111,10 @@ fn find_rows(state: &AppState, prompt: &PromptState) -> Option<(usize, Vec<(usiz
     }
     let search = state.search.as_ref()?;
     let document = state.documents.get(&search.document)?;
-    if Some(search.document) != state.active_document_id() || prompt.input() != search.query {
+    if Some(search.document) != state.active_document_id()
+        || search.revision != document.revision
+        || prompt.input() != search.query
+    {
         return None;
     }
     let total = search.matches.len();

@@ -217,6 +217,15 @@ impl App {
                 ));
                 return Ok(());
             }
+            if document.disk_changed() {
+                // The scan read the file, not the buffer; writing the buffer
+                // now would silently replace the other program's edit.
+                self.notify(format!(
+                    "{} changed on disk; reload or save it first",
+                    group.relative
+                ));
+                return Ok(());
+            }
             let text = document.rope().to_string();
             count = matcher.replacement_count(&text);
             if count == 0 {

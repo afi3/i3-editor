@@ -377,6 +377,20 @@ fn a_saved_conversation_with_a_dangling_tool_call_is_repaired() {
 }
 
 #[test]
+fn the_subscription_picker_releases_servers_with_spaces_in_their_name() {
+    let (mut app, dir) = fixture("x\n");
+    app.mcp_subscriptions
+        .insert(("my server".to_string(), "mock://docs".to_string()));
+    let mut prompt =
+        crate::input::prompt::PromptState::new(crate::input::PromptKind::McpSubscriptions);
+    app.fill_subscription_candidates(&mut prompt);
+    assert_eq!(prompt.candidates, vec!["my server mock://docs"]);
+    app.unsubscribe_mcp_subscription(0);
+    assert!(app.mcp_subscriptions.is_empty());
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn a_failed_mcp_tool_call_is_answered_in_the_conversation() {
     let (mut app, dir) = fixture("x\n");
     app.state.ai.conversation = vec![serde_json::json!({

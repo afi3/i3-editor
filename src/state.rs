@@ -354,6 +354,8 @@ pub struct CompletionPopup {
 pub struct Search {
     /// Document the offsets belong to; the same buffer may be open in two panes.
     pub document: DocumentId,
+    /// Revision the offsets were computed from; an edit invalidates them.
+    pub revision: u64,
     pub query: String,
     pub options: crate::search_options::Options,
     /// Char ranges of every non-overlapping match.

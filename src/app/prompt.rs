@@ -347,8 +347,8 @@ impl App {
                 Ok(())
             }
             PromptKind::McpSubscriptions => {
-                if let Some(candidate) = prompt.selected_candidate() {
-                    self.unsubscribe_mcp_subscription(candidate);
+                if let Some(index) = prompt.filtered.get(prompt.selected).copied() {
+                    self.unsubscribe_mcp_subscription(index);
                 }
                 Ok(())
             }

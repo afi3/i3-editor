@@ -129,6 +129,7 @@ impl App {
         };
         let root = self.state.explorer.root.clone();
         let mut invalidate = false;
+        let mut touched: HashSet<PathBuf> = HashSet::new();
         for path in paths {
             let Ok(relative) = path.strip_prefix(&root) else {
                 continue;
@@ -146,6 +147,11 @@ impl App {
             }
             let visible = self.state.explorer.is_visible(path);
             if visible && path.is_file() {
+                if let Some(parent) = path.parent()
+                    && parent.starts_with(&root)
+                {
+                    touched.insert(parent.to_path_buf());
+                }
                 if !index.truncated {
                     match index.files.binary_search(&relative) {
                         Ok(_) => {}
@@ -159,6 +165,14 @@ impl App {
                 index
                     .files
                     .retain(|file| file != &relative && !file.starts_with(&prefix));
+            }
+        }
+        if !invalidate {
+            // The watcher may coalesce sibling events (a file and its new
+            // neighbour in one batch), so each touched directory is reconciled
+            // against the disk instead of trusting the batch alone.
+            for dir in touched {
+                refresh_quick_open_dir(&self.state.explorer, &root, &dir, &mut index);
             }
         }
         self.quick_open_files = if invalidate { None } else { Some(index) };

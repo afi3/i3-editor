@@ -30,6 +30,11 @@ impl App {
             {
                 return false;
             }
+            if prompt.active != 0 {
+                // History holds queries; filling "With" with one would replace
+                // text the user never previewed.
+                return false;
+            }
             let last = prompt.history.entries.len() - 1;
             let next = match combo.code {
                 KeyCode::Up => prompt
@@ -100,8 +105,10 @@ impl App {
         };
         let (matches, truncated) = matcher.find(&text);
         let total = matches.len();
+        let revision = document.revision;
         self.state.search = Some(Search {
             document: document_id,
+            revision,
             query: query.clone(),
             options,
             matches,
@@ -130,8 +137,14 @@ impl App {
             .search
             .as_ref()
             .filter(|search| {
+                let current = self
+                    .state
+                    .documents
+                    .get(&search.document)
+                    .map(|document| document.revision);
                 search.query == query
                     && Some(search.document) == active
+                    && current == Some(search.revision)
                     && search.options == options
             })
             .map(|search| (search.index, search.matches.len()));
@@ -147,7 +160,7 @@ impl App {
 
     /// Up/Down in the Find prompt: step through the match list, wrapping.
     pub(crate) fn move_search_selection(&mut self, delta: isize) {
-        let Some(search) = self.state.search.as_ref() else {
+        let Some(search) = self.current_search() else {
             self.notify("no active search");
             return;
         };
@@ -160,7 +173,7 @@ impl App {
     }
 
     pub(crate) fn next_match(&mut self) -> Result<()> {
-        let Some(search) = self.state.search.as_ref() else {
+        let Some(search) = self.current_search() else {
             self.notify("no active search");
             return Ok(());
         };
@@ -169,6 +182,13 @@ impl App {
         }
         self.show_match(search.index + 1);
         Ok(())
+    }
+
+    /// The committed search, when it still describes the buffer on screen.
+    pub(crate) fn current_search(&self) -> Option<&Search> {
+        let search = self.state.search.as_ref()?;
+        let document = self.state.documents.get(&search.document)?;
+        (document.revision == search.revision).then_some(search)
     }
 
     /// Select `index` (wrapping) and move the pane cursor onto that match.

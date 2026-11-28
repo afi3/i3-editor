@@ -230,15 +230,18 @@ the title), and the cursor jumps to the selected match.
 
 - `Up` / `Down` step through the list and wrap at both ends.
 - `Enter` keeps the selected match, closes the prompt, and leaves the search
-  active; `next_match` from the palette (`F1`) continues from there.
+  active; `next_match` from the palette (`F1`) continues from there. Editing the
+  buffer invalidates the stored matches: the highlights clear and `next_match`
+  reports no active search until the query runs again.
 - The list shows up to eight rows around the selection; the buffer may hold more.
-- `Ctrl+R` replaces every occurrence of the first field with the second.
+- `Ctrl+R` (outside a prompt) opens Replace prefilled with the last query;
+  `Enter` replaces every occurrence of the first field with the second.
 - `Alt+R` toggles regex mode, `Alt+W` whole word, `Alt+C` case sensitivity. The
   title shows the active flags (`.*`, `W`, `Aa`), and the same options apply to
   Find, Replace, Find in Files, and Replace in Files. Literal queries ignore
   case until `Alt+C`; regex replacements expand `$1` groups.
 - `Alt+Up` / `Alt+Down` cycle the last 50 submitted queries for the current
-  surface. Queries and search options persist in
+  surface; they act on the query field, never on the replacement field. Queries and search options persist in
   `<config>/i3-editor/history.toml`.
 
 ### Find in files

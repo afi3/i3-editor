@@ -1089,6 +1089,12 @@ mod tests {
         let theme = crate::theme::Theme::default();
         state.theme = theme;
         state.search = Some(Search {
+            revision: state
+                .documents
+                .values()
+                .next()
+                .map(|document| document.revision)
+                .unwrap_or(0),
             document: DocumentId(1),
             query: "alpha".to_string(),
             options: crate::search_options::Options::default(),

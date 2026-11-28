@@ -262,7 +262,7 @@ pub fn render(
     let search = state
         .search
         .as_ref()
-        .filter(|search| search.document == document.id);
+        .filter(|search| search.document == document.id && search.revision == document.revision);
     let match_ranges = search.map(|search| search.matches.as_slice());
     let matched = selected.add_modifier(Modifier::UNDERLINED);
     let number_style = Style::default().bg(theme.background).fg(theme.gutter);

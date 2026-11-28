@@ -473,7 +473,8 @@ impl App {
             self.state.ai.busy = false;
             self.state.ai.entries.push(format!("[error] {message}"));
         }
-        if self.state.ai.queued_question.is_some() {
+        if (waiting_matches || closed_pending) && self.state.ai.queued_question.is_some() {
+            // Only the server this question was waiting on can invalidate it.
             self.state.ai.queued_question = None;
             self.state
                 .ai

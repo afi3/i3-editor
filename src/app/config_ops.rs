@@ -23,8 +23,9 @@ impl App {
 
     /// Candidates for the subscription picker: `server uri`, one per row.
     pub(crate) fn fill_subscription_candidates(&mut self, prompt: &mut crate::input::PromptState) {
+        self.mcp_subscription_picks = self.mcp_subscriptions.iter().cloned().collect();
         let candidates: Vec<String> = self
-            .mcp_subscriptions
+            .mcp_subscription_picks
             .iter()
             .map(|(server, uri)| format!("{server} {uri}"))
             .collect();
@@ -35,18 +36,18 @@ impl App {
         prompt.set_candidates(candidates);
     }
 
-    /// Release one subscription chosen from the picker.
-    pub(crate) fn unsubscribe_mcp_subscription(&mut self, candidate: &str) {
-        let Some((server, uri)) = candidate.split_once(' ') else {
+    /// Release one subscription chosen from the picker, by row index.
+    pub(crate) fn unsubscribe_mcp_subscription(&mut self, index: usize) {
+        let Some((server, uri)) = self.mcp_subscription_picks.get(index).cloned() else {
             return;
         };
-        let key = (server.to_string(), uri.to_string());
+        let key = (server.clone(), uri.clone());
         if !self.mcp_subscriptions.remove(&key) {
-            self.notify(format!("{candidate} is not subscribed"));
+            self.notify(format!("{uri} is not subscribed"));
             return;
         }
         if let Some(mcp) = self.mcp.as_mut() {
-            let _ = mcp.unsubscribe_resource(server, uri);
+            let _ = mcp.unsubscribe_resource(&server, &uri);
         }
         self.notify(format!("released {uri} from {server}"));
     }
@@ -83,20 +84,25 @@ impl App {
             self.state.explorer.refresh();
         }
         let lsp_changed = config.lsp != self.state.config.lsp;
+        let mcp_changed = config.mcp.servers != self.state.config.mcp.servers;
         self.state.config = config;
         self.state.keymap = keymap;
         self.state.theme = theme;
         if lsp_changed {
             self.restart_lsp();
         }
-        if let Some(mcp) = self.mcp.as_mut() {
-            mcp.restart(
-                self.state.config.mcp.servers.clone(),
-                self.state.explorer.root.clone(),
-            );
+        // Every save of config.toml used to restart every MCP server, killing
+        // in-flight tool calls and subscriptions for an unrelated edit.
+        if mcp_changed {
+            if let Some(mcp) = self.mcp.as_mut() {
+                mcp.restart(
+                    self.state.config.mcp.servers.clone(),
+                    self.state.explorer.root.clone(),
+                );
+            }
+            self.mcp_subscriptions.clear();
+            self.mcp_resource_view = None;
         }
-        self.mcp_subscriptions.clear();
-        self.mcp_resource_view = None;
         self.apply_document_indents();
         self.state.ui.message = if warnings.is_empty() {
             "config reloaded".to_string()

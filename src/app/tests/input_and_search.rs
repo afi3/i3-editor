@@ -601,6 +601,44 @@ fn prompt_typing_keeps_the_case_the_user_typed() {
 }
 
 #[test]
+fn editing_the_buffer_invalidates_the_stored_matches() {
+    let (mut app, dir) = fixture("alpha beta alpha\n");
+    app.preview_search("alpha".to_string());
+    assert!(app.current_search().is_some());
+    app.dispatch(Command::InsertText("x".to_string()))
+        .expect("edit");
+    assert!(
+        app.current_search().is_none(),
+        "offsets from before the edit must not be used"
+    );
+    app.dispatch(Command::NextMatch).expect("next");
+    assert!(
+        app.state.ui.message.contains("no active search"),
+        "{}",
+        app.state.ui.message
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn search_history_never_fills_the_replacement_field() {
+    use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    let (mut app, dir) = fixture("one\n");
+    app.dispatch(Command::ReplacePrompt).expect("replace");
+    if let InputMode::Prompt(prompt) = &mut app.state.mode {
+        prompt.history.entries = vec!["previous".to_string()];
+        prompt.active = 1;
+        prompt.fields[1] = "keep".to_string();
+    }
+    app.handle_key(KeyEvent::new(KeyCode::Up, KeyModifiers::ALT));
+    if let InputMode::Prompt(prompt) = &app.state.mode {
+        assert_eq!(prompt.fields[1], "keep", "the With field must not change");
+    }
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn the_find_preview_copies_the_buffer_once_per_revision() {
     let (mut app, dir) = fixture("needle needle\n");
     app.preview_search("needle".to_string());
