@@ -338,7 +338,7 @@ fn embeddings_come_back_in_input_order() {
 fn blocked_calls_and_model_requests_reach_the_log_file() {
     let (app, dir) = fixture("x\n");
     let log = dir.join("log.jsonl");
-    crate::logging::use_path_for_test(Some(log.clone()));
+    let _log = crate::logging::use_path_for_test(Some(log.clone()));
 
     crate::app::audit::blocked(
         &app.state,
@@ -364,7 +364,6 @@ fn blocked_calls_and_model_requests_reach_the_log_file() {
         },
     );
 
-    crate::logging::use_path_for_test(None);
     let text = std::fs::read_to_string(&log).expect("log file");
     let events: Vec<serde_json::Value> = text
         .lines()
@@ -395,7 +394,7 @@ fn blocked_calls_and_model_requests_reach_the_log_file() {
 fn watcher_faults_are_logged() {
     let (mut app, dir) = fixture("x\n");
     let log = dir.join("log.jsonl");
-    crate::logging::use_path_for_test(Some(log.clone()));
+    let _log = crate::logging::use_path_for_test(Some(log.clone()));
 
     let workspace = app.state.workspaces.active().id;
     let watcher = crate::watch::Watcher::empty().expect("watcher");
@@ -406,7 +405,6 @@ fn watcher_faults_are_logged() {
     app.watchers.push((workspace, watcher));
 
     app.pump_watcher();
-    crate::logging::use_path_for_test(None);
 
     let text = std::fs::read_to_string(&log).expect("log file");
     assert!(text.contains("\"event\":\"watcher_rescan\""), "{text}");
@@ -452,7 +450,7 @@ Connection: close
     app.state.config.ai.api_key = "test-key".to_string();
     app.state.config.ai.embedding_model = "mock-embed".to_string();
     crate::semantic::use_path_for_test(Some(dir.join("semantic_index.json")));
-    crate::logging::use_path_for_test(Some(dir.join("log.jsonl")));
+    let _log = crate::logging::use_path_for_test(Some(dir.join("log.jsonl")));
     // A blank buffer has no chunks, and a dirty one is skipped: neither may
     // inflate the summary.
     let blank = dir.join("blank.txt");
@@ -503,7 +501,6 @@ Connection: close
         "{}",
         app.state.ui.message
     );
-    crate::logging::use_path_for_test(None);
     std::fs::remove_dir_all(&dir).ok();
 }
 

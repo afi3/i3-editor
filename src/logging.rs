@@ -24,11 +24,34 @@ pub fn path() -> Option<PathBuf> {
 
 #[cfg(test)]
 static TEST_PATH: std::sync::Mutex<Option<PathBuf>> = std::sync::Mutex::new(None);
-
-/// Point the logger at `path` for one test, or back at the real location.
+/// Serializes tests that redirect the logger: the override is process-global,
+/// so two of them would otherwise write into each other's files.
 #[cfg(test)]
-pub(crate) fn use_path_for_test(path: Option<PathBuf>) {
+static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Points the logger at `path` until the returned guard drops. Holding the
+/// guard is what keeps the parallel test threads from interleaving.
+#[cfg(test)]
+pub(crate) struct PathGuard {
+    _lock: std::sync::MutexGuard<'static, ()>,
+}
+
+#[cfg(test)]
+impl Drop for PathGuard {
+    fn drop(&mut self) {
+        if let Ok(mut path) = TEST_PATH.lock() {
+            *path = None;
+        }
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn use_path_for_test(path: Option<PathBuf>) -> PathGuard {
+    let lock = TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     *TEST_PATH.lock().expect("log path override") = path;
+    PathGuard { _lock: lock }
 }
 
 /// Record one event; failures are ignored on purpose, logging must never abort
