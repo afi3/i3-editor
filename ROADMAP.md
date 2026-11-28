@@ -1315,13 +1315,14 @@ hand-editing `config.toml`. No new subsystem or dependency.
 
 - [x] Full suite, fmt, clippy, and MSRV 1.91 pass.
 - [x] README, ROADMAP, and the docs page updated for this release.
-- [ ] Version `0.2.4` and tag `v0.2.4` point at the release commit.
-- [ ] Release workflow publishes four assets plus checksums.
-- [ ] Pages deployment for the updated docs page succeeds.
+- [x] Version `0.2.4` and tag `v0.2.4` point at the release commit.
+- [x] Release workflow run `46108949201` published four assets plus checksums.
+- [x] Pages deployment ran and https://afi3.github.io/i3-editor/ reports v0.2.4.
 
 ### Acceptance
 
 - [x] `cargo test` -> 640 passed, 1 ignored.
 - [x] `cargo clippy --all-targets --all-features` -> 0 warnings.
 - [x] `cargo fmt --check` -> clean.
-- [ ] The tagged release installs and reports `i3-editor 0.2.4`.
+- [x] The tagged release installs and reports `i3-editor 0.2.4`; the aarch64
+      macOS asset passes its SHA-256 and `install.sh --version 0.2.4` installs it.
