@@ -228,6 +228,17 @@ fn run(
         ));
         return;
     }
+    if body.saw_sse
+        && body.parse_failures > 0
+        && body.accumulator.content.is_empty()
+        && body.accumulator.calls.is_empty()
+    {
+        let _ = sender.send(StreamEvent::Error(format!(
+            "AI stream had {} malformed event(s) and no usable reply",
+            body.parse_failures
+        )));
+        return;
+    }
     let reply = if body.saw_sse {
         body.accumulator.finish()
     } else {
@@ -325,6 +336,9 @@ struct StreamBody {
     done: bool,
     /// Error reported inside the stream, which the raw body never sees.
     sse_error: Option<String>,
+    /// Events that were not valid JSON; a whole reply of them means the stream
+    /// was not what it claimed to be.
+    parse_failures: usize,
 }
 
 /// One stream line may not exceed this. Without a bound a hostile or broken
@@ -365,6 +379,37 @@ fn read_line_bounded(
     }
 }
 
+/// One SSE event may span several `data:` lines; they are joined with a newline
+/// and dispatched when a line that is not `data:` arrives (the blank line).
+fn handle_payload(
+    data: &str,
+    accumulator: &mut Accumulator,
+    done: &mut bool,
+    sse_error: &mut Option<String>,
+    parse_failures: &mut usize,
+    sender: &mpsc::Sender<StreamEvent>,
+) -> Result<(), String> {
+    if data.trim() == "[DONE]" {
+        *done = true;
+        return Ok(());
+    }
+    let Ok(value) = serde_json::from_str::<Value>(data) else {
+        *parse_failures += 1;
+        return Ok(());
+    };
+    if sse_error.is_none()
+        && let Some(message) = value.pointer("/error/message").and_then(Value::as_str)
+    {
+        *sse_error = Some(message.to_string());
+    }
+    if let Some(delta) = accumulator.push(&value)
+        && sender.send(StreamEvent::Delta(delta)).is_err()
+    {
+        return Err("AI panel closed".to_string());
+    }
+    Ok(())
+}
+
 fn consume_stream(
     stdout: impl Read,
     cancel: &AtomicBool,
@@ -376,7 +421,9 @@ fn consume_stream(
     let mut saw_sse = false;
     let mut done = false;
     let mut sse_error: Option<String> = None;
+    let mut parse_failures = 0usize;
     let mut status = 0u16;
+    let mut data_buffer: Option<String> = None;
     let mut reader = BufReader::new(stdout);
     let mut bytes = Vec::new();
     loop {
@@ -388,7 +435,18 @@ fn consume_stream(
             }
             return Err("AI request cancelled".to_string());
         }
-        if !read_line_bounded(&mut reader, &mut bytes, MAX_LINE)? {
+        let more = read_line_bounded(&mut reader, &mut bytes, MAX_LINE)?;
+        if !more {
+            if let Some(data) = data_buffer.take() {
+                handle_payload(
+                    &data,
+                    &mut accumulator,
+                    &mut done,
+                    &mut sse_error,
+                    &mut parse_failures,
+                    sender,
+                )?;
+            }
             break;
         }
         let line = String::from_utf8_lossy(&bytes);
@@ -396,31 +454,32 @@ fn consume_stream(
             status = code.trim().parse().unwrap_or(0);
             continue;
         }
-        let Some(data) = line.strip_prefix("data:") else {
-            if !saw_sse && !line.trim().is_empty() {
-                raw.push_str(&line);
-                raw.push('\n');
+        if let Some(data) = line.strip_prefix("data:") {
+            saw_sse = true;
+            // SSE strips one optional space after the colon.
+            let data = data.strip_prefix(' ').unwrap_or(data);
+            match &mut data_buffer {
+                Some(buffer) => {
+                    buffer.push('\n');
+                    buffer.push_str(data);
+                }
+                None => data_buffer = Some(data.to_string()),
             }
             continue;
-        };
-        saw_sse = true;
-        let data = data.trim();
-        if data == "[DONE]" {
-            done = true;
-            continue;
         }
-        let Ok(value) = serde_json::from_str::<Value>(data) else {
-            continue;
-        };
-        if sse_error.is_none()
-            && let Some(message) = value.pointer("/error/message").and_then(Value::as_str)
-        {
-            sse_error = Some(message.to_string());
+        if let Some(data) = data_buffer.take() {
+            handle_payload(
+                &data,
+                &mut accumulator,
+                &mut done,
+                &mut sse_error,
+                &mut parse_failures,
+                sender,
+            )?;
         }
-        if let Some(delta) = accumulator.push(&value)
-            && sender.send(StreamEvent::Delta(delta)).is_err()
-        {
-            return Err("AI panel closed".to_string());
+        if !saw_sse && !line.trim().is_empty() {
+            raw.push_str(&line);
+            raw.push('\n');
         }
     }
     Ok(StreamBody {
@@ -430,6 +489,7 @@ fn consume_stream(
         status,
         done,
         sse_error,
+        parse_failures,
     })
 }
 
@@ -552,7 +612,7 @@ mod tests {
 
     #[test]
     fn a_stream_without_done_is_marked_truncated() {
-        let body = consume("data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n");
+        let body = consume("data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n");
         assert!(body.saw_sse);
         assert!(!body.done, "a missing [DONE] must be visible");
         assert_eq!(body.accumulator.content, "hi");
@@ -561,13 +621,30 @@ mod tests {
     #[test]
     fn a_completed_stream_is_marked_done() {
         let body =
-            consume("data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\ndata: [DONE]\n");
+            consume("data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\ndata: [DONE]\n\n");
         assert!(body.done);
     }
 
     #[test]
+    fn multi_line_data_fields_form_one_event() {
+        // Consecutive `data:` lines are one event; the blank line dispatches it.
+        let body = consume(
+            "data: {\"choices\":[{\"delta\":\ndata: {\"content\":\"joined\"}}]}\n\ndata: [DONE]\n\n",
+        );
+        assert_eq!(body.parse_failures, 0);
+        assert_eq!(body.accumulator.content, "joined");
+        assert!(body.done);
+    }
+
+    #[test]
+    fn malformed_events_are_counted() {
+        let body = consume("data: not-json\n\ndata: [DONE]\n\n");
+        assert_eq!(body.parse_failures, 1);
+    }
+
+    #[test]
     fn an_error_payload_is_captured_from_the_stream() {
-        let body = consume("data: {\"error\":{\"message\":\"quota exhausted\"}}\n");
+        let body = consume("data: {\"error\":{\"message\":\"quota exhausted\"}}\n\n");
         assert_eq!(body.sse_error.as_deref(), Some("quota exhausted"));
     }
 

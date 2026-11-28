@@ -801,6 +801,36 @@ pub(crate) fn sse_hello_server() -> (String, std::thread::JoinHandle<()>) {
 }
 
 #[cfg(test)]
+/// Sends one delta, then closes without `[DONE]`: a stream that was cut short.
+pub(crate) fn sse_truncated_server() -> (String, std::thread::JoinHandle<()>) {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
+    let address = listener.local_addr().expect("address");
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("accept");
+        let mut request = [0u8; 8192];
+        let _ = stream.read(&mut request).expect("read");
+        stream
+            .write_all(
+                b"HTTP/1.1 200 OK
+Content-Type: text/event-stream
+Connection: close
+
+",
+            )
+            .expect("headers");
+        stream
+            .write_all(br#"data: {"choices":[{"delta":{"content":"partial"}}]}"#)
+            .expect("chunk");
+        stream.write_all(b"\n\n").expect("terminator");
+        stream.flush().expect("flush");
+    });
+    (format!("http://{address}/v1"), server)
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use std::io::Read;

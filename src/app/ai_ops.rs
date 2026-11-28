@@ -1303,6 +1303,7 @@ impl App {
                     break;
                 }
                 crate::ai::StreamEvent::Error(error) => {
+                    let was_streamed = self.ai_streamed;
                     self.ai_stream = None;
                     self.ai_streamed = false;
                     self.record_ai_trace("error", None, None, 0);
@@ -1313,6 +1314,12 @@ impl App {
                     self.background_agent = false;
                     self.state.ai.busy = false;
                     self.remove_thinking_entry();
+                    if was_streamed {
+                        self.state
+                            .ai
+                            .entries
+                            .push("[stream interrupted]".to_string());
+                    }
                     self.state.ai.entries.push(format!("[error] {error}"));
                     break;
                 }

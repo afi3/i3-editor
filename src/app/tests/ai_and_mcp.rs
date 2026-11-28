@@ -1605,6 +1605,58 @@ fn ai_file_and_selection_context_are_injected_once() {
 }
 
 #[test]
+fn a_truncated_stream_marks_the_text_as_interrupted() {
+    use std::time::{Duration, Instant};
+
+    let (base_url, server) = crate::ai::sse_truncated_server();
+    let (mut app, dir) = fixture(
+        "x
+",
+    );
+    let mut config = crate::ai::test_config(base_url);
+    config.stream = true;
+    app.state.config.ai = config;
+    app.dispatch(Command::AiChat).expect("ai panel");
+    app.state.ai.input = "hello".to_string();
+    app.state.ai.cursor = 5;
+    app.handle_key(ratatui::crossterm::event::KeyEvent::new(
+        ratatui::crossterm::event::KeyCode::Enter,
+        ratatui::crossterm::event::KeyModifiers::NONE,
+    ));
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while Instant::now() < deadline && app.ai_stream.is_some() {
+        app.pump_ai();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(app.ai_stream.is_none());
+    let entries = &app.state.ai.entries;
+    assert!(
+        entries.iter().any(|line| line.contains("partial")),
+        "{entries:?}"
+    );
+    assert!(
+        entries.iter().any(|line| line == "[stream interrupted]"),
+        "{entries:?}"
+    );
+    assert!(
+        entries
+            .iter()
+            .any(|line| line.contains("ended before [DONE]")),
+        "{entries:?}"
+    );
+    assert!(
+        !app.state
+            .ai
+            .conversation
+            .iter()
+            .any(|message| message["role"] == "assistant"),
+        "a truncated reply must not enter the conversation"
+    );
+    server.join().expect("server");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn ai_panel_renders_streamed_deltas_before_done() {
     use std::time::{Duration, Instant};
 
