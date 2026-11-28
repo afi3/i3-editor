@@ -111,8 +111,10 @@ impl App {
             let Some(target) = target else {
                 continue;
             };
+            // The recorded disk stamp stays: a rename preserves mtime and size,
+            // so an external change the user was warned about must remain
+            // flagged instead of being reset by the new path.
             document.path = Some(target);
-            document.record_disk_state();
             moved += 1;
         }
         if moved > 0 {

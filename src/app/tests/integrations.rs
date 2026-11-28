@@ -962,6 +962,33 @@ fn renaming_an_open_file_moves_the_buffer_with_it() {
 }
 
 #[test]
+fn renaming_a_buffer_keeps_its_external_change_flag() {
+    let (mut app, dir) = fixture("one\n");
+    std::fs::write(dir.join("note.txt"), "changed by another program\n").expect("external edit");
+    assert!(
+        app.state.active_document().expect("doc").disk_changed(),
+        "the buffer must notice the external edit"
+    );
+    let row = app
+        .state
+        .explorer
+        .rows
+        .iter()
+        .position(|row| row.name == "note.txt")
+        .expect("row");
+    app.state.explorer.selected = row;
+    app.dispatch(Command::RenameTo(std::path::PathBuf::from("renamed.txt")))
+        .expect("rename");
+    let document = app.state.active_document().expect("doc");
+    assert!(document.path.is_some());
+    assert!(
+        document.disk_changed(),
+        "a rename must not clear the external-change warning"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn renaming_a_directory_moves_the_buffers_beneath_it() {
     let (mut app, dir) = fixture("one\n");
     std::fs::create_dir(dir.join("sub")).expect("sub");
