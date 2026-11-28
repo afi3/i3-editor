@@ -264,6 +264,7 @@ impl App {
                 pane.cursor = 0;
                 pane.anchor = None;
                 pane.scroll_top = 0;
+                pane.scroll_row = 0;
                 pane.scroll_left = 0;
                 revealed.push((*pane_id, pane.active));
             }
@@ -322,6 +323,7 @@ impl App {
         // The viewport belongs to the document on screen: a scroll offset from
         // a longer buffer would leave the shorter one entirely off-screen.
         pane.scroll_top = 0;
+        pane.scroll_row = 0;
         pane.scroll_left = 0;
         if let Some(document) = documents.get(&id) {
             pane.cursor = pane.cursor.min(document.len_chars());
@@ -353,6 +355,7 @@ impl App {
             pane.anchor = None;
             pane.extra.clear();
             pane.scroll_top = top;
+            pane.scroll_row = 0;
             pane.scroll_left = left;
         }
         Ok(())
@@ -380,6 +383,7 @@ impl App {
             pane.anchor = None;
             pane.extra.clear();
             pane.scroll_top = top;
+            pane.scroll_row = 0;
             pane.scroll_left = left;
         }
         Ok(())

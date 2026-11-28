@@ -1254,6 +1254,31 @@ fn wrapped_cursor_movement_and_click_use_visual_rows() {
 }
 
 #[test]
+fn a_wrapped_line_taller_than_the_pane_scrolls_by_row() {
+    use crate::command::Move;
+
+    let source = "word ".repeat(200);
+    let (mut app, dir) = fixture(&source);
+    app.state.config.editor.word_wrap = true;
+    crate::ui::compute_layout(&mut app.state, ratatui::layout::Rect::new(0, 0, 40, 12));
+    for _ in 0..40 {
+        app.dispatch(Command::MoveCursor(Move::Down)).expect("down");
+    }
+    let pane_id = app.state.focused_pane_id().expect("pane");
+    let cursor = app.state.panes[&pane_id].cursor;
+    let scroll_top = app.state.panes[&pane_id].scroll_top;
+    let scroll_row = app.state.panes[&pane_id].scroll_row;
+    let document = app.state.active_document().expect("doc");
+    assert_eq!(document.line_of_char(cursor), 0, "still one line");
+    assert_eq!(scroll_top, 0, "the offset is inside the line");
+    assert!(
+        scroll_row > 0,
+        "the view must follow the caret down the wrapped line"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn wrapped_movement_crosses_lines_and_skips_folds() {
     let source = format!(
         "{}\n{}\n{}\n",

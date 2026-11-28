@@ -384,8 +384,10 @@ fn restore_workspaces(session: &Session, state: &mut AppState, documents: &[Opti
             if let Some(document) = restored.active.and_then(|id| state.documents.get(&id)) {
                 restored.cursor = pane.cursor.min(document.len_chars());
                 restored.scroll_top = pane.scroll_top.min(document.line_count().saturating_sub(1));
+                restored.scroll_row = 0;
             } else {
                 restored.scroll_top = 0;
+                restored.scroll_row = 0;
             }
             restored.scroll_left = pane.scroll_left;
             state.panes.insert(id, restored);

@@ -580,7 +580,11 @@ fn visual_rows_for(
     height: usize,
 ) -> Vec<textutil::VisualRow> {
     if state.config.editor.word_wrap {
-        return textutil::visual_rows(document, pane.scroll_top, width, tab_width, height);
+        let keep = height.saturating_add(pane.scroll_row);
+        return textutil::visual_rows(document, pane.scroll_top, width, tab_width, keep)
+            .into_iter()
+            .skip(pane.scroll_row)
+            .collect();
     }
     visible_lines(document, pane.scroll_top, height)
         .into_iter()

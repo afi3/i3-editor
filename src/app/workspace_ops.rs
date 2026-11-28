@@ -40,6 +40,7 @@ impl App {
         pane.active = source.active;
         pane.cursor = source.cursor;
         pane.scroll_top = source.scroll_top;
+        pane.scroll_row = 0;
         pane.scroll_left = source.scroll_left;
         pane.tab_scroll = source.tab_scroll;
         pane.tab_follow = source.tab_follow;

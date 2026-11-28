@@ -266,6 +266,7 @@ impl App {
             pane.anchor = None;
             pane.target_col = None;
             pane.scroll_top = pane.scroll_top.min(document.line_count().saturating_sub(1));
+            pane.scroll_row = 0;
         }
         self.state.search = None;
         if count == 0 {

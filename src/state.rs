@@ -97,6 +97,8 @@ pub struct Pane {
     pub cursor: usize,
     pub anchor: Option<usize>,
     pub scroll_top: usize,
+    /// Wrapped rows of `scroll_top` scrolled off the top; zero without wrap.
+    pub scroll_row: usize,
     pub scroll_left: u16,
     /// Horizontal offset of the document tab strip, in cells.
     pub tab_scroll: u16,
@@ -116,6 +118,7 @@ impl Pane {
             cursor: 0,
             anchor: None,
             scroll_top: 0,
+            scroll_row: 0,
             scroll_left: 0,
             tab_scroll: 0,
             tab_follow: true,

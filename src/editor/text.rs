@@ -230,6 +230,20 @@ fn scan_row(chars: &[char], start: usize, width: u16, tab_width: usize) -> (usiz
     (end, last_space)
 }
 
+/// Index of the wrapped row inside `text` that holds `char_idx`.
+pub fn visual_row_of(text: &str, char_idx: usize, width: u16, tab_width: usize) -> usize {
+    let chars: Vec<char> = text.chars().collect();
+    WrapRows {
+        chars: &chars,
+        width,
+        tab_width,
+        start: 0,
+        done: false,
+    }
+    .position(|(start, end)| char_idx >= start && char_idx <= end)
+    .unwrap_or(0)
+}
+
 /// Wrapped rows for `rows` display lines starting at `start_line`, skipping
 /// closed folds. `rows` is a hard stop; pass `usize::MAX` to cover the document.
 pub fn visual_rows(

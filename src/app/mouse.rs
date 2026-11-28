@@ -522,6 +522,7 @@ impl App {
         };
         if let Some(pane) = self.state.panes.get_mut(&pane_id) {
             pane.scroll_top = top;
+            pane.scroll_row = 0;
         }
         self.dirty = true;
     }
@@ -563,6 +564,7 @@ impl App {
             return;
         };
         pane.scroll_top = top;
+        pane.scroll_row = 0;
         pane.scroll_left = left;
         self.state.focus = Focus::Pane(pane_id);
         self.state.workspaces.active_mut().focus = pane_id;

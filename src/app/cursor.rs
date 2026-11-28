@@ -350,13 +350,20 @@ impl App {
                 .saturating_sub(2 + gutter + u16::from(document.line_count() > rows))
                 .max(1);
             let column = pane.cursor.saturating_sub(document.char_of_line(line));
-            let visual =
-                textutil::visual_rows(document, pane.scroll_top, width, tab_width, rows + 1);
-            let index = visual
-                .iter()
-                .position(|row| row.line == line && column >= row.start && column <= row.end);
-            if index.is_none_or(|index| index >= rows) {
+            // A wrapped line taller than the pane needs a row offset, not a line
+            // offset: `scroll_top = line` alone pins the view at its first row.
+            let index =
+                textutil::visual_row_of(&document.line_text(line), column, width, tab_width);
+            if line < pane.scroll_top || (line == pane.scroll_top && index < pane.scroll_row) {
                 pane.scroll_top = line;
+                pane.scroll_row = index;
+            } else if line == pane.scroll_top {
+                if index >= pane.scroll_row + rows {
+                    pane.scroll_row = index + 1 - rows;
+                }
+            } else {
+                pane.scroll_top = line;
+                pane.scroll_row = index.saturating_sub(rows.saturating_sub(1));
             }
             pane.scroll_left = 0;
             return;
@@ -366,6 +373,7 @@ impl App {
         } else if line >= pane.scroll_top + rows {
             pane.scroll_top = line + 1 - rows;
         }
+        pane.scroll_row = 0;
 
         let digits = document.line_count().to_string().len() as u16;
         let gutter = if show_numbers { digits + 2 } else { 0 };

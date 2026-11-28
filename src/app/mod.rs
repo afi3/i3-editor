@@ -881,6 +881,7 @@ impl App {
         // A viewport offset left from another document can point past the end
         // of this one, which renders an empty pane until the next cursor move.
         pane.scroll_top = 0;
+        pane.scroll_row = 0;
         pane.scroll_left = 0;
         let pane_id = pane.id;
         self.state.focus = Focus::Pane(pane_id);
