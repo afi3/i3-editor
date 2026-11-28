@@ -1199,6 +1199,15 @@ mod tests {
     }
 
     #[test]
+    fn a_comment_after_the_ai_header_does_not_duplicate_the_table() {
+        let text = "[ai] # provider settings\nactive_provider = \"a\"\n\n[explorer]\nwidth = 20\n";
+        let updated = set_active_provider(text, "b");
+        assert_eq!(updated.matches("[ai]").count(), 1, "{updated}");
+        let value: toml::Value = toml::from_str(&updated).expect("valid toml");
+        assert_eq!(value["ai"]["active_provider"].as_str(), Some("b"));
+    }
+
+    #[test]
     fn explorer_width_is_clamped() {
         let dir = std::env::temp_dir().join(format!("i3-config-width-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("dir");
@@ -1231,12 +1240,18 @@ fn set_active_provider(text: &str, name: &str) -> String {
     let mut start = None;
     let mut end = lines.len();
     for (index, current) in lines.iter().enumerate() {
-        let trimmed = current.trim();
+        // A trailing comment or padding must not hide the header: appending a
+        // second `[ai]` table would make the file invalid TOML.
+        let trimmed = current.trim_start();
+        if !trimmed.starts_with('[') {
+            continue;
+        }
+        let header = trimmed.split('#').next().unwrap_or("").trim();
         if start.is_none() {
-            if trimmed == "[ai]" {
+            if header == "[ai]" {
                 start = Some(index);
             }
-        } else if trimmed.starts_with('[') {
+        } else {
             end = index;
             break;
         }

@@ -2,10 +2,12 @@
 //! staging. Everything shells out to `git`; no library dependency.
 
 use std::collections::{HashMap, HashSet};
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::mpsc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, mpsc};
+use std::time::{Duration, Instant};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Change {
@@ -507,8 +509,14 @@ pub fn unstage(binary: &str, repo: &Path, relative: &str) -> Result<(), String> 
     run(binary, repo, &["restore", "--staged", "--", relative]).map(|_| ())
 }
 
-pub fn commit(binary: &str, repo: &Path, message: &str) -> Result<String, String> {
-    run(binary, repo, &["commit", "-m", message])
+/// Commit the staged work. Called by `CommandTask`.
+fn commit_with(
+    binary: &str,
+    repo: &Path,
+    message: &str,
+    guard: Option<&Guard>,
+) -> Result<String, String> {
+    run_guarded(binary, repo, &["commit", "-m", message], guard)
 }
 
 fn relative_path(repo: &Path, path: &Path) -> Option<String> {
@@ -519,58 +527,96 @@ fn relative_path(repo: &Path, path: &Path) -> Option<String> {
         .map(|path| path.to_string_lossy().into_owned())
 }
 
+/// A git command may hang on a dead remote or a blocking credential helper.
+const COMMAND_TIMEOUT: Duration = Duration::from_secs(180);
+
+/// Cancel flag and deadline shared between a worker and the run loop.
+#[derive(Clone)]
+struct Guard {
+    cancel: Arc<AtomicBool>,
+    timeout: Duration,
+}
+
+impl Default for Guard {
+    fn default() -> Self {
+        Self {
+            cancel: Arc::default(),
+            timeout: COMMAND_TIMEOUT,
+        }
+    }
+}
+
 /// A git command that may block on the network or a credential helper, run on
 /// its own thread so the editor keeps drawing and handling keys.
 pub struct CommandTask {
     result: mpsc::Receiver<Result<String, String>>,
+    cancel: Arc<AtomicBool>,
 }
 
 impl CommandTask {
     pub fn push(binary: String, repo: PathBuf) -> Self {
-        Self::start(move || push(&binary, &repo))
+        Self::start(move |guard| push_with(&binary, &repo, guard))
     }
 
     pub fn pull(binary: String, repo: PathBuf) -> Self {
-        Self::start(move || pull(&binary, &repo))
+        Self::start(move |guard| pull_with(&binary, &repo, guard))
     }
 
     pub fn commit(binary: String, repo: PathBuf, message: String) -> Self {
-        Self::start(move || commit(&binary, &repo, &message))
+        Self::start(move |guard| commit_with(&binary, &repo, &message, guard))
     }
 
-    fn start(job: impl FnOnce() -> Result<String, String> + Send + 'static) -> Self {
+    fn start(job: impl FnOnce(Option<&Guard>) -> Result<String, String> + Send + 'static) -> Self {
         let (sender, result) = mpsc::channel();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let guard = Guard {
+            cancel: Arc::clone(&cancel),
+            timeout: COMMAND_TIMEOUT,
+        };
         std::thread::spawn(move || {
-            let _ = sender.send(job());
+            let _ = sender.send(job(Some(&guard)));
         });
-        Self { result }
+        Self { result, cancel }
     }
 
     pub fn try_recv(&self) -> Option<Result<String, String>> {
         self.result.try_recv().ok()
     }
+
+    /// Ask the worker to kill its child and report a cancellation.
+    pub fn cancel(&self) {
+        self.cancel.store(true, Ordering::Relaxed);
+    }
+}
+
+impl Drop for CommandTask {
+    fn drop(&mut self) {
+        self.cancel();
+    }
 }
 
 /// Fast-forward the current branch from its upstream. Refuses a dirty index or
 /// worktree so a pull cannot create a merge/conflict state.
-pub fn pull(binary: &str, repo: &Path) -> Result<String, String> {
-    ensure_clean(binary, repo)?;
-    ensure_upstream(binary, repo)?;
-    let output = run(binary, repo, &["pull", "--ff-only", "--no-rebase"])?;
+/// Fast-forward the current branch from its upstream. Called by `CommandTask`.
+fn pull_with(binary: &str, repo: &Path, guard: Option<&Guard>) -> Result<String, String> {
+    ensure_clean(binary, repo, guard)?;
+    ensure_upstream(binary, repo, guard)?;
+    let output = run_guarded(binary, repo, &["pull", "--ff-only", "--no-rebase"], guard)?;
     Ok(summary(&output, "already up to date"))
 }
 
 /// Push the current branch to its configured upstream. Credential helpers and
 /// SSH agents work; terminal prompts are disabled because the UI owns stdin.
-pub fn push(binary: &str, repo: &Path) -> Result<String, String> {
-    ensure_upstream(binary, repo)?;
-    let output = run(binary, repo, &["push"])?;
+/// Push the current branch. Called by `CommandTask`.
+fn push_with(binary: &str, repo: &Path, guard: Option<&Guard>) -> Result<String, String> {
+    ensure_upstream(binary, repo, guard)?;
+    let output = run_guarded(binary, repo, &["push"], guard)?;
     Ok(summary(&output, "pushed"))
 }
 
-fn ensure_clean(binary: &str, repo: &Path) -> Result<(), String> {
-    let unstaged = run(binary, repo, &["diff", "--quiet"]).is_err();
-    let staged = run(binary, repo, &["diff", "--cached", "--quiet"]).is_err();
+fn ensure_clean(binary: &str, repo: &Path, guard: Option<&Guard>) -> Result<(), String> {
+    let unstaged = run_guarded(binary, repo, &["diff", "--quiet"], guard).is_err();
+    let staged = run_guarded(binary, repo, &["diff", "--cached", "--quiet"], guard).is_err();
     if unstaged || staged {
         return Err(
             "working tree has uncommitted changes; commit or stash them before pulling".to_string(),
@@ -579,11 +625,12 @@ fn ensure_clean(binary: &str, repo: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn ensure_upstream(binary: &str, repo: &Path) -> Result<(), String> {
-    run(
+fn ensure_upstream(binary: &str, repo: &Path, guard: Option<&Guard>) -> Result<(), String> {
+    run_guarded(
         binary,
         repo,
         &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+        guard,
     )
     .map(|_| ())
     .map_err(|_| "no upstream branch; set one with: git push -u origin <branch>".to_string())
@@ -599,14 +646,93 @@ fn summary(output: &str, fallback: &str) -> String {
 }
 
 fn run(binary: &str, cwd: &Path, args: &[&str]) -> Result<String, String> {
-    let output = Command::new(binary)
+    run_guarded(binary, cwd, args, None)
+}
+
+/// Run git, optionally under a cancel flag and a deadline. Both pipes are
+/// drained on reader threads: `git status`/`diff` on a large tree can produce
+/// more output than a pipe buffer, and blocking on write would look like a hang.
+fn run_guarded(
+    binary: &str,
+    cwd: &Path,
+    args: &[&str],
+    guard: Option<&Guard>,
+) -> Result<String, String> {
+    let mut command = Command::new(binary);
+    command
         .args(args)
         .current_dir(cwd)
         .env("GIT_PAGER", "cat")
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("LC_ALL", "C")
-        .output()
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let Some(guard) = guard else {
+        let output = command
+            .output()
+            .map_err(|error| format!("{binary}: {error}"))?;
+        return finish(output);
+    };
+    let mut child = command
+        .spawn()
         .map_err(|error| format!("{binary}: {error}"))?;
+    let stdout = child.stdout.take().map(collect_pipe);
+    let stderr = child.stderr.take().map(collect_pipe);
+    let deadline = Instant::now() + guard.timeout;
+    let status = loop {
+        if guard.cancel.load(Ordering::Relaxed) {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err("git command cancelled".to_string());
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(format!(
+                "git {args:?} timed out after {}s",
+                guard.timeout.as_secs()
+            ));
+        }
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => std::thread::sleep(Duration::from_millis(20)),
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!("{binary}: {error}"));
+            }
+        }
+    };
+    let output = std::process::Output {
+        status,
+        stdout: join_pipe(stdout),
+        stderr: join_pipe(stderr),
+    };
+    finish(output)
+}
+
+fn collect_pipe(mut pipe: impl Read + Send + 'static) -> std::thread::JoinHandle<Vec<u8>> {
+    std::thread::spawn(move || {
+        let mut kept = Vec::new();
+        let mut buffer = [0u8; 8192];
+        loop {
+            match pipe.read(&mut buffer) {
+                Ok(0) | Err(_) => break,
+                Ok(read) => kept.extend_from_slice(&buffer[..read]),
+            }
+        }
+        kept
+    })
+}
+
+fn join_pipe(handle: Option<std::thread::JoinHandle<Vec<u8>>>) -> Vec<u8> {
+    handle
+        .and_then(|handle| handle.join().ok())
+        .unwrap_or_default()
+}
+
+fn finish(output: std::process::Output) -> Result<String, String> {
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         let stderr = stderr.trim();
@@ -686,6 +812,39 @@ mod tests {
         std::fs::write(&path, "one\ntwo\n").expect("seed");
         let marks = tree_marks("git", &dir, std::slice::from_ref(&path));
         assert_eq!(marks.get(&path).map(Vec::len), Some(2), "{marks:?}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_stalled_git_command_is_killed_at_the_deadline() {
+        let dir = repo("stalled");
+        let guard = Guard {
+            cancel: Arc::default(),
+            timeout: Duration::from_millis(150),
+        };
+        let started = Instant::now();
+        let error = run_guarded("/bin/sh", &dir, &["-c", "sleep 30"], Some(&guard))
+            .expect_err("the deadline must kill it");
+        assert!(error.contains("timed out"), "{error}");
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "waited {:?}",
+            started.elapsed()
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_cancelled_git_command_stops_immediately() {
+        let dir = repo("cancelled");
+        let cancel = Arc::new(AtomicBool::new(true));
+        let guard = Guard {
+            cancel,
+            timeout: COMMAND_TIMEOUT,
+        };
+        let error =
+            run_guarded("/bin/sh", &dir, &["-c", "sleep 30"], Some(&guard)).expect_err("cancelled");
+        assert!(error.contains("cancelled"), "{error}");
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -879,7 +1038,7 @@ mod tests {
         git(&two, &["commit", "-q", "-m", "remote change"]);
         git(&two, &["push"]);
 
-        pull("git", &one).expect("pull");
+        pull_with("git", &one, None).expect("pull");
         assert_eq!(
             std::fs::read_to_string(one.join("a.txt")).expect("read"),
             "two\n"
@@ -888,7 +1047,7 @@ mod tests {
         std::fs::write(one.join("a.txt"), "three\n").expect("edit");
         git(&one, &["add", "."]);
         git(&one, &["commit", "-q", "-m", "local change"]);
-        push("git", &one).expect("push");
+        push_with("git", &one, None).expect("push");
         let log = Command::new("git")
             .args(["log", "-1", "--pretty=%s"])
             .current_dir(&remote)
@@ -906,7 +1065,7 @@ mod tests {
         git(&dir, &["add", "."]);
         git(&dir, &["commit", "-q", "-m", "base"]);
         std::fs::write(&file, "two\n").expect("edit");
-        let error = pull("git", &dir).expect_err("dirty pull");
+        let error = pull_with("git", &dir, None).expect_err("dirty pull");
         assert!(error.contains("uncommitted changes"), "{error}");
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -914,7 +1073,7 @@ mod tests {
     #[test]
     fn commit_reports_git_errors() {
         let dir = repo("commit");
-        let error = commit("git", &dir, "nothing").expect_err("empty commit");
+        let error = commit_with("git", &dir, "nothing", None).expect_err("empty commit");
         assert!(
             error.contains("nothing") || error.contains("Changes"),
             "{error}"

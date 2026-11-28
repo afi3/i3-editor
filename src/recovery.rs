@@ -221,6 +221,22 @@ fn recover_dir(
                 }
             }
         };
+        // Two dead instances can leave a swap for the same file. Keep the newer
+        // one instead of letting directory order decide.
+        if recovered.contains(&id) {
+            let adopted = std::fs::metadata(own.join(&name))
+                .and_then(|meta| meta.modified())
+                .ok();
+            let candidate = metadata.modified().ok();
+            let keep_existing = match (adopted, candidate) {
+                (Some(adopted), Some(candidate)) => adopted >= candidate,
+                _ => true,
+            };
+            if keep_existing {
+                let _ = std::fs::remove_file(entry.path());
+                continue;
+            }
+        }
         let Some(document) = documents.get_mut(&id) else {
             continue;
         };
@@ -228,7 +244,9 @@ fn recover_dir(
         if let Some((modified, len)) = stamp {
             document.record_disk_stamp(modified, len);
         }
-        recovered.push(id);
+        if !recovered.contains(&id) {
+            recovered.push(id);
+        }
         adopt(&entry.path(), own, &name);
     }
 }
@@ -416,6 +434,31 @@ mod tests {
         restored.save().expect("save");
         write_to(instance.dir(), documents.values()).expect("prune");
         assert!(swaps(instance.dir()).is_empty());
+        std::fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn the_newer_of_two_crash_copies_wins() {
+        let base = dir("duplicate");
+        let file = base.join("note.txt");
+        std::fs::write(&file, "disk\n").expect("seed");
+
+        let older = Instance::claim(&base).expect("older");
+        let newer = Instance::claim(&base).expect("newer");
+        let own = Instance::claim(&base).expect("own");
+        let name = swap_name(&file);
+        std::fs::write(older.dir().join(&name), "old crash\n").expect("old swap");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        std::fs::write(newer.dir().join(&name), "new crash\n").expect("new swap");
+        drop(older);
+        drop(newer);
+
+        let mut documents = HashMap::new();
+        let mut ids = Ids::default();
+        let recovered = recover_from(&base, own.dir(), &mut documents, &mut ids);
+        assert_eq!(recovered.len(), 1, "one buffer per file, not per copy");
+        let document = documents.get(&recovered[0]).expect("document");
+        assert_eq!(document.rope().to_string(), "new crash\n");
         std::fs::remove_dir_all(&base).ok();
     }
 

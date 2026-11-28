@@ -19,7 +19,11 @@ impl App {
         let instance = match crate::recovery::Instance::claim(&base) {
             Ok(instance) => instance,
             Err(error) => {
-                self.notify(format!("swap directory unavailable: {error}"));
+                // `notify` would be overwritten by the startup message; a
+                // warning is what survives into the status line.
+                self.state
+                    .warnings
+                    .push(format!("swap directory unavailable: {error}"));
                 return;
             }
         };
@@ -33,6 +37,20 @@ impl App {
         );
         if recovered.is_empty() {
             return;
+        }
+        // `autosave_swaps` rewrites these swaps within a second, which would
+        // hide that the file was already newer than the crash copy.
+        self.recovery_stale.clear();
+        for id in &recovered {
+            let stale = self
+                .state
+                .documents
+                .get(id)
+                .and_then(|document| document.path.as_deref())
+                .is_some_and(|path| crate::recovery::swap_is_stale(&dir, path));
+            if stale {
+                self.recovery_stale.insert(*id);
+            }
         }
         for id in &recovered {
             if !self.state.is_document_referenced(*id)
@@ -130,16 +148,14 @@ impl App {
 
     /// A recovered buffer must not overwrite a file that changed after its
     /// swap was written, nor one whose recorded disk state no longer matches.
-    fn recovered_file_changed(&self, id: DocumentId, path: &Path) -> bool {
+    fn recovered_file_changed(&self, id: DocumentId, _path: &Path) -> bool {
         let changed = self
             .state
             .documents
             .get(&id)
             .is_some_and(Document::disk_changed);
-        changed
-            || self
-                .swap
-                .as_ref()
-                .is_some_and(|instance| crate::recovery::swap_is_stale(instance.dir(), path))
+        // The verdict is the one taken at load: the live swap is rewritten by
+        // autosave and no longer reflects the crash copy's age.
+        changed || self.recovery_stale.contains(&id)
     }
 }
